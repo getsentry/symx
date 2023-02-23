@@ -106,22 +106,41 @@ def extract_dyld_cache(item, output_path):
     extracted_dmgs = patch_cryptex_dmg(item, output_path)
     if len(extracted_dmgs) == 0:
         # TODO: we have an image that is not cryptex encoded
-        pass
+        return False
     else:
         split_dyld_shared_cache = mount_and_split_dyld_shared_cache(extracted_dmgs['cryptex-system-arm64e'],
                                                                     output_path)
         symsort(split_dyld_shared_cache, output_path)
+        return True
+
+
+def store_as_processed(item):
+    with open("processed", "a") as processed_file:
+        processed_file.write(item + '\n')
+
+
+def load_processed():
+    try:
+        with open("processed") as processed_file:
+            return processed_file.read().splitlines()
+    except FileNotFoundError:
+        return []
 
 
 def main():
     args = parse_args()
     validate_shell_deps()
-    to_process = scan_input_path(args.input_path)
+    new_images = scan_input_path(args.input_path)
+    old_images = load_processed()
+    to_process = list(set(new_images) - set(old_images))
+
     # TODO: maybe instead of providing an output path we should manage this ourselves (i.e. run-path using uuid)
     shutil.rmtree(args.output_path)
     os.mkdir(args.output_path)
     for item in to_process:
-        extract_dyld_cache(item, args.output_path)
+        success = extract_dyld_cache(item, args.output_path)
+        if success:
+            store_as_processed(item)
 
 
 if __name__ == '__main__':
