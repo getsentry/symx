@@ -24,14 +24,14 @@ def validate_shell_deps():
     pass
 
 
-def scan_input_path(input_path: Union[str, os.PathLike]):
+def scan_input_path(input_path: Union[str, os.PathLike]) -> list[str]:
     result = []
     for file_path in glob.iglob(input_path + "/**/*.zip", recursive=True):
         result.append(file_path)
     return result
 
 
-def patch_cryptex_dmg(item, output_path) -> dict:
+def patch_cryptex_dmg(item: str, output_path: str) -> dict[str, str]:
     dmg_files = {}
     result = subprocess.run(["ipsw", "ota", "patch", item, "--output", output_path], capture_output=True)
     if result.returncode == 0 and result.stdout == b'' and result.stderr == b'':
@@ -45,20 +45,19 @@ def patch_cryptex_dmg(item, output_path) -> dict:
     return dmg_files
 
 
-def find_system_os_dmgs(path):
+def find_system_os_dmgs(path: str) -> list[str]:
     result = []
     for file_path in glob.iglob(path + "/**/SystemOS/*.dmg", recursive=True):
         result.append(file_path)
     return result
 
 
-def mount_and_split_dyld_shared_cache(dmg, output_path):
+def mount_and_split_dyld_shared_cache(dmg: str, output_path: str) -> str:
     result = subprocess.run(["hdiutil", "mount", dmg], capture_output=True)
     if result.returncode == 0:
         mount_output = result.stdout.decode('utf-8').splitlines()
         mount_info = mount_output.pop().split()
         mount_dev = mount_info[0]
-        mount_id = mount_info[1]
         mount_point = mount_info[2]
         image_name = mount_point.split('/').pop()
 
@@ -87,7 +86,7 @@ def mount_and_split_dyld_shared_cache(dmg, output_path):
         return split_dyld_cache_path
 
 
-def symsort(split_dyld_shared_cache, output_path):
+def symsort(split_dyld_shared_cache: str, output_path: str):
     # TODO: the question here is whether we should write a common symsorter output directory
     symsort_output = output_path + "/symsorter_out"
     prefix = "ios"  # TODO: this should become a parameter which we can extract from the directory
@@ -99,13 +98,22 @@ def symsort(split_dyld_shared_cache, output_path):
     bundle_id = "16.1.1_20B101_arm64e"
     subprocess.run(["./symsorter", "-zz", "-o", symsort_output, "--prefix", prefix, "--bundle-id", bundle_id,
                     split_dyld_shared_cache])
-    pass
 
 
-def extract_dyld_cache(item, output_path):
+def extract_dyld_cache(item: str, output_path: str) -> bool:
     extracted_dmgs = patch_cryptex_dmg(item, output_path)
     if len(extracted_dmgs) == 0:
         # TODO: we have an image that is not cryptex encoded
+        ps = subprocess.Popen(["ipsw", "ota", "ls", item], stdout=subprocess.PIPE)
+        try:
+            output = subprocess.check_output(('grep', 'dyld_shared_cache'), stdin=ps.stdout)
+            ps.wait()
+            print(output.decode('utf-8'))
+        except subprocess.CalledProcessError:
+            print(f"no dyld_shared_cache found in {item}")
+
+        subprocess.run(["ipsw", "ota", "extract", item, "'^System.*'"])
+
         return False
     else:
         split_dyld_shared_cache = mount_and_split_dyld_shared_cache(extracted_dmgs['cryptex-system-arm64e'],
@@ -114,12 +122,12 @@ def extract_dyld_cache(item, output_path):
         return True
 
 
-def store_as_processed(item):
+def store_as_processed(item: str):
     with open("processed", "a") as processed_file:
         processed_file.write(item + '\n')
 
 
-def load_processed():
+def load_processed() -> list[str]:
     try:
         with open("processed") as processed_file:
             return processed_file.read().splitlines()

@@ -1,15 +1,16 @@
 import argparse
 import subprocess
+from argparse import Namespace
 
 import util
 
 
-def download_otas(output_path, platform):
+def download_otas(output_path: str, platform: str):
     subprocess.run(["ipsw", "download", "ota", "--output", output_path, "-y", "--platform", platform, "--resume-all"])
     # TODO: we want beta releases too
 
 
-def parse_args():
+def parse_args() -> Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument('--output_path', dest='output_path', required=True, type=util.directory,
                         help='path to the output directory where the extracted symbols are placed')
