@@ -12,10 +12,20 @@ import util
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input_path', dest='input_path', required=True, type=util.directory,
-                        help='path to the input directory that is scanned for images to extract symbols from')
-    parser.add_argument('--output_path', dest='output_path', required=True, type=util.directory,
-                        help='path to the output directory where the extracted symbols are placed')
+    parser.add_argument(
+        "--input_path",
+        dest="input_path",
+        required=True,
+        type=util.directory,
+        help="path to the input directory that is scanned for images to extract symbols from",
+    )
+    parser.add_argument(
+        "--output_path",
+        dest="output_path",
+        required=True,
+        type=util.directory,
+        help="path to the output directory where the extracted symbols are placed",
+    )
     return parser.parse_args()
 
 
@@ -34,9 +44,11 @@ def scan_input_path(input_path: Union[str, os.PathLike]) -> list[str]:
 
 def patch_cryptex_dmg(item: str, output_path: str) -> dict[str, str]:
     dmg_files = {}
-    result = subprocess.run(["ipsw", "ota", "patch", item, "--output", output_path], capture_output=True)
-    if result.returncode == 0 and result.stderr != b'':
-        for line in result.stderr.decode('utf-8').splitlines():
+    result = subprocess.run(
+        ["ipsw", "ota", "patch", item, "--output", output_path], capture_output=True
+    )
+    if result.returncode == 0 and result.stderr != b"":
+        for line in result.stderr.decode("utf-8").splitlines():
             re_match = re.search("Patching (.*) to (.*)", line)
             dmg_files[re_match.group(1)] = re_match.group(2)
 
@@ -65,9 +77,11 @@ def parse_hdiutil_mount_output(output: str) -> MountInfo:
 def mount_and_split_dyld_shared_cache(dmg: str, output_path: str) -> str:
     result = subprocess.run(["hdiutil", "mount", dmg], capture_output=True)
     if result.returncode == 0:
-        mount = parse_hdiutil_mount_output(result.stdout.decode('utf-8'))
-        image_name = mount.point.split('/').pop()
-        split_dyld_cache_path = split_dyld_shared_cache(mount.point, output_path + "/" + image_name + "_libraries")
+        mount = parse_hdiutil_mount_output(result.stdout.decode("utf-8"))
+        image_name = mount.point.split("/").pop()
+        split_dyld_cache_path = split_dyld_shared_cache(
+            mount.point, output_path + "/" + image_name + "_libraries"
+        )
         result = subprocess.run(["hdiutil", "detach", mount.dev], capture_output=True)
         print(f"Result from detach: {result}")
         return split_dyld_cache_path
@@ -81,21 +95,28 @@ def split_dyld_shared_cache(input_path, output_path):
         split_dyld_cache_path = output_path
         result = subprocess.run(
             ["ipsw", "dyld", "split", dyld_shared_cache_path, split_dyld_cache_path],
-            capture_output=True)
+            capture_output=True,
+        )
         print(f"Result from split: {result}")
     return split_dyld_cache_path
 
 
 def find_dyld_shared_cache_path(input_path: str) -> list[str]:
     # TODO: these options might be something that can be validated via meta-data
-    dyld_shared_cache_arch_options = ["dyld_shared_cache_arm64e", "dyld_shared_cache_arm64",
-                                      "dyld_shared_cache_arm64_32", "dyld_shared_cache_armv7k"]
+    dyld_shared_cache_arch_options = [
+        "dyld_shared_cache_arm64e",
+        "dyld_shared_cache_arm64",
+        "dyld_shared_cache_arm64_32",
+        "dyld_shared_cache_armv7k",
+    ]
 
     # TODO: are we also interested in the DriverKit dyld_shared_cache?
     #  System/DriverKit/System/Library/dyld/
-    dyld_shared_cache_path_prefix_options = ["/System/Library/Caches/com.apple.dyld/",
-                                             "/AssetData/payloadv2/patches/System/Library/Caches/com.apple.dyld/",
-                                             "/AssetData/payloadv2/ecc_data/System/Library/Caches/com.apple.dyld/"]
+    dyld_shared_cache_path_prefix_options = [
+        "/System/Library/Caches/com.apple.dyld/",
+        "/AssetData/payloadv2/patches/System/Library/Caches/com.apple.dyld/",
+        "/AssetData/payloadv2/ecc_data/System/Library/Caches/com.apple.dyld/",
+    ]
 
     dyld_shared_cache_paths = []
     for path_prefix in dyld_shared_cache_path_prefix_options:
@@ -117,20 +138,36 @@ def symsort(dyld_shared_cache_split: str, output_path: str):
     #  * the second can be found in the info.plist of the zip
     #  * the third can be extracted when searching for dyld_shared_cache
     bundle_id = "16.1.1_20B101_arm64e"
-    subprocess.run(["./symsorter", "-zz", "-o", symsort_output, "--prefix", prefix, "--bundle-id", bundle_id,
-                    dyld_shared_cache_split], capture_output=True)
+    subprocess.run(
+        [
+            "./symsorter",
+            "-zz",
+            "-o",
+            symsort_output,
+            "--prefix",
+            prefix,
+            "--bundle-id",
+            bundle_id,
+            dyld_shared_cache_split,
+        ],
+        capture_output=True,
+    )
 
 
-def parse_extracted_dyld_shared_cache_path_prefix(output: str, top_output_path: str) -> str:
+def parse_extracted_dyld_shared_cache_path_prefix(
+    output: str, top_output_path: str
+) -> str:
     for line in output.splitlines():
         top_output_path_index = line.find(top_output_path)
-        if top_output_path_index == -1: continue
+        if top_output_path_index == -1:
+            continue
 
         extraction_name_start = top_output_path_index + len(top_output_path) + 1
-        extraction_name_end = line.find('/', extraction_name_start)
-        if extraction_name_end == -1: continue
+        extraction_name_end = line.find("/", extraction_name_start)
+        if extraction_name_end == -1:
+            continue
 
-        return top_output_path + "/" + line[extraction_name_start: extraction_name_end]
+        return top_output_path + "/" + line[extraction_name_start:extraction_name_end]
 
 
 def extract_dyld_cache(item: str, output_path: str) -> bool:
@@ -141,44 +178,66 @@ def extract_dyld_cache(item: str, output_path: str) -> bool:
 
         dyld_shared_cache_top_output_path = output_path + "/dyld_shared_cache_output"
         # TODO: the output_path here should probably be a temp directory
-        result = subprocess.run(["ipsw", "ota", "extract", item, "dyld_shared_cache", "-o",
-                                 dyld_shared_cache_top_output_path],
-                                capture_output=True)
+        result = subprocess.run(
+            [
+                "ipsw",
+                "ota",
+                "extract",
+                item,
+                "dyld_shared_cache",
+                "-o",
+                dyld_shared_cache_top_output_path,
+            ],
+            capture_output=True,
+        )
         if result.returncode == 1:
             # TODO: we must also differentiate here whether an image failed or whether it has no dyld_shared_cache that
             #  we can extract, because it is was a partial update file (or whatever). The latter should be marked as
             #  processed so we don't reprocess a partial update that will never be successful. May be irrelevant.
             print(f"\t\tFailed to extract dyld_shared_cache from: {item}")
-            print(result.stderr.decode('utf-8'))
+            print(result.stderr.decode("utf-8"))
             return False
         else:
             print(f"\t\tSuccessfully extracted dyld_shared_cache from: {item}")
-            extracted_dyld_shared_cache_path = parse_extracted_dyld_shared_cache_path_prefix(
-                result.stderr.decode('utf-8'), dyld_shared_cache_top_output_path)
+            extracted_dyld_shared_cache_path = (
+                parse_extracted_dyld_shared_cache_path_prefix(
+                    result.stderr.decode("utf-8"), dyld_shared_cache_top_output_path
+                )
+            )
             print(f"\t\tSplitting & symsorting dyld_shared_cache for: {item}")
-            symsort(split_dyld_shared_cache(extracted_dyld_shared_cache_path, output_path), output_path)
+            symsort(
+                split_dyld_shared_cache(extracted_dyld_shared_cache_path, output_path),
+                output_path,
+            )
             return True
     else:
         # TODO: it is unclear whether 'cryptex-system-arm64e' always holds true
         # TODO: the output_path for mount & split should probably be a temp directory
-        print(f"\tCryptex patch successful. Mount, split, symsorting dyld_shared_cache for: {item}")
-        symsort(mount_and_split_dyld_shared_cache(extracted_dmgs['cryptex-system-arm64e'], output_path), output_path)
+        print(
+            f"\tCryptex patch successful. Mount, split, symsorting dyld_shared_cache for: {item}"
+        )
+        symsort(
+            mount_and_split_dyld_shared_cache(
+                extracted_dmgs["cryptex-system-arm64e"], output_path
+            ),
+            output_path,
+        )
         return True
 
 
 def list_dyld_shared_cache_files(item):
     ps = subprocess.Popen(["ipsw", "ota", "ls", item], stdout=subprocess.PIPE)
     try:
-        output = subprocess.check_output(('grep', 'dyld_shared_cache'), stdin=ps.stdout)
+        output = subprocess.check_output(("grep", "dyld_shared_cache"), stdin=ps.stdout)
         ps.wait()
-        print(output.decode('utf-8'))
+        print(output.decode("utf-8"))
     except subprocess.CalledProcessError:
         print(f"no dyld_shared_cache found in {item}")
 
 
 def store_as_processed(item: str):
     with open("processed", "a") as processed_file:
-        processed_file.write(item + '\n')
+        processed_file.write(item + "\n")
 
 
 def load_processed() -> list[str]:
@@ -206,5 +265,5 @@ def main():
             store_as_processed(item)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
