@@ -2,7 +2,6 @@ import argparse
 import glob
 import os
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Union
@@ -23,7 +22,6 @@ def parse_args():
         "--output_path",
         dest="output_path",
         required=True,
-        type=util.directory,
         help="path to the output directory where the extracted symbols are placed",
     )
     return parser.parse_args()
@@ -154,7 +152,7 @@ def symsort(dyld_shared_cache_split: str, output_path: str):
     )
 
 
-def parse_extracted_dyld_shared_cache_path_prefix(
+def parse_path_prefix_from_dyld_shared_cache_extract_cmd(
     output: str, top_output_path: str
 ) -> str:
     for line in output.splitlines():
@@ -200,7 +198,7 @@ def extract_dyld_cache(item: str, output_path: str) -> bool:
         else:
             print(f"\t\tSuccessfully extracted dyld_shared_cache from: {item}")
             extracted_dyld_shared_cache_path = (
-                parse_extracted_dyld_shared_cache_path_prefix(
+                parse_path_prefix_from_dyld_shared_cache_extract_cmd(
                     result.stderr.decode("utf-8"), dyld_shared_cache_top_output_path
                 )
             )
@@ -235,12 +233,12 @@ def list_dyld_shared_cache_files(item):
         print(f"no dyld_shared_cache found in {item}")
 
 
-def store_as(name: str, item: str):
+def log_as(name: str, item: str):
     with open(name, "a") as process_log_file:
         process_log_file.write(item + "\n")
 
 
-def load_from(name: str) -> list[str]:
+def load_log(name: str) -> list[str]:
     try:
         with open(name) as process_log_file:
             return process_log_file.read().splitlines()
@@ -248,24 +246,29 @@ def load_from(name: str) -> list[str]:
         return []
 
 
+def gather_images_to_process(input_path: str) -> list[str]:
+    new_images = scan_input_path(input_path)
+    old_images = load_log("processed")
+    old_images.extend(load_log("failed"))
+    to_process = list(set(new_images) - set(old_images))
+    return to_process
+
+
 def main():
     args = parse_args()
     validate_shell_deps()
-    new_images = scan_input_path(args.input_path)
-    old_images = load_from("processed")
-    old_images.extend(load_from("failed"))
-    to_process = list(set(new_images) - set(old_images))
+    to_process = gather_images_to_process(args.input_path)
     print(f"Processing {to_process}")
 
-    # TODO: maybe instead of providing an output path we should manage this ourselves (i.e. run-path using uuid)
-    shutil.rmtree(args.output_path)
-    os.mkdir(args.output_path)
+    if not os.path.isdir(args.output_path):
+        os.mkdir(args.output_path)
+
     for item in to_process:
         success = extract_dyld_cache(item, args.output_path)
         if success:
-            store_as("processed", item)
+            log_as("processed", item)
         else:
-            store_as("failed", item)
+            log_as("failed", item)
 
 
 if __name__ == "__main__":
