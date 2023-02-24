@@ -63,7 +63,8 @@ def mount_and_split_dyld_shared_cache(dmg: str, output_path: str) -> str:
 
         print(f"Splitting dyld_shared_cache of {mount_point}")
         # TODO: this might be something that can be validated via meta-data
-        dyld_shared_cache_arch_options = ["dyld_shared_cache_arm64e", "dyld_shared_cache_arm64"]
+        dyld_shared_cache_arch_options = ["dyld_shared_cache_arm64e", "dyld_shared_cache_arm64",
+                                          "dyld_shared_cache_arm64_32"]
         found_dyld_shared_cache = False
         dyld_shared_cache_path = ""
         for option in dyld_shared_cache_arch_options:
