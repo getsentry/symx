@@ -1,6 +1,7 @@
 import argparse
 import glob
 import os
+import pathlib
 import re
 import subprocess
 from dataclasses import dataclass
@@ -102,10 +103,10 @@ def split_dyld_shared_cache(input_path, output_path):
 def find_dyld_shared_cache_path(input_path: str) -> list[str]:
     # TODO: these options might be something that can be validated via meta-data
     dyld_shared_cache_arch_options = [
-        "dyld_shared_cache_arm64e",
-        "dyld_shared_cache_arm64",
-        "dyld_shared_cache_arm64_32",
-        "dyld_shared_cache_armv7k",
+        "arm64e",
+        "arm64",
+        "arm64_32",
+        "armv7k",
     ]
 
     # TODO: are we also interested in the DriverKit dyld_shared_cache?
@@ -119,23 +120,27 @@ def find_dyld_shared_cache_path(input_path: str) -> list[str]:
     dyld_shared_cache_paths = []
     for path_prefix in dyld_shared_cache_path_prefix_options:
         for arch in dyld_shared_cache_arch_options:
-            dyld_shared_cache_path = input_path + path_prefix + arch
+            dyld_shared_cache_path = (
+                input_path + path_prefix + "dyld_shared_cache_" + arch
+            )
             if os.path.isfile(dyld_shared_cache_path):
                 dyld_shared_cache_paths.append(dyld_shared_cache_path)
 
     return dyld_shared_cache_paths
 
 
-def symsort(dyld_shared_cache_split: str, output_path: str):
+def symsort(
+    dyld_shared_cache_split: str,
+    output_path: str,
+    platform: str,
+    os_version: str,
+    build_id: str,
+    arch: str,
+):
     # TODO: the question here is whether we should write a common symsorter output directory
     symsort_output = output_path + "/symsorter_out"
-    prefix = "ios"  # TODO: this should become a parameter which we can extract from the directory
-
-    # TODO: this should become a parameter ->
-    #  * we can get the first bundle_id parameter from the directory
-    #  * the second can be found in the info.plist of the zip
-    #  * the third can be extracted when searching for dyld_shared_cache
-    bundle_id = "16.1.1_20B101_arm64e"
+    prefix = platform.lower()
+    bundle_id = os_version + "_" + build_id + "_" + arch
     subprocess.run(
         [
             "./symsorter",
@@ -168,9 +173,20 @@ def parse_path_prefix_from_dyld_shared_cache_extract_cmd(
         return top_output_path + "/" + line[extraction_name_start:extraction_name_end]
 
 
-def extract_dyld_cache(item: str, output_path: str) -> bool:
-    print(f"Trying patch_cryptex_dmg with {item}")
-    extracted_dmgs = patch_cryptex_dmg(item, output_path)
+def find_os_version_in_image_path(image_path: str) -> str:
+    image_path = pathlib.Path(image_path)
+    platform_version = image_path.parent.parts[-1][:-5]
+    m = re.search(r"\d", platform_version)
+    version = platform_version[m.start() :]
+    return version
+
+
+def extract_dyld_cache(image_path: str, output_path: str) -> bool:
+    os_version = find_os_version_in_image_path(image_path)
+    build_id = "19H218"
+    arch = "arm64e"
+    print(f"Trying patch_cryptex_dmg with {image_path}")
+    extracted_dmgs = patch_cryptex_dmg(image_path, output_path)
     if len(extracted_dmgs) == 0:
         print(f"\tNot a cryptex, so extracting OTA dyld_shared_cache directly")
 
@@ -181,7 +197,7 @@ def extract_dyld_cache(item: str, output_path: str) -> bool:
                 "ipsw",
                 "ota",
                 "extract",
-                item,
+                image_path,
                 "dyld_shared_cache",
                 "-o",
                 dyld_shared_cache_top_output_path,
@@ -192,33 +208,41 @@ def extract_dyld_cache(item: str, output_path: str) -> bool:
             # TODO: we must also differentiate here whether an image failed or whether it has no dyld_shared_cache that
             #  we can extract, because it is was a partial update file (or whatever). The latter should be marked as
             #  processed so we don't reprocess a partial update that will never be successful. May be irrelevant.
-            print(f"\t\tFailed to extract dyld_shared_cache from: {item}")
+            print(f"\t\tFailed to extract dyld_shared_cache from: {image_path}")
             print(result.stderr.decode("utf-8"))
             return False
         else:
-            print(f"\t\tSuccessfully extracted dyld_shared_cache from: {item}")
+            print(f"\t\tSuccessfully extracted dyld_shared_cache from: {image_path}")
             extracted_dyld_shared_cache_path = (
                 parse_path_prefix_from_dyld_shared_cache_extract_cmd(
                     result.stderr.decode("utf-8"), dyld_shared_cache_top_output_path
                 )
             )
-            print(f"\t\tSplitting & symsorting dyld_shared_cache for: {item}")
+            print(f"\t\tSplitting & symsorting dyld_shared_cache for: {image_path}")
             symsort(
                 split_dyld_shared_cache(extracted_dyld_shared_cache_path, output_path),
                 output_path,
+                "ios",
+                os_version,
+                build_id,
+                arch,
             )
             return True
     else:
         # TODO: it is unclear whether 'cryptex-system-arm64e' always holds true
         # TODO: the output_path for mount & split should probably be a temp directory
         print(
-            f"\tCryptex patch successful. Mount, split, symsorting dyld_shared_cache for: {item}"
+            f"\tCryptex patch successful. Mount, split, symsorting dyld_shared_cache for: {image_path}"
         )
         symsort(
             mount_and_split_dyld_shared_cache(
                 extracted_dmgs["cryptex-system-arm64e"], output_path
             ),
             output_path,
+            "ios",
+            os_version,
+            build_id,
+            arch,
         )
         return True
 
