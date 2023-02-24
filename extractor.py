@@ -235,15 +235,15 @@ def list_dyld_shared_cache_files(item):
         print(f"no dyld_shared_cache found in {item}")
 
 
-def store_as_processed(item: str):
-    with open("processed", "a") as processed_file:
-        processed_file.write(item + "\n")
+def store_as(name: str, item: str):
+    with open(name, "a") as process_log_file:
+        process_log_file.write(item + "\n")
 
 
-def load_processed() -> list[str]:
+def load_from(name: str) -> list[str]:
     try:
-        with open("processed") as processed_file:
-            return processed_file.read().splitlines()
+        with open(name) as process_log_file:
+            return process_log_file.read().splitlines()
     except FileNotFoundError:
         return []
 
@@ -252,7 +252,8 @@ def main():
     args = parse_args()
     validate_shell_deps()
     new_images = scan_input_path(args.input_path)
-    old_images = load_processed()
+    old_images = load_from("processed")
+    old_images.extend(load_from("failed"))
     to_process = list(set(new_images) - set(old_images))
     print(f"Processing {to_process}")
 
@@ -262,7 +263,9 @@ def main():
     for item in to_process:
         success = extract_dyld_cache(item, args.output_path)
         if success:
-            store_as_processed(item)
+            store_as("processed", item)
+        else:
+            store_as("failed", item)
 
 
 if __name__ == "__main__":
