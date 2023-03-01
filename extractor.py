@@ -4,6 +4,7 @@ import os
 import pathlib
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Union
 
@@ -29,9 +30,21 @@ def parse_args():
 
 
 def validate_shell_deps():
-    # TODO: check/download for symsorter
-    # TODO: check for ipsw
-    pass
+    version = util.ipsw_version()
+    if version:
+        print(f"Using ipsw {version}")
+    else:
+        print("ipsw not installed")
+        sys.exit(1)
+
+    result = subprocess.run(["./symsorter", "--version"], capture_output=True)
+    if result.returncode == 0:
+        symsorter_version = result.stdout.decode("utf-8")
+        print(f"Using {symsorter_version}")
+    else:
+        # TODO: download symsorter if missing or outdated?
+        print("Cannot find symsorter in CWD")
+        sys.exit(1)
 
 
 def scan_input_path(input_path: Union[str, os.PathLike]) -> list[str]:
@@ -281,6 +294,7 @@ def gather_images_to_process(input_path: str) -> list[str]:
 def main():
     args = parse_args()
     validate_shell_deps()
+
     to_process = gather_images_to_process(args.input_path)
     print(f"Processing {to_process}")
 

@@ -1,5 +1,6 @@
 import argparse
 import subprocess
+import sys
 from argparse import Namespace
 
 import util
@@ -46,8 +47,12 @@ def parse_args() -> Namespace:
 
 
 def validate_shell_deps():
-    # TODO: check for ipsw
-    pass
+    version = util.ipsw_version()
+    if version:
+        print(f"Using ipsw {version}")
+    else:
+        print("ipsw not installed")
+        sys.exit(1)
 
 
 def main():
