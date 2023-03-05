@@ -2,6 +2,7 @@ import argparse
 import subprocess
 import sys
 from argparse import Namespace
+from dataclasses import dataclass
 
 import util
 
@@ -16,6 +17,26 @@ OTA_PLATFORMS = [
 ]
 
 
+@dataclass(frozen=True)
+class ota_artifact:
+    build: str
+    device_count: int
+    model_count: int
+    name: str
+    size: str
+    zip: str
+    url: str
+
+
+# TODO: this might be more general than just OTAs but gotta start somewhere
+def ota_download_co_run(command):
+    popen = subprocess.Popen(command, stderr=subprocess.PIPE, universal_newlines=True)
+    for stdout_line in iter(popen.stderr.readline, ""):
+        yield stdout_line
+    popen.stderr.close()
+    return popen.wait()
+
+
 def download_otas(output_path: str, platform: str):
     ipsw_ota_download_command = [
         "ipsw",
@@ -27,11 +48,29 @@ def download_otas(output_path: str, platform: str):
         "--platform",
         platform,
         "--resume-all",
+        "--verbose",
     ]
+    # TODO: also store the source (at least URL) of the download
     ipsw_ota_beta_download_command = ipsw_ota_download_command.copy()
     ipsw_ota_beta_download_command.append("--beta")
-    subprocess.run(ipsw_ota_download_command)
-    subprocess.run(ipsw_ota_beta_download_command)
+
+    error_log = False
+    for line in ota_download_co_run(ipsw_ota_download_command):
+        # ignore error logs
+        if line.find("• [ERROR]") != -1:
+            error_log = True
+            continue
+
+        if error_log and line.startswith("}"):
+            error_log = False
+            continue
+
+        if error_log:
+            continue
+
+        print(line)
+
+    ota_download_co_run(ipsw_ota_beta_download_command)
 
 
 def parse_args() -> Namespace:
