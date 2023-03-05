@@ -95,12 +95,12 @@ def mount_and_split_dyld_shared_cache(dmg: str, output_path: str) -> str:
             mount.point, output_path + "/" + image_name + "_libraries"
         )
         result = subprocess.run(["hdiutil", "detach", mount.dev], capture_output=True)
-        print(f"Result from detach: {result}")
+        print(f"\t\t\tResult from detach: {result}")
         return split_dyld_cache_path
 
 
 def split_dyld_shared_cache(input_path, output_path):
-    print(f"Splitting dyld_shared_cache of {input_path}")
+    print(f"\t\tSplitting dyld_shared_cache of {input_path}")
     dyld_shared_cache_paths = find_dyld_shared_cache_path(input_path)
     split_dyld_cache_path = None
     for dyld_shared_cache_path in dyld_shared_cache_paths:
@@ -109,7 +109,7 @@ def split_dyld_shared_cache(input_path, output_path):
             ["ipsw", "dyld", "split", dyld_shared_cache_path, split_dyld_cache_path],
             capture_output=True,
         )
-        print(f"Result from split: {result}")
+        print(f"\t\t\tResult from split: {result}")
     return split_dyld_cache_path
 
 
@@ -139,6 +139,13 @@ def find_dyld_shared_cache_path(input_path: str) -> list[str]:
             if os.path.isfile(dyld_shared_cache_path):
                 dyld_shared_cache_paths.append(dyld_shared_cache_path)
 
+    if len(dyld_shared_cache_paths) == 0:
+        print("ERROR: we could not find any dyld_shared_cache paths")
+    elif len(dyld_shared_cache_paths) > 1:
+        print("SURPRISE: we found more than one dyld_shared_cache path")
+        for path in dyld_shared_cache_paths:
+            print(path)
+
     return dyld_shared_cache_paths
 
 
@@ -150,6 +157,7 @@ def symsort(
     build_id: str,
     arch: str,
 ):
+    print(f"\t\t\tSymsorting {dyld_shared_cache_split} to {output_path}")
     # TODO: the question here is whether we should write a common symsorter output directory
     symsort_output = output_path + "/symsorter_out"
     prefix = platform.lower()
@@ -302,6 +310,7 @@ def main():
         os.mkdir(args.output_path)
 
     for item in to_process:
+        # TODO: here we might want to store where a debug-id is coming from: like debug-id -> ota-image
         success = extract_dyld_cache(item, args.output_path)
         if success:
             log_as("processed", item)
