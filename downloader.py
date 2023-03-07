@@ -1,4 +1,5 @@
 import argparse
+import re
 import subprocess
 import sys
 from argparse import Namespace
@@ -54,7 +55,9 @@ def download_otas(output_path: str, platform: str):
     ipsw_ota_beta_download_command = ipsw_ota_download_command.copy()
     ipsw_ota_beta_download_command.append("--beta")
 
+    ota_zip_names = []
     error_log = False
+    url_log = False
     for line in ota_download_co_run(ipsw_ota_download_command):
         # ignore error logs
         if line.find("• [ERROR]") != -1:
@@ -67,6 +70,29 @@ def download_otas(output_path: str, platform: str):
 
         if error_log:
             continue
+
+        # ignore first fetch log
+        if line.startswith("   • name: "):
+            continue
+
+        # gather OTA zip-file names
+        # TODO: do we need this? do we need to extract more from this?
+        zip_match = re.search("\s{6}• ([a-f0-9]{40}\.zip)", line)
+        if zip_match:
+            ota_zip_names.append(zip_match.group(1))
+            continue
+
+        # capture URL log
+        if line.startswith("   • URLs to Download:"):
+            url_log = True
+            continue
+
+        if url_log:
+            url_match = re.search("\s{6}• (http\.zip)", line)
+            if url_match:
+                print(url_match.group(1))
+            else:
+                url_log = False
 
         print(line)
 

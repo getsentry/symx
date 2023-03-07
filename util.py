@@ -10,10 +10,12 @@ def directory(path: str) -> str:
         return path
 
 
-def ipsw_version() -> str | None:
-    result = subprocess.run(["ipsw", "version"], capture_output=True)
-    if result.returncode == 0:
-        output = result.stdout.decode("utf-8")
-        match = re.search("Version: (.*),", output)
+def ipsw_version() -> str:
+    result = subprocess.run(["ipsw", "version"], capture_output=True, check=True)
+    output = result.stdout.decode("utf-8")
+    match = re.search("Version: (.*),", output)
+    if match:
         version = match.group(1)
         return version
+
+    raise RuntimeError(f"Couldn't parse version from ipsw output: {output}")

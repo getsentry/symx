@@ -6,7 +6,6 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Union
 
 import util
 
@@ -47,7 +46,7 @@ def validate_shell_deps():
         sys.exit(1)
 
 
-def scan_input_path(input_path: Union[str, os.PathLike]) -> list[str]:
+def scan_input_path(input_path: str) -> list[str]:
     result = []
     for file_path in glob.iglob(input_path + "/**/*.zip", recursive=True):
         result.append(file_path)
@@ -62,7 +61,8 @@ def patch_cryptex_dmg(item: str, output_path: str) -> dict[str, str]:
     if result.returncode == 0 and result.stderr != b"":
         for line in result.stderr.decode("utf-8").splitlines():
             re_match = re.search("Patching (.*) to (.*)", line)
-            dmg_files[re_match.group(1)] = re_match.group(2)
+            if re_match:
+                dmg_files[re_match.group(1)] = re_match.group(2)
 
     return dmg_files
 
@@ -87,16 +87,17 @@ def parse_hdiutil_mount_output(output: str) -> MountInfo:
 
 
 def mount_and_split_dyld_shared_cache(dmg: str, output_path: str) -> str:
-    result = subprocess.run(["hdiutil", "mount", dmg], capture_output=True)
-    if result.returncode == 0:
-        mount = parse_hdiutil_mount_output(result.stdout.decode("utf-8"))
-        image_name = mount.point.split("/").pop()
-        split_dyld_cache_path = split_dyld_shared_cache(
-            mount.point, output_path + "/" + image_name + "_libraries"
-        )
-        result = subprocess.run(["hdiutil", "detach", mount.dev], capture_output=True)
-        print(f"\t\t\tResult from detach: {result}")
-        return split_dyld_cache_path
+    result = subprocess.run(["hdiutil", "mount", dmg], capture_output=True, check=True)
+
+    mount = parse_hdiutil_mount_output(result.stdout.decode("utf-8"))
+    image_name = mount.point.split("/").pop()
+    split_dyld_cache_path = split_dyld_shared_cache(
+        mount.point, output_path + "/" + image_name + "_libraries"
+    )
+    result = subprocess.run(["hdiutil", "detach", mount.dev], capture_output=True)
+    print(f"\t\t\tResult from detach: {result}")
+
+    return split_dyld_cache_path
 
 
 def split_dyld_shared_cache(input_path, output_path):
@@ -193,13 +194,17 @@ def parse_path_prefix_from_dyld_shared_cache_extract_cmd(
 
         return top_output_path + "/" + line[extraction_name_start:extraction_name_end]
 
+    raise RuntimeError(f"Couldn't find path_prefix in command-output: {output}")
+
 
 def find_os_version_in_image_path(image_path: str) -> str:
-    image_path = pathlib.Path(image_path)
-    platform_version = image_path.parent.parts[-1][:-5]
+    platform_version = pathlib.Path(image_path).parent.parts[-1][:-5]
     m = re.search(r"\d", platform_version)
-    version = platform_version[m.start() :]
-    return version
+    if m:
+        version = platform_version[m.start() :]
+        return version
+
+    raise ValueError(f"Invalid image_path provided: {image_path}")
 
 
 def extract_dyld_cache(image_path: str, output_path: str) -> bool:
@@ -255,10 +260,11 @@ def extract_dyld_cache(image_path: str, output_path: str) -> bool:
         print(
             f"\tCryptex patch successful. Mount, split, symsorting dyld_shared_cache for: {image_path}"
         )
+        split_cache_path = mount_and_split_dyld_shared_cache(
+            extracted_dmgs["cryptex-system-arm64e"], output_path
+        )
         symsort(
-            mount_and_split_dyld_shared_cache(
-                extracted_dmgs["cryptex-system-arm64e"], output_path
-            ),
+            split_cache_path,
             output_path,
             "ios",
             os_version,
