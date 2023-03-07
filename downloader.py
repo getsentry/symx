@@ -4,6 +4,7 @@ import subprocess
 import sys
 from argparse import Namespace
 from dataclasses import dataclass
+from enum import Enum
 
 import util
 
@@ -18,15 +19,23 @@ OTA_PLATFORMS = [
 ]
 
 
-@dataclass(frozen=True)
-class ota_artifact:
+@dataclass
+class OtaArtifact:
     build: str
-    device_count: int
-    model_count: int
     name: str
-    size: str
+    version: str
     zip: str
-    url: str
+    url: str | None
+    download_path: str | None
+    devices: [str]
+    models: [str]
+
+
+class OtaDownloadLogSection(Enum):
+    NONE = 1
+    ERROR = 2
+    URL = 3
+    OTA_LIST = 4
 
 
 # TODO: this might be more general than just OTAs but gotta start somewhere
@@ -55,44 +64,83 @@ def download_otas(output_path: str, platform: str):
     ipsw_ota_beta_download_command = ipsw_ota_download_command.copy()
     ipsw_ota_beta_download_command.append("--beta")
 
-    ota_zip_names = []
-    error_log = False
-    url_log = False
+    # TODO:
+    #  - ota_images must be loaded from disk on startup
+    #  - ota_images must be persisted before download starts
+    #  - ota_images must be updated while downloads/start complete
+    #  - the above requires concurrent reading of stderr/stdout
+    ota_images = {}
+    # replace these with an enum
+    section = OtaDownloadLogSection.NONE
     for line in ota_download_co_run(ipsw_ota_download_command):
         # ignore error logs
-        if line.find("• [ERROR]") != -1:
-            error_log = True
+        if section == OtaDownloadLogSection.ERROR:
+            if line.startswith("}"):
+                section = OtaDownloadLogSection.NONE
             continue
-
-        if error_log and line.startswith("}"):
-            error_log = False
-            continue
-
-        if error_log:
-            continue
+        else:
+            if line.find("• [ERROR]") != -1:
+                section = OtaDownloadLogSection.ERROR
+                continue
 
         # ignore first fetch log
         if line.startswith("   • name: "):
             continue
 
         # gather OTA zip-file names
-        # TODO: do we need this? do we need to extract more from this?
-        zip_match = re.search("\s{6}• ([a-f0-9]{40}\.zip)", line)
-        if zip_match:
-            ota_zip_names.append(zip_match.group(1))
+        if section != OtaDownloadLogSection.OTA_LIST and line.startswith(
+            "   • OTA(s):"
+        ):
+            section = OtaDownloadLogSection.OTA_LIST
             continue
+
+        # TODO: do we need this? do we need to extract more from this?
+        if section == OtaDownloadLogSection.OTA_LIST:
+            zip_match = re.search(
+                "^\s{6}• ([a-f0-9]{40}\.zip) build=(\w*).*name=(\w*).*version=([0-9.]*)",
+                line,
+            )
+            if zip_match:
+                ota_zip_name = zip_match.group(1)
+                ota_images[ota_zip_name] = OtaArtifact(
+                    build=zip_match.group(2),
+                    name=zip_match.group(3),
+                    version=zip_match.group(4)[4:],
+                    zip=ota_zip_name,
+                    url=None,
+                    models=[],
+                    devices=[],
+                    download_path=None,
+                )
+                continue
+            else:
+                section = OtaDownloadLogSection.NONE
 
         # capture URL log
-        if line.startswith("   • URLs to Download:"):
-            url_log = True
+        if section != OtaDownloadLogSection.URL and line.startswith(
+            "   • URLs to Download:"
+        ):
+            section = OtaDownloadLogSection.URL
             continue
 
-        if url_log:
-            url_match = re.search("\s{6}• (http\.zip)", line)
+        if section == OtaDownloadLogSection.URL:
+            url_match = re.search("\s{6}• (http(.*)\.zip)", line)
             if url_match:
-                print(url_match.group(1))
+                url = url_match.group(1)
+                ota_zip_name = url[url.rfind("/") + 1 :]
+                if (
+                    ota_zip_name in ota_images.keys()
+                    and ota_images[ota_zip_name].url is not None
+                ):
+                    print(f"Unexpected duplicate OTA image zip: {ota_zip_name}: ")
+                    print(f"\told source URL: {ota_images[ota_zip_name].url}")
+                    print(f"\tnew source URL: {url}")
+                    raise RuntimeError("Duplicate OTA image zip detected")
+                else:
+                    ota_images[ota_zip_name].url = url
+                continue
             else:
-                url_log = False
+                section = OtaDownloadLogSection.NONE
 
         print(line)
 
@@ -111,7 +159,7 @@ def parse_args() -> Namespace:
     return parser.parse_args()
 
 
-def validate_shell_deps():
+def validate_shell_deps() -> None:
     version = util.ipsw_version()
     if version:
         print(f"Using ipsw {version}")
@@ -120,7 +168,7 @@ def validate_shell_deps():
         sys.exit(1)
 
 
-def main():
+def main() -> None:
     args = parse_args()
     validate_shell_deps()
     for platform in OTA_PLATFORMS:
