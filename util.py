@@ -4,10 +4,10 @@ import subprocess
 
 
 def directory(path: str) -> str:
-    if not os.path.isdir(path):
-        raise ValueError(f"Error: {path} is not a valid directory")
-    else:
+    if os.path.isdir(path):
         return path
+
+    raise ValueError(f"Error: {path} is not a valid directory")
 
 
 def ipsw_version() -> str:
