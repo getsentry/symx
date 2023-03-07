@@ -141,11 +141,11 @@ def find_dyld_shared_cache_path(input_path: str) -> list[str]:
                 dyld_shared_cache_paths.append(dyld_shared_cache_path)
 
     if len(dyld_shared_cache_paths) == 0:
-        print("ERROR: we could not find any dyld_shared_cache paths")
+        raise RuntimeError(f"Couldn't find any dyld_shared_cache paths in {input_path}")
     elif len(dyld_shared_cache_paths) > 1:
-        print("SURPRISE: we found more than one dyld_shared_cache path")
+        print(f"Found more than one dyld_shared_cache path in {input_path}")
         for path in dyld_shared_cache_paths:
-            print(path)
+            print(f"\t{path}")
 
     return dyld_shared_cache_paths
 
