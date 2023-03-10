@@ -5,12 +5,15 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
+from argparse import Namespace
 from dataclasses import dataclass
+from typing import Optional
 
 import util
 
 
-def parse_args():
+def parse_args() -> Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--input_path",
@@ -28,7 +31,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def validate_shell_deps():
+def validate_shell_deps() -> None:
     version = util.ipsw_version()
     if version:
         print(f"Using ipsw {version}")
@@ -86,7 +89,7 @@ def parse_hdiutil_mount_output(output: str) -> MountInfo:
     return MountInfo(mount_info[0], mount_info[1], mount_info[2])
 
 
-def mount_and_split_dyld_shared_cache(dmg: str, output_path: str) -> str:
+def mount_and_split_dyld_shared_cache(dmg: str, output_path: str) -> Optional[str]:
     result = subprocess.run(["hdiutil", "mount", dmg], capture_output=True, check=True)
 
     mount = parse_hdiutil_mount_output(result.stdout.decode("utf-8"))
@@ -100,7 +103,7 @@ def mount_and_split_dyld_shared_cache(dmg: str, output_path: str) -> str:
     return split_dyld_cache_path
 
 
-def split_dyld_shared_cache(input_path, output_path):
+def split_dyld_shared_cache(input_path: str, output_path: str) -> Optional[str]:
     print(f"\t\tSplitting dyld_shared_cache of {input_path}")
     dyld_shared_cache_paths = find_dyld_shared_cache_path(input_path)
     split_dyld_cache_path = None
@@ -157,10 +160,11 @@ def symsort(
     os_version: str,
     build_id: str,
     arch: str,
-):
+) -> None:
     print(f"\t\t\tSymsorting {dyld_shared_cache_split} to {output_path}")
-    # TODO: the question here is whether we should write a common symsorter output directory
-    symsort_output = output_path + "/symsorter_out"
+    # TODO: symsorter just writes into the output_path, but in the final scenario we want to change this behavior
+    #  to check whether there would be any overwrites, if those overwrites actually contain different content (vs.
+    #  just different meta-data) and then atomically do (or not) the write to final output directory.
     prefix = platform.lower()
     bundle_id = os_version + "_" + build_id + "_" + arch
     subprocess.run(
@@ -168,7 +172,7 @@ def symsort(
             "./symsorter",
             "-zz",
             "-o",
-            symsort_output,
+            output_path,
             "--prefix",
             prefix,
             "--bundle-id",
@@ -212,69 +216,89 @@ def extract_dyld_cache(image_path: str, output_path: str) -> bool:
     build_id = "19H218"
     arch = "arm64e"
     print(f"Trying patch_cryptex_dmg with {image_path}")
-    extracted_dmgs = patch_cryptex_dmg(image_path, output_path)
-    if len(extracted_dmgs) == 0:
-        print(f"\tNot a cryptex, so extracting OTA dyld_shared_cache directly")
+    with tempfile.TemporaryDirectory(suffix="_symex") as cryptex_patch_path:
+        extracted_dmgs = patch_cryptex_dmg(image_path, cryptex_patch_path)
+        if len(extracted_dmgs) == 0:
+            print(f"\tNot a cryptex, so extracting OTA dyld_shared_cache directly")
 
-        dyld_shared_cache_top_output_path = output_path + "/dyld_shared_cache_output"
-        # TODO: the output_path here should probably be a temp directory
-        result = subprocess.run(
-            [
-                "ipsw",
-                "ota",
-                "extract",
-                image_path,
-                "dyld_shared_cache",
-                "-o",
-                dyld_shared_cache_top_output_path,
-            ],
-            capture_output=True,
-        )
-        if result.returncode == 1:
-            # TODO: we must also differentiate here whether an image failed or whether it has no dyld_shared_cache that
-            #  we can extract, because it is was a partial update file (or whatever). The latter should be marked as
-            #  processed so we don't reprocess a partial update that will never be successful. May be irrelevant.
-            print(f"\t\tFailed to extract dyld_shared_cache from: {image_path}")
-            print(result.stderr.decode("utf-8"))
-            return False
-        else:
-            print(f"\t\tSuccessfully extracted dyld_shared_cache from: {image_path}")
-            extracted_dyld_shared_cache_path = (
-                parse_path_prefix_from_dyld_shared_cache_extract_cmd(
-                    result.stderr.decode("utf-8"), dyld_shared_cache_top_output_path
+            with tempfile.TemporaryDirectory(
+                suffix="_symex"
+            ) as extract_dyld_shared_cache_tmp_path:
+                result = subprocess.run(
+                    [
+                        "ipsw",
+                        "ota",
+                        "extract",
+                        image_path,
+                        "dyld_shared_cache",
+                        "-o",
+                        extract_dyld_shared_cache_tmp_path,
+                    ],
+                    capture_output=True,
                 )
+                if result.returncode == 1:
+                    # TODO: we must also differentiate here whether an image failed or whether it has no
+                    #  dyld_shared_cache that we can extract, because it is was a partial update file (or whatever).
+                    #  The latter case should be marked as "processed" so we don't reprocess a partial update that
+                    #  will never be successful. Other error cases might be relevant to retry. The differentation
+                    #  is probably easiest with different exception types.
+                    print(f"\t\tFailed to extract dyld_shared_cache from: {image_path}")
+                    print(f"\t\t\t{result.stderr.decode('utf-8')}")
+                    return False
+                else:
+                    print(
+                        f"\t\tSuccessfully extracted dyld_shared_cache from: {image_path}"
+                    )
+                    extracted_dyld_shared_cache_path = (
+                        parse_path_prefix_from_dyld_shared_cache_extract_cmd(
+                            result.stderr.decode("utf-8"),
+                            extract_dyld_shared_cache_tmp_path,
+                        )
+                    )
+                    print(
+                        f"\t\tSplitting & symsorting dyld_shared_cache for: {image_path}"
+                    )
+                    with tempfile.TemporaryDirectory(
+                        suffix="_symex"
+                    ) as split_temp_path:
+                        split_cache_path = split_dyld_shared_cache(
+                            extracted_dyld_shared_cache_path, split_temp_path
+                        )
+                        if split_cache_path:
+                            symsort(
+                                split_cache_path,
+                                output_path,
+                                "ios",
+                                os_version,
+                                build_id,
+                                arch,
+                            )
+                            return True
+        else:
+            print(
+                f"\tCryptex patch successful. Mount, split, symsorting dyld_shared_cache for: {image_path}"
             )
-            print(f"\t\tSplitting & symsorting dyld_shared_cache for: {image_path}")
-            symsort(
-                split_dyld_shared_cache(extracted_dyld_shared_cache_path, output_path),
-                output_path,
-                "ios",
-                os_version,
-                build_id,
-                arch,
-            )
-            return True
-    else:
-        # TODO: it is unclear whether 'cryptex-system-arm64e' always holds true
-        # TODO: the output_path for mount & split should probably be a temp directory
-        print(
-            f"\tCryptex patch successful. Mount, split, symsorting dyld_shared_cache for: {image_path}"
-        )
-        split_cache_path = mount_and_split_dyld_shared_cache(
-            extracted_dmgs["cryptex-system-arm64e"], output_path
-        )
-        symsort(
-            split_cache_path,
-            output_path,
-            "ios",
-            os_version,
-            build_id,
-            arch,
-        )
-        return True
+            with tempfile.TemporaryDirectory(
+                suffix="_symex"
+            ) as mount_and_split_temp_path:
+                split_cache_path = mount_and_split_dyld_shared_cache(
+                    extracted_dmgs["cryptex-system-arm64e"], mount_and_split_temp_path
+                )
+                if split_cache_path:
+                    symsort(
+                        split_cache_path,
+                        output_path,
+                        "ios",
+                        os_version,
+                        build_id,
+                        arch,
+                    )
+                    return True
+
+    return False
 
 
-def list_dyld_shared_cache_files(item):
+def list_dyld_shared_cache_files(item: str) -> None:
     ps = subprocess.Popen(["ipsw", "ota", "ls", item], stdout=subprocess.PIPE)
     try:
         output = subprocess.check_output(("grep", "dyld_shared_cache"), stdin=ps.stdout)
@@ -284,7 +308,7 @@ def list_dyld_shared_cache_files(item):
         print(f"no dyld_shared_cache found in {item}")
 
 
-def log_as(name: str, item: str):
+def log_as(name: str, item: str) -> None:
     with open(name, "a") as process_log_file:
         process_log_file.write(item + "\n")
 
@@ -305,7 +329,7 @@ def gather_images_to_process(input_path: str) -> list[str]:
     return to_process
 
 
-def main():
+def main() -> None:
     args = parse_args()
     validate_shell_deps()
 
