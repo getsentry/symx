@@ -212,6 +212,8 @@ def find_os_version_in_image_path(image_path: str) -> str:
 
 
 def extract_dyld_cache(image_path: str, output_path: str) -> bool:
+    # TODO: extract remaining parameters from images, otherwise our output means shit
+    platform = "ios"
     os_version = find_os_version_in_image_path(image_path)
     build_id = "19H218"
     arch = "arm64e"
@@ -268,7 +270,7 @@ def extract_dyld_cache(image_path: str, output_path: str) -> bool:
                             symsort(
                                 split_cache_path,
                                 output_path,
-                                "ios",
+                                platform,
                                 os_version,
                                 build_id,
                                 arch,
@@ -288,7 +290,7 @@ def extract_dyld_cache(image_path: str, output_path: str) -> bool:
                     symsort(
                         split_cache_path,
                         output_path,
-                        "ios",
+                        platform,
                         os_version,
                         build_id,
                         arch,
