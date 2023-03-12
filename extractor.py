@@ -13,6 +13,20 @@ from typing import Optional
 import util
 
 
+@dataclass
+class DSCSearchResult:
+    arch: str
+    image_path: str
+    split_path: Optional[str]
+
+
+@dataclass(frozen=True)
+class MountInfo:
+    dev: str
+    id: str
+    point: str
+
+
 def parse_args() -> Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -77,19 +91,14 @@ def find_system_os_dmgs(path: str) -> list[str]:
     return result
 
 
-@dataclass(frozen=True)
-class MountInfo:
-    dev: str
-    id: str
-    point: str
-
-
 def parse_hdiutil_mount_output(output: str) -> MountInfo:
     mount_info = output.splitlines().pop().split()
     return MountInfo(mount_info[0], mount_info[1], mount_info[2])
 
 
-def mount_and_split_dyld_shared_cache(dmg: str, output_path: str) -> Optional[str]:
+def mount_and_split_dyld_shared_cache(
+    dmg: str, output_path: str
+) -> list[DSCSearchResult]:
     result = subprocess.run(["hdiutil", "mount", dmg], capture_output=True, check=True)
 
     mount = parse_hdiutil_mount_output(result.stdout.decode("utf-8"))
@@ -103,21 +112,27 @@ def mount_and_split_dyld_shared_cache(dmg: str, output_path: str) -> Optional[st
     return split_dyld_cache_path
 
 
-def split_dyld_shared_cache(input_path: str, output_path: str) -> Optional[str]:
+def split_dyld_shared_cache(input_path: str, output_path: str) -> list[DSCSearchResult]:
     print(f"\t\tSplitting dyld_shared_cache of {input_path}")
-    dyld_shared_cache_paths = find_dyld_shared_cache_path(input_path)
-    split_dyld_cache_path = None
-    for dyld_shared_cache_path in dyld_shared_cache_paths:
-        split_dyld_cache_path = output_path
+    dsc_search_results = find_dyld_shared_cache_path(input_path)
+    for search_result in dsc_search_results:
+        # TODO: if we don't create a separate tmp directory here, we are potentially overwriting shit
+        search_result.split_path = output_path
         result = subprocess.run(
-            ["ipsw", "dyld", "split", dyld_shared_cache_path, split_dyld_cache_path],
+            [
+                "ipsw",
+                "dyld",
+                "split",
+                search_result.image_path,
+                search_result.split_path,
+            ],
             capture_output=True,
         )
         print(f"\t\t\tResult from split: {result}")
-    return split_dyld_cache_path
+    return dsc_search_results
 
 
-def find_dyld_shared_cache_path(input_path: str) -> list[str]:
+def find_dyld_shared_cache_path(input_path: str) -> list[DSCSearchResult]:
     # TODO: these options might be something that can be validated via meta-data
     dyld_shared_cache_arch_options = [
         "arm64e",
@@ -134,23 +149,31 @@ def find_dyld_shared_cache_path(input_path: str) -> list[str]:
         "/AssetData/payloadv2/ecc_data/System/Library/Caches/com.apple.dyld/",
     ]
 
-    dyld_shared_cache_paths = []
+    dsc_search_results = []
     for path_prefix in dyld_shared_cache_path_prefix_options:
         for arch in dyld_shared_cache_arch_options:
             dyld_shared_cache_path = (
                 input_path + path_prefix + "dyld_shared_cache_" + arch
             )
             if os.path.isfile(dyld_shared_cache_path):
-                dyld_shared_cache_paths.append(dyld_shared_cache_path)
+                dsc_search_results.append(
+                    DSCSearchResult(
+                        arch=arch, image_path=dyld_shared_cache_path, split_path=None
+                    )
+                )
 
-    if len(dyld_shared_cache_paths) == 0:
+    if len(dsc_search_results) == 0:
         raise RuntimeError(f"Couldn't find any dyld_shared_cache paths in {input_path}")
-    elif len(dyld_shared_cache_paths) > 1:
-        print(f"Found more than one dyld_shared_cache path in {input_path}")
-        for path in dyld_shared_cache_paths:
-            print(f"\t{path}")
+    elif len(dsc_search_results) > 1:
+        # TODO: not really happy about raising an exception here, just for testing purposes
+        printable_paths = "\n".join(
+            [result.image_path for result in dsc_search_results]
+        )
+        raise RuntimeError(
+            f"Found more than one dyld_shared_cache path in {input_path}:\n{printable_paths}"
+        )
 
-    return dyld_shared_cache_paths
+    return dsc_search_results
 
 
 def symsort(
@@ -216,7 +239,6 @@ def extract_dyld_cache(image_path: str, output_path: str) -> bool:
     platform = "ios"
     os_version = find_os_version_in_image_path(image_path)
     build_id = "19H218"
-    arch = "arm64e"
     print(f"Trying patch_cryptex_dmg with {image_path}")
     with tempfile.TemporaryDirectory(suffix="_symex") as cryptex_patch_path:
         extracted_dmgs = patch_cryptex_dmg(image_path, cryptex_patch_path)
@@ -242,7 +264,7 @@ def extract_dyld_cache(image_path: str, output_path: str) -> bool:
                     # TODO: we must also differentiate here whether an image failed or whether it has no
                     #  dyld_shared_cache that we can extract, because it is was a partial update file (or whatever).
                     #  The latter case should be marked as "processed" so we don't reprocess a partial update that
-                    #  will never be successful. Other error cases might be relevant to retry. The differentation
+                    #  will never be successful. Other error cases might be relevant to retry. The differentiation
                     #  is probably easiest with different exception types.
                     print(f"\t\tFailed to extract dyld_shared_cache from: {image_path}")
                     print(f"\t\t\t{result.stderr.decode('utf-8')}")
@@ -263,19 +285,22 @@ def extract_dyld_cache(image_path: str, output_path: str) -> bool:
                     with tempfile.TemporaryDirectory(
                         suffix="_symex"
                     ) as split_temp_path:
-                        split_cache_path = split_dyld_shared_cache(
+                        split_cache_results = split_dyld_shared_cache(
                             extracted_dyld_shared_cache_path, split_temp_path
                         )
-                        if split_cache_path:
+                        for split_result in split_cache_results:
+                            if not split_result.split_path:
+                                continue
+
                             symsort(
-                                split_cache_path,
+                                split_result.split_path,
                                 output_path,
                                 platform,
                                 os_version,
                                 build_id,
-                                arch,
+                                split_result.arch,
                             )
-                            return True
+                        return True
         else:
             print(
                 f"\tCryptex patch successful. Mount, split, symsorting dyld_shared_cache for: {image_path}"
@@ -283,21 +308,22 @@ def extract_dyld_cache(image_path: str, output_path: str) -> bool:
             with tempfile.TemporaryDirectory(
                 suffix="_symex"
             ) as mount_and_split_temp_path:
-                split_cache_path = mount_and_split_dyld_shared_cache(
+                split_cache_results = mount_and_split_dyld_shared_cache(
                     extracted_dmgs["cryptex-system-arm64e"], mount_and_split_temp_path
                 )
-                if split_cache_path:
+                for split_result in split_cache_results:
+                    if not split_result.split_path:
+                        continue
+
                     symsort(
-                        split_cache_path,
+                        split_result.split_path,
                         output_path,
                         platform,
                         os_version,
                         build_id,
-                        arch,
+                        split_result.arch,
                     )
-                    return True
-
-    return False
+                return True
 
 
 def list_dyld_shared_cache_files(item: str) -> None:

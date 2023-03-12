@@ -5,6 +5,7 @@ import sys
 from argparse import Namespace
 from dataclasses import dataclass
 from enum import Enum
+from typing import Optional
 
 import util
 
@@ -24,9 +25,10 @@ class OtaArtifact:
     build: str
     name: str
     version: str
+    platform: str
     zip: str
-    url: str | None
-    download_path: str | None
+    url: Optional[str]
+    download_path: Optional[str]
     devices: [str]
     models: [str]
 
@@ -106,6 +108,7 @@ def download_otas(output_path: str, platform: str):
                     build=zip_match.group(2),
                     name=zip_match.group(3),
                     version=zip_match.group(4)[4:],
+                    platform=platform,
                     zip=ota_zip_name,
                     url=None,
                     models=[],
