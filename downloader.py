@@ -92,8 +92,6 @@ def download_otas(output_path: pathlib.Path, platform: str) -> None:
 
                 if parsed_artifact.zip_name in ota_artifacts.keys():
                     stored_artifact = ota_artifacts[parsed_artifact.zip_name]
-                    print(f"stored = {stored_artifact}")
-                    print(f"parsed = {parsed_artifact}")
                     if not (
                         stored_artifact.build == parsed_artifact.build
                         and stored_artifact.name == parsed_artifact.name
@@ -125,9 +123,10 @@ def download_otas(output_path: pathlib.Path, platform: str) -> None:
                 if (
                     zip_name in ota_artifacts.keys()
                     and ota_artifacts[zip_name].url is not None
+                    and ota_artifacts[zip_name].url != url
                 ):
                     raise RuntimeError(
-                        f"Duplicate OTA image zip_name detected: {zip_name}"
+                        f"Duplicate OTA image zip with differing source URL detected: {zip_name}"
                         f"\n\told source URL: {ota_artifacts[zip_name].url}"
                         f"\n\tnew source URL: {url}"
                     )
@@ -137,8 +136,6 @@ def download_otas(output_path: pathlib.Path, platform: str) -> None:
             else:
                 section = OtaDownloadLogSection.NONE
                 common.save_ota_images_meta(ota_artifacts, output_path)
-
-        print(line)
 
     ota_download_co_run(ipsw_ota_beta_download_command)
 
