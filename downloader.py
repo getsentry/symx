@@ -74,7 +74,7 @@ def download_otas(output_path: pathlib.Path, platform: str) -> None:
 
         if section == OtaDownloadLogSection.OTA_LIST:
             zip_match = re.search(
-                "^\s{6}• ([a-f0-9]{40}\.zip_name) build=(\w*).*name=(\w*).*version=([0-9.]*)",
+                "^\s{6}• ([a-f0-9]{40}\.zip) build=(\w*).*name=(\w*).*version=([0-9.]*)",
                 line,
             )
             if zip_match:
@@ -118,7 +118,7 @@ def download_otas(output_path: pathlib.Path, platform: str) -> None:
             continue
 
         if section == OtaDownloadLogSection.URL:
-            url_match = re.search("\s{6}• (http(.*)\.zip_name)", line)
+            url_match = re.search("\s{6}• (http(.*)\.zip)", line)
             if url_match:
                 url = url_match.group(1)
                 zip_name = url[url.rfind("/") + 1 :]
