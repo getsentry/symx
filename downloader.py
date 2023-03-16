@@ -1,46 +1,13 @@
 import argparse
-import dataclasses
-import json
 import pathlib
 import re
 import subprocess
 import sys
 from argparse import Namespace
-from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, List, Generator, Any
+from typing import List, Generator
 
-import util
-
-OTA_PLATFORMS = [
-    "ios",
-    "watchos",
-    "tvos",
-    "audioos",
-    "accessory",
-    "macos",
-    "recovery",
-]
-
-
-class DataClassJSONEncoder(json.JSONEncoder):
-    def default(self, o: Any) -> Any:
-        if dataclasses.is_dataclass(o):
-            return dataclasses.asdict(o)
-        return super().default(o)
-
-
-@dataclass
-class OtaArtifact:
-    build: str
-    name: str
-    version: str
-    platform: str
-    zip_name: str
-    url: Optional[str]
-    download_path: Optional[str]
-    devices: List[str]
-    models: List[str]
+import common
 
 
 class OtaDownloadLogSection(Enum):
@@ -50,7 +17,7 @@ class OtaDownloadLogSection(Enum):
     OTA_LIST = 4
 
 
-# TODO: this might be more general than just OTAs but gotta start somewhere
+# this might be more general than just OTAs but gotta start somewhere
 def ota_download_co_run(command: List[str]) -> Generator[str, None, int]:
     popen = subprocess.Popen(command, stderr=subprocess.PIPE, universal_newlines=True)
     if popen.stderr is None:
@@ -62,29 +29,6 @@ def ota_download_co_run(command: List[str]) -> Generator[str, None, int]:
 
     popen.stderr.close()
     return popen.wait()
-
-
-def load_ota_images_meta(load_dir: pathlib.Path) -> dict[str, OtaArtifact]:
-    load_path = load_dir / "ota_image_meta.json"
-    result = {}
-    if load_path.is_file():
-        try:
-            with open(load_path) as fp:
-                deser = json.load(fp)
-                for k, v in deser.items():
-                    result[k] = OtaArtifact(**v)
-        except OSError:
-            pass
-    return result
-
-
-def save_ota_images_meta(
-    meta_data: dict[str, OtaArtifact], save_dir: pathlib.Path
-) -> None:
-    save_path = save_dir / "ota_image_meta.json"
-
-    with open(save_path, "w") as fp:
-        json.dump(meta_data, fp, cls=DataClassJSONEncoder)
 
 
 def download_otas(output_path: pathlib.Path, platform: str) -> None:
@@ -100,16 +44,10 @@ def download_otas(output_path: pathlib.Path, platform: str) -> None:
         "--resume-all",
         "--verbose",
     ]
-    # TODO: also store the source (at least URL) of the download
     ipsw_ota_beta_download_command = ipsw_ota_download_command.copy()
     ipsw_ota_beta_download_command.append("--beta")
 
-    # TODO:
-    #  - ota_images must be loaded from disk on startup
-    #  - ota_images must be persisted before download starts
-    #  - ota_images must be updated while downloads/start complete
-    #  - the above requires concurrent reading of stderr/stdout
-    ota_images = load_ota_images_meta(output_path)
+    ota_artifacts = common.load_ota_images_meta(output_path)
     # replace these with an enum
     section = OtaDownloadLogSection.NONE
     for line in ota_download_co_run(ipsw_ota_download_command):
@@ -134,14 +72,13 @@ def download_otas(output_path: pathlib.Path, platform: str) -> None:
             section = OtaDownloadLogSection.OTA_LIST
             continue
 
-        # TODO: do we need this? do we need to extract more from this?
         if section == OtaDownloadLogSection.OTA_LIST:
             zip_match = re.search(
                 "^\s{6}• ([a-f0-9]{40}\.zip_name) build=(\w*).*name=(\w*).*version=([0-9.]*)",
                 line,
             )
             if zip_match:
-                parsed_artifact = OtaArtifact(
+                parsed_artifact = common.OtaArtifact(
                     zip_name=zip_match.group(1),
                     build=zip_match.group(2),
                     name=zip_match.group(3),
@@ -153,8 +90,8 @@ def download_otas(output_path: pathlib.Path, platform: str) -> None:
                     download_path=None,
                 )
 
-                if parsed_artifact.zip_name in ota_images.keys():
-                    stored_artifact = ota_images[parsed_artifact.zip_name]
+                if parsed_artifact.zip_name in ota_artifacts.keys():
+                    stored_artifact = ota_artifacts[parsed_artifact.zip_name]
                     print(f"stored = {stored_artifact}")
                     print(f"parsed = {parsed_artifact}")
                     if not (
@@ -168,7 +105,7 @@ def download_otas(output_path: pathlib.Path, platform: str) -> None:
                             f"Found OtaArtifact that doesn't match our meta-data\n"
                         )
                 else:
-                    ota_images[parsed_artifact.zip_name] = parsed_artifact
+                    ota_artifacts[parsed_artifact.zip_name] = parsed_artifact
                 continue
             else:
                 section = OtaDownloadLogSection.NONE
@@ -186,19 +123,20 @@ def download_otas(output_path: pathlib.Path, platform: str) -> None:
                 url = url_match.group(1)
                 zip_name = url[url.rfind("/") + 1 :]
                 if (
-                    zip_name in ota_images.keys()
-                    and ota_images[zip_name].url is not None
+                    zip_name in ota_artifacts.keys()
+                    and ota_artifacts[zip_name].url is not None
                 ):
-                    print(f"Unexpected duplicate OTA image zip_name: {zip_name}: ")
-                    print(f"\told source URL: {ota_images[zip_name].url}")
-                    print(f"\tnew source URL: {url}")
-                    raise RuntimeError("Duplicate OTA image zip_name detected")
+                    raise RuntimeError(
+                        f"Duplicate OTA image zip_name detected: {zip_name}"
+                        f"\n\told source URL: {ota_artifacts[zip_name].url}"
+                        f"\n\tnew source URL: {url}"
+                    )
                 else:
-                    ota_images[zip_name].url = url
+                    ota_artifacts[zip_name].url = url
                 continue
             else:
                 section = OtaDownloadLogSection.NONE
-                save_ota_images_meta(ota_images, output_path)
+                common.save_ota_images_meta(ota_artifacts, output_path)
 
         print(line)
 
@@ -211,14 +149,14 @@ def parse_args() -> Namespace:
         "--output_path",
         dest="output_path",
         required=True,
-        type=util.directory,
+        type=common.directory_arg_type,
         help="path to the output directory where the extracted symbols are placed",
     )
     return parser.parse_args()
 
 
 def validate_shell_deps() -> None:
-    version = util.ipsw_version()
+    version = common.ipsw_version()
     if version:
         print(f"Using ipsw {version}")
     else:
@@ -229,7 +167,7 @@ def validate_shell_deps() -> None:
 def main() -> None:
     args = parse_args()
     validate_shell_deps()
-    for platform in OTA_PLATFORMS:
+    for platform in common.OTA_PLATFORMS:
         download_otas(pathlib.Path(args.output_path), platform)
 
 

@@ -10,7 +10,7 @@ from argparse import Namespace
 from dataclasses import dataclass
 from typing import Optional
 
-import util
+import common
 
 
 @dataclass
@@ -33,7 +33,7 @@ def parse_args() -> Namespace:
         "--input_path",
         dest="input_path",
         required=True,
-        type=util.directory,
+        type=common.directory_arg_type,
         help="path to the input directory that is scanned for images to extract symbols from",
     )
     parser.add_argument(
@@ -46,7 +46,7 @@ def parse_args() -> Namespace:
 
 
 def validate_shell_deps() -> None:
-    version = util.ipsw_version()
+    version = common.ipsw_version()
     if version:
         print(f"Using ipsw {version}")
     else:
