@@ -1,10 +1,10 @@
 import argparse
-import pathlib
 import re
 import subprocess
 import sys
 from argparse import Namespace
 from enum import Enum
+from pathlib import Path
 from typing import List, Generator
 
 import common
@@ -31,13 +31,13 @@ def ota_download_co_run(command: List[str]) -> Generator[str, None, int]:
     return popen.wait()
 
 
-def download_otas(output_path: pathlib.Path, platform: str) -> None:
+def download_otas(output_dir: Path, platform: str) -> None:
     ipsw_ota_download_command = [
         "ipsw",
         "download",
         "ota",
         "--output",
-        str(output_path),
+        str(output_dir),
         "-y",
         "--platform",
         platform,
@@ -47,7 +47,7 @@ def download_otas(output_path: pathlib.Path, platform: str) -> None:
     ipsw_ota_beta_download_command = ipsw_ota_download_command.copy()
     ipsw_ota_beta_download_command.append("--beta")
 
-    ota_artifacts = common.load_ota_images_meta(output_path)
+    ota_artifacts = common.load_ota_images_meta(output_dir)
     # replace these with an enum
     section = OtaDownloadLogSection.NONE
     for line in ota_download_co_run(ipsw_ota_download_command):
@@ -135,7 +135,7 @@ def download_otas(output_path: pathlib.Path, platform: str) -> None:
                 continue
             else:
                 section = OtaDownloadLogSection.NONE
-                common.save_ota_images_meta(ota_artifacts, output_path)
+                common.save_ota_images_meta(ota_artifacts, output_dir)
 
     ota_download_co_run(ipsw_ota_beta_download_command)
 
@@ -143,8 +143,8 @@ def download_otas(output_path: pathlib.Path, platform: str) -> None:
 def parse_args() -> Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--output_path",
-        dest="output_path",
+        "--output_dir",
+        dest="output_dir",
         required=True,
         type=common.directory_arg_type,
         help="path to the output directory where the extracted symbols are placed",
@@ -165,7 +165,7 @@ def main() -> None:
     args = parse_args()
     validate_shell_deps()
     for platform in common.OTA_PLATFORMS:
-        download_otas(pathlib.Path(args.output_path), platform)
+        download_otas(Path(args.output_dir), platform)
 
 
 if __name__ == "__main__":

@@ -1,11 +1,11 @@
 import dataclasses
 import json
 import os
-import pathlib
 import re
 import subprocess
 from dataclasses import dataclass
 from typing import Optional, List, Any
+from pathlib import Path
 
 from filelock import FileLock
 
@@ -42,7 +42,7 @@ class OtaArtifact:
     models: List[str]
 
 
-def load_ota_images_meta(load_dir: pathlib.Path) -> dict[str, OtaArtifact]:
+def load_ota_images_meta(load_dir: Path) -> dict[str, OtaArtifact]:
     load_path = load_dir / OTA_ARTIFACTS_META_JSON
     lock_path = load_path.parent / (load_path.name + ".lock")
     result = {}
@@ -57,9 +57,7 @@ def load_ota_images_meta(load_dir: pathlib.Path) -> dict[str, OtaArtifact]:
     return result
 
 
-def save_ota_images_meta(
-    meta_data: dict[str, OtaArtifact], save_dir: pathlib.Path
-) -> None:
+def save_ota_images_meta(meta_data: dict[str, OtaArtifact], save_dir: Path) -> None:
     save_path = save_dir / OTA_ARTIFACTS_META_JSON
     lock_path = save_path.parent / (save_path.name + ".lock")
 
@@ -68,9 +66,9 @@ def save_ota_images_meta(
             json.dump(meta_data, fp, cls=DataClassJSONEncoder)
 
 
-def directory_arg_type(path: str) -> str:
+def directory_arg_type(path: str) -> Path:
     if os.path.isdir(path):
-        return path
+        return Path(path)
 
     raise ValueError(f"Error: {path} is not a valid directory")
 
