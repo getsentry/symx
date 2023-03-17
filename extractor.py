@@ -235,11 +235,12 @@ def find_os_version_in_artifact_path(artifact: Path) -> str:
 
 
 def extract_dyld_cache(artifact: Path, input_dir: Path, output_dir: Path) -> bool:
-    # TODO: extract remaining parameters from images, otherwise our output means shit
-    common.load_ota_images_meta(input_dir)
-    platform = "ios"
+    meta_data = common.load_ota_images_meta(input_dir)
+    zip_name = artifact.name[artifact.name.find("_") + 1 :]
+    platform = meta_data[zip_name].platform
     os_version = find_os_version_in_artifact_path(artifact)
-    build_id = "19H218"
+    build_id = meta_data[zip_name].build
+    # TODO: write back or to a new store to complete meta-data from the extraction side?
     print(f"Trying patch_cryptex_dmg with {artifact}")
     with tempfile.TemporaryDirectory(suffix="_symex") as cryptex_patch_dir:
         extracted_dmgs = patch_cryptex_dmg(artifact, Path(cryptex_patch_dir))

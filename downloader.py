@@ -47,6 +47,7 @@ def download_otas(output_dir: Path, platform: str) -> None:
     ipsw_ota_beta_download_command = ipsw_ota_download_command.copy()
     ipsw_ota_beta_download_command.append("--beta")
 
+    # TODO: must happen in the loop? to allow updates from both sides?
     ota_artifacts = common.load_ota_images_meta(output_dir)
     # replace these with an enum
     section = OtaDownloadLogSection.NONE
