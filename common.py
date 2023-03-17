@@ -44,9 +44,10 @@ class OtaArtifact:
 
 def load_ota_images_meta(load_dir: pathlib.Path) -> dict[str, OtaArtifact]:
     load_path = load_dir / OTA_ARTIFACTS_META_JSON
+    lock_path = load_path.parent / (load_path.name + ".lock")
     result = {}
     if load_path.is_file():
-        with FileLock(load_path.with_suffix(".lock"), timeout=5):
+        with FileLock(lock_path, timeout=5):
             try:
                 with open(load_path) as fp:
                     for k, v in json.load(fp).items():
@@ -60,8 +61,9 @@ def save_ota_images_meta(
     meta_data: dict[str, OtaArtifact], save_dir: pathlib.Path
 ) -> None:
     save_path = save_dir / OTA_ARTIFACTS_META_JSON
+    lock_path = save_path.parent / (save_path.name + ".lock")
 
-    with FileLock(save_path.with_suffix(".lock"), timeout=5):
+    with FileLock(lock_path, timeout=5):
         with open(save_path, "w") as fp:
             json.dump(meta_data, fp, cls=DataClassJSONEncoder)
 
