@@ -126,6 +126,8 @@ def split_dsc(input_dir: Path, output_dir: Path) -> list[DSCSearchResult]:
     for search_result in dsc_search_results:
         # TODO: if we don't create a separate tmp directory here, we are potentially overwriting shit
         search_result.split_dir = output_dir
+        # TODO: this file failes kinda silently with two results (test in detail):
+        #  /Users/mischan/devel/tmp/ota_downloads/iOS16.3.2_OTAs/AppleTV14,1_a7c3d4ce39aaeebd94e975e0520a0754deff506a.zip
         result = subprocess.run(
             [
                 "ipsw",
