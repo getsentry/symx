@@ -126,7 +126,7 @@ def split_dsc(input_dir: Path, output_dir: Path) -> list[DSCSearchResult]:
     for search_result in dsc_search_results:
         # TODO: if we don't create a separate tmp directory here, we are potentially overwriting shit
         search_result.split_dir = output_dir
-        # TODO: this file failes kinda silently with two results (test in detail):
+        # TODO: this file fails kinda silently with two results (test in detail):
         #  /Users/mischan/devel/tmp/ota_downloads/iOS16.3.2_OTAs/AppleTV14,1_a7c3d4ce39aaeebd94e975e0520a0754deff506a.zip
         result = subprocess.run(
             [
@@ -154,7 +154,6 @@ def find_dsc(input_dir: Path) -> list[DSCSearchResult]:
     dsc_search_results = []
     for path_prefix in dsc_path_prefix_options:
         for arch in Arch:
-            # TODO: maybe the arch can be validated via meta-data
             dsc_path = input_dir / (path_prefix + DYLD_SHARED_CACHE + "_" + arch.value)
             if os.path.isfile(dsc_path):
                 dsc_search_results.append(
@@ -224,32 +223,53 @@ def find_path_prefix_in_dsc_extract_cmd_output(
     raise RuntimeError(f"Couldn't find path_prefix in command-output: {cmd_output}")
 
 
-def find_os_version_in_artifact_path(artifact: Path) -> str:
-    platform_version = artifact.parent.parts[-1][:-5]
-    m = re.search(r"\d", platform_version)
-    if m:
-        version = platform_version[m.start() :]
-        return version
-
-    raise ValueError(f"Invalid artifact provided: {artifact}")
+class DscNoMetaData(Exception):
+    pass
 
 
-def extract_dyld_cache(artifact: Path, input_dir: Path, output_dir: Path) -> bool:
+class DscExtractionFailed(Exception):
+    pass
+
+
+def extract_dyld_cache(artifact: Path, input_dir: Path, output_dir: Path) -> None:
     meta_data = common.load_ota_images_meta(input_dir)
-    zip_name = artifact.name[artifact.name.rfind("_") + 1 :]
-    # TODO: find a way to fetch meta-data for all platforms without downloading (show-something in ipsw)
-    if zip_name in meta_data.keys():
-        platform = meta_data[zip_name].platform
-        build_id = meta_data[zip_name].build
-    else:
-        print(f"Could not find {zip_name} from {artifact} in meta-data store")
-        return False
-    os_version = find_os_version_in_artifact_path(artifact)
-    # TODO: write back or to a new store to complete meta-data from the extraction side?
-    print(f"Trying patch_cryptex_dmg with {artifact}")
+    zip_id = artifact.name[artifact.name.rfind("_") + 1 : -4]
+    if zip_id not in meta_data.keys():
+        raise DscNoMetaData(
+            f"Couldn't find id {zip_id} in meta-data (from artifact: {artifact})"
+        )
+
+    platform = meta_data[zip_id].platform
+    build_id = meta_data[zip_id].build
+    os_version = meta_data[zip_id].version
+
     with tempfile.TemporaryDirectory(suffix="_symex") as cryptex_patch_dir:
+        print(f"Trying patch_cryptex_dmg with {artifact}")
         extracted_dmgs = patch_cryptex_dmg(artifact, Path(cryptex_patch_dir))
-        if len(extracted_dmgs) == 0:
+        if len(extracted_dmgs) != 0:
+            print(
+                f"\tCryptex patch successful. Mount, split, symsorting {DYLD_SHARED_CACHE} for: {artifact}"
+            )
+            with tempfile.TemporaryDirectory(
+                suffix="_symex"
+            ) as mount_and_split_temp_dir:
+                split_cache_results = mount_and_split_dsc(
+                    extracted_dmgs["cryptex-system-arm64e"],
+                    Path(mount_and_split_temp_dir),
+                )
+                for split_result in split_cache_results:
+                    if not split_result.split_dir:
+                        continue
+
+                    symsort(
+                        split_result.split_dir,
+                        output_dir,
+                        platform,
+                        os_version,
+                        build_id,
+                        split_result.arch,
+                    )
+        else:
             print(f"\tNot a cryptex, so extracting OTA {DYLD_SHARED_CACHE} directly")
 
             with tempfile.TemporaryDirectory(suffix="_symex") as extract_dsc_tmp_dir:
@@ -266,14 +286,14 @@ def extract_dyld_cache(artifact: Path, input_dir: Path, output_dir: Path) -> boo
                     capture_output=True,
                 )
                 if result.returncode == 1:
-                    # TODO: we must also differentiate here whether an image failed or whether it has no
-                    #  dyld_shared_cache that we can extract, because it is was a partial update file (or whatever).
-                    #  The latter case should be marked as "processed" so we don't reprocess a partial update that
-                    #  will never be successful. Other error cases might be relevant to retry. The differentiation
-                    #  is probably easiest with different exception types.
-                    print(f"\t\tFailed to extract {DYLD_SHARED_CACHE} from: {artifact}")
-                    print(f"\t\t\t{result.stderr.decode('utf-8')}")
-                    return False
+                    error_lines = []
+                    for line in result.stderr.decode("utf-8").splitlines():
+                        if line.startswith("   ⨯"):
+                            error_lines.append(line)
+                    errors = "\n\t".join(error_lines)
+                    raise DscExtractionFailed(
+                        f"Failed to extract {DYLD_SHARED_CACHE} from {artifact}:\n\t{errors}"
+                    )
                 else:
                     print(
                         f"\t\tSuccessfully extracted {DYLD_SHARED_CACHE} from: {artifact}"
@@ -302,31 +322,6 @@ def extract_dyld_cache(artifact: Path, input_dir: Path, output_dir: Path) -> boo
                                 build_id,
                                 split_result.arch,
                             )
-                        return True
-        else:
-            print(
-                f"\tCryptex patch successful. Mount, split, symsorting {DYLD_SHARED_CACHE} for: {artifact}"
-            )
-            with tempfile.TemporaryDirectory(
-                suffix="_symex"
-            ) as mount_and_split_temp_dir:
-                split_cache_results = mount_and_split_dsc(
-                    extracted_dmgs["cryptex-system-arm64e"],
-                    Path(mount_and_split_temp_dir),
-                )
-                for split_result in split_cache_results:
-                    if not split_result.split_dir:
-                        continue
-
-                    symsort(
-                        split_result.split_dir,
-                        output_dir,
-                        platform,
-                        os_version,
-                        build_id,
-                        split_result.arch,
-                    )
-                return True
 
 
 def list_dsc_files(artifact: Path) -> None:
@@ -358,7 +353,8 @@ def load_artifact_log(name: str) -> list[Path]:
 def gather_images_to_process(input_dir: Path) -> list[Path]:
     new_images = scan_input_dir(input_dir)
     old_images = load_artifact_log("processed")
-    old_images.extend(load_artifact_log("failed"))
+    old_images.extend(load_artifact_log("no_meta_data"))
+    old_images.extend(load_artifact_log("extraction_failed"))
     to_process = list(set(new_images) - set(old_images))
     return to_process
 
@@ -377,11 +373,15 @@ def main() -> None:
 
     for artifact in to_process:
         # TODO: here we might want to store where a debug-id is coming from: like debug-id -> ota-image
-        success = extract_dyld_cache(artifact, input_dir, output_dir)
-        if success:
+        try:
+            extract_dyld_cache(artifact, input_dir, output_dir)
             log_artifact_as("processed", artifact)
-        else:
-            log_artifact_as("failed", artifact)
+        except DscNoMetaData as e:
+            print(e)
+            log_artifact_as("no_meta_data", artifact)
+        except DscExtractionFailed as e:
+            print(e)
+            log_artifact_as("extraction_failed", artifact)
 
 
 if __name__ == "__main__":
