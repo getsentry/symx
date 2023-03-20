@@ -32,14 +32,15 @@ class DataClassJSONEncoder(json.JSONEncoder):
 @dataclass
 class OtaArtifact:
     build: str
-    name: str
+    description: Optional[str]
     version: str
     platform: str
-    zip_name: str
-    url: Optional[str]
+    id: str
+    url: str
     download_path: Optional[str]
-    devices: List[str]
-    models: List[str]
+    devices: Optional[List[str]]
+    hash: str
+    hash_algorithm: str
 
 
 def load_ota_images_meta(load_dir: Path) -> dict[str, OtaArtifact]:

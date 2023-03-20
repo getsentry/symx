@@ -1,38 +1,15 @@
 import argparse
-import re
+import json
 import subprocess
 import sys
 from argparse import Namespace
-from enum import Enum
 from pathlib import Path
-from typing import List, Generator
 
 import common
 
 
-class OtaDownloadLogSection(Enum):
-    NONE = 1
-    ERROR = 2
-    URL = 3
-    OTA_LIST = 4
-
-
-# this might be more general than just OTAs but gotta start somewhere
-def ota_download_co_run(command: List[str]) -> Generator[str, None, int]:
-    popen = subprocess.Popen(command, stderr=subprocess.PIPE, universal_newlines=True)
-    if popen.stderr is None:
-        cmd_str = " ".join(command)
-        raise RuntimeError(f"failed to initialize stderr for `{cmd_str}`")
-
-    for stdout_line in iter(popen.stderr.readline, ""):
-        yield stdout_line
-
-    popen.stderr.close()
-    return popen.wait()
-
-
 def download_otas(output_dir: Path, platform: str) -> None:
-    ipsw_ota_download_command = [
+    ota_download_cmd = [
         "ipsw",
         "download",
         "ota",
@@ -42,103 +19,12 @@ def download_otas(output_dir: Path, platform: str) -> None:
         "--platform",
         platform,
         "--resume-all",
-        "--verbose",
     ]
-    ipsw_ota_beta_download_command = ipsw_ota_download_command.copy()
-    ipsw_ota_beta_download_command.append("--beta")
+    subprocess.run(ota_download_cmd)
 
-    # TODO: must happen in the loop? to allow updates from both sides?
-    ota_artifacts = common.load_ota_images_meta(output_dir)
-    # replace these with an enum
-    section = OtaDownloadLogSection.NONE
-    for line in ota_download_co_run(ipsw_ota_download_command):
-        # ignore error logs
-        if section == OtaDownloadLogSection.ERROR:
-            if line.startswith("}"):
-                section = OtaDownloadLogSection.NONE
-            continue
-        else:
-            if line.find("• [ERROR]") != -1:
-                section = OtaDownloadLogSection.ERROR
-                continue
-
-        # ignore first fetch log
-        if line.startswith("   • name: "):
-            continue
-
-        # gather OTA zip_name-file names
-        if section != OtaDownloadLogSection.OTA_LIST and line.startswith(
-            "   • OTA(s):"
-        ):
-            section = OtaDownloadLogSection.OTA_LIST
-            continue
-
-        if section == OtaDownloadLogSection.OTA_LIST:
-            zip_match = re.search(
-                "^\s{6}• ([a-f0-9]{40}\.zip) build=(\w*).*name=(\w*).*version=([0-9.]*)",
-                line,
-            )
-            if zip_match:
-                parsed_artifact = common.OtaArtifact(
-                    zip_name=zip_match.group(1),
-                    build=zip_match.group(2),
-                    name=zip_match.group(3),
-                    version=zip_match.group(4)[4:],
-                    platform=platform,
-                    url=None,
-                    models=[],
-                    devices=[],
-                    download_path=None,
-                )
-
-                if parsed_artifact.zip_name in ota_artifacts.keys():
-                    stored_artifact = ota_artifacts[parsed_artifact.zip_name]
-                    if not (
-                        stored_artifact.build == parsed_artifact.build
-                        and stored_artifact.name == parsed_artifact.name
-                        and stored_artifact.version == parsed_artifact.version
-                        and stored_artifact.platform == parsed_artifact.platform
-                        and stored_artifact.zip_name == parsed_artifact.zip_name
-                    ):
-                        raise RuntimeError(
-                            f"Found OtaArtifact that doesn't match our meta-data\n"
-                        )
-                else:
-                    ota_artifacts[parsed_artifact.zip_name] = parsed_artifact
-                continue
-            else:
-                section = OtaDownloadLogSection.NONE
-
-        # capture URL log
-        if section != OtaDownloadLogSection.URL and line.startswith(
-            "   • URLs to Download:"
-        ):
-            section = OtaDownloadLogSection.URL
-            continue
-
-        if section == OtaDownloadLogSection.URL:
-            url_match = re.search("\s{6}• (http(.*)\.zip)", line)
-            if url_match:
-                url = url_match.group(1)
-                zip_name = url[url.rfind("/") + 1 :]
-                if (
-                    zip_name in ota_artifacts.keys()
-                    and ota_artifacts[zip_name].url is not None
-                    and ota_artifacts[zip_name].url != url
-                ):
-                    raise RuntimeError(
-                        f"Duplicate OTA image zip with differing source URL detected: {zip_name}"
-                        f"\n\told source URL: {ota_artifacts[zip_name].url}"
-                        f"\n\tnew source URL: {url}"
-                    )
-                else:
-                    ota_artifacts[zip_name].url = url
-                continue
-            else:
-                section = OtaDownloadLogSection.NONE
-                common.save_ota_images_meta(ota_artifacts, output_dir)
-
-    ota_download_co_run(ipsw_ota_beta_download_command)
+    ota_beta_download_cmd = ota_download_cmd.copy()
+    ota_beta_download_cmd.append("--beta")
+    subprocess.run(ota_beta_download_cmd)
 
 
 def parse_args() -> Namespace:
@@ -162,11 +48,98 @@ def validate_shell_deps() -> None:
         sys.exit(1)
 
 
+def parse_download_meta_output(
+    platform: str,
+    result: subprocess.CompletedProcess[bytes],
+    meta_data_store: dict[str, common.OtaArtifact],
+) -> None:
+    if result.returncode != 0:
+        print(result.stderr)
+    else:
+        platform_meta = json.loads(result.stdout)
+        for meta_item in platform_meta:
+            url = meta_item["url"]
+            zip_id = url[url.rfind("/") + 1 : -4]
+            if len(zip_id) != 40:
+                raise RuntimeError(f"Unexpected url-format in {meta_item}")
+
+            if zip_id in meta_data_store.keys():
+                store_item = meta_data_store[zip_id]
+                if not (
+                    store_item.build == meta_item["build"]
+                    and store_item.description == meta_item.get("description")
+                    and store_item.version == meta_item["version"]
+                    and store_item.platform == platform
+                    and store_item.url == url
+                    and store_item.devices == meta_item.get("devices")
+                    and store_item.hash == meta_item["hash"]
+                    and store_item.hash_algorithm == meta_item["hash_algorithm"]
+                ):
+                    raise RuntimeError(
+                        f"Same matching keys with different value:\n\tlocal: {store_item}\n\tapple: {meta_item}"
+                    )
+                pass
+            else:
+                meta_data_store[zip_id] = common.OtaArtifact(
+                    id=zip_id,
+                    build=meta_item["build"],
+                    description=meta_item.get("description"),
+                    version=meta_item["version"],
+                    platform=platform,
+                    url=url,
+                    devices=meta_item.get("devices"),
+                    download_path=None,
+                    hash=meta_item["hash"],
+                    hash_algorithm=meta_item["hash_algorithm"],
+                )
+
+
+def download_ota_metadata(output_dir: Path) -> None:
+    print("Updating meta-data for...")
+
+    meta_data_store = common.load_ota_images_meta(output_dir)
+
+    for platform in common.OTA_PLATFORMS:
+        print(platform)
+        ota_download_meta_cmd = [
+            "ipsw",
+            "download",
+            "ota",
+            "--platform",
+            platform,
+            "--urls",
+            "--json",
+        ]
+
+        parse_download_meta_output(
+            platform,
+            subprocess.run(ota_download_meta_cmd, capture_output=True),
+            meta_data_store,
+        )
+
+        ota_beta_download_meta_cmd = ota_download_meta_cmd.copy()
+        ota_beta_download_meta_cmd.append("--beta")
+        parse_download_meta_output(
+            platform,
+            subprocess.run(ota_beta_download_meta_cmd, capture_output=True),
+            meta_data_store,
+        )
+
+    common.save_ota_images_meta(meta_data_store, output_dir)
+
+
 def main() -> None:
     args = parse_args()
     validate_shell_deps()
+
+    # get the meta-data for all platforms first, so we can be sure to continuously update the meta-data store
+    # for __all__ platforms everytime we start the downloader.
+    download_ota_metadata(args.output_dir)
+
+    # only now start with the mirroring process
     for platform in common.OTA_PLATFORMS:
-        download_otas(Path(args.output_dir), platform)
+        print(f"Downloading OTAs for {platform}...")
+        download_otas(args.output_dir, platform)
 
 
 if __name__ == "__main__":
