@@ -37,6 +37,13 @@ class MountInfo:
     point: Path
 
 
+@dataclass(frozen=True)
+class ArtifactCategory:
+    platform: str
+    version: str
+    build: str
+
+
 def parse_args() -> Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -175,20 +182,12 @@ def find_dsc(input_dir: Path) -> list[DSCSearchResult]:
     return dsc_search_results
 
 
-def symsort(
-    dsc_split_dir: Path,
-    output_dir: Path,
-    platform: str,
-    os_version: str,
-    build_id: str,
-    arch: Arch,
-) -> None:
+def symsort(dsc_split_dir: Path, output_dir: Path, prefix: str, bundle_id: str) -> None:
     print(f"\t\t\tSymsorting {dsc_split_dir} to {output_dir}")
     # TODO: symsorter just writes into the output_path, but in the final scenario we want to change this behavior
     #  to check whether there would be any overwrites, if those overwrites actually contain different content (vs.
     #  just different meta-data) and then atomically do (or not) the write to final output directory.
-    prefix = platform.lower()
-    bundle_id = os_version + "_" + build_id + "_" + arch.value
+
     subprocess.run(
         [
             "./symsorter",
@@ -201,7 +200,7 @@ def symsort(
             bundle_id,
             dsc_split_dir,
         ],
-        capture_output=True,
+        check=True,
     )
 
 
@@ -231,6 +230,47 @@ class DscExtractionFailed(Exception):
     pass
 
 
+def extract_ota(artifact: Path, output_dir: Path) -> Path:
+    result = subprocess.run(
+        [
+            "ipsw",
+            "ota",
+            "extract",
+            artifact,
+            DYLD_SHARED_CACHE,
+            "-o",
+            output_dir,
+        ],
+        capture_output=True,
+    )
+    if result.returncode == 1:
+        error_lines = []
+        for line in result.stderr.decode("utf-8").splitlines():
+            if line.startswith("   ⨯"):
+                error_lines.append(line)
+        errors = "\n\t".join(error_lines)
+        raise DscExtractionFailed(
+            f"Failed to extract {DYLD_SHARED_CACHE} from {artifact}:\n\t{errors}"
+        )
+    else:
+        print(f"\t\tSuccessfully extracted {DYLD_SHARED_CACHE} from: {artifact}")
+        return find_path_prefix_in_dsc_extract_cmd_output(
+            result.stderr.decode("utf-8"),
+            Path(output_dir),
+        )
+
+
+def split_and_symsort_dsc(
+    input_dir: Path, category: ArtifactCategory, output_dir: Path
+) -> None:
+    with tempfile.TemporaryDirectory(suffix="_symex") as split_temp_dir:
+        split_results = split_dsc(
+            input_dir,
+            Path(split_temp_dir),
+        )
+        symsort_split_results(split_results, category, output_dir)
+
+
 def extract_dyld_cache(artifact: Path, input_dir: Path, output_dir: Path) -> None:
     meta_data = common.load_ota_images_meta(input_dir)
     zip_id = artifact.name[artifact.name.rfind("_") + 1 : -4]
@@ -239,9 +279,11 @@ def extract_dyld_cache(artifact: Path, input_dir: Path, output_dir: Path) -> Non
             f"Couldn't find id {zip_id} in meta-data (from artifact: {artifact})"
         )
 
-    platform = meta_data[zip_id].platform
-    build_id = meta_data[zip_id].build
-    os_version = meta_data[zip_id].version
+    category = ArtifactCategory(
+        meta_data[zip_id].platform,
+        meta_data[zip_id].build,
+        meta_data[zip_id].version,
+    )
 
     with tempfile.TemporaryDirectory(suffix="_symex") as cryptex_patch_dir:
         print(f"Trying patch_cryptex_dmg with {artifact}")
@@ -250,78 +292,44 @@ def extract_dyld_cache(artifact: Path, input_dir: Path, output_dir: Path) -> Non
             print(
                 f"\tCryptex patch successful. Mount, split, symsorting {DYLD_SHARED_CACHE} for: {artifact}"
             )
-            with tempfile.TemporaryDirectory(
-                suffix="_symex"
-            ) as mount_and_split_temp_dir:
-                split_cache_results = mount_and_split_dsc(
-                    extracted_dmgs["cryptex-system-arm64e"],
-                    Path(mount_and_split_temp_dir),
-                )
-                for split_result in split_cache_results:
-                    if not split_result.split_dir:
-                        continue
-
-                    symsort(
-                        split_result.split_dir,
-                        output_dir,
-                        platform,
-                        os_version,
-                        build_id,
-                        split_result.arch,
-                    )
+            process_cryptex_dmg(extracted_dmgs, category, output_dir)
         else:
             print(f"\tNot a cryptex, so extracting OTA {DYLD_SHARED_CACHE} directly")
-
             with tempfile.TemporaryDirectory(suffix="_symex") as extract_dsc_tmp_dir:
-                result = subprocess.run(
-                    [
-                        "ipsw",
-                        "ota",
-                        "extract",
-                        artifact,
-                        DYLD_SHARED_CACHE,
-                        "-o",
-                        extract_dsc_tmp_dir,
-                    ],
-                    capture_output=True,
-                )
-                if result.returncode == 1:
-                    error_lines = []
-                    for line in result.stderr.decode("utf-8").splitlines():
-                        if line.startswith("   ⨯"):
-                            error_lines.append(line)
-                    errors = "\n\t".join(error_lines)
-                    raise DscExtractionFailed(
-                        f"Failed to extract {DYLD_SHARED_CACHE} from {artifact}:\n\t{errors}"
-                    )
-                else:
-                    print(
-                        f"\t\tSuccessfully extracted {DYLD_SHARED_CACHE} from: {artifact}"
-                    )
-                    extracted_dsc_dir = find_path_prefix_in_dsc_extract_cmd_output(
-                        result.stderr.decode("utf-8"),
-                        Path(extract_dsc_tmp_dir),
-                    )
-                    print(
-                        f"\t\tSplitting & symsorting {DYLD_SHARED_CACHE} for: {artifact}"
-                    )
-                    with tempfile.TemporaryDirectory(suffix="_symex") as split_temp_dir:
-                        split_cache_results = split_dsc(
-                            extracted_dsc_dir,
-                            Path(split_temp_dir),
-                        )
-                        for split_result in split_cache_results:
-                            if not split_result.split_dir:
-                                continue
+                extracted_dsc_dir = extract_ota(artifact, Path(extract_dsc_tmp_dir))
+                print(f"\t\tSplitting & symsorting {DYLD_SHARED_CACHE} for: {artifact}")
+                split_and_symsort_dsc(extracted_dsc_dir, category, output_dir)
 
-                            symsort(
-                                split_result.split_dir,
-                                output_dir,
-                                platform,
-                                os_version,
-                                build_id,
-                                split_result.arch,
-                            )
+
+def process_cryptex_dmg(
+    extracted_dmgs: dict[str, Path],
+    category: ArtifactCategory,
+    output_dir: Path,
+) -> None:
+    with tempfile.TemporaryDirectory(suffix="_symex") as mount_and_split_temp_dir:
+        split_results = mount_and_split_dsc(
+            extracted_dmgs["cryptex-system-arm64e"],
+            Path(mount_and_split_temp_dir),
+        )
+        symsort_split_results(split_results, category, output_dir)
+
+
+def symsort_split_results(
+    split_cache_results: list[DSCSearchResult],
+    category: ArtifactCategory,
+    output_dir: Path,
+) -> None:
+    for split_result in split_cache_results:
+        if not split_result.split_dir:
+            continue
+
+        symsort(
+            split_result.split_dir,
+            output_dir,
+            category.platform,
+            f"{category.version}_{category.build}_{split_result.arch.value}",
+        )
+        # TODO: after the symsorter ran, we could update the meta-data of each debug-id with a ref to the artifact
 
 
 def list_dsc_files(artifact: Path) -> None:
@@ -366,13 +374,15 @@ def main() -> None:
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
     to_process = gather_images_to_process(input_dir)
+    if len(to_process) == 0:
+        return
+
     print(f"Processing {to_process}")
 
     if not output_dir.is_dir():
         output_dir.mkdir()
 
     for artifact in to_process:
-        # TODO: here we might want to store where a debug-id is coming from: like debug-id -> ota-image
         try:
             extract_dyld_cache(artifact, input_dir, output_dir)
             log_artifact_as("processed", artifact)
