@@ -132,6 +132,9 @@ def main() -> None:
     args = parse_args()
     validate_shell_deps()
 
+    device_list = common.ipsw_device_list()
+    for device in device_list:
+        print(device)
     # get the meta-data for all platforms first, so we can be sure to continuously update the meta-data store
     # for __all__ platforms everytime we start the downloader.
     download_ota_metadata(args.output_dir)

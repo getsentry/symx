@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass
+from enum import Enum
 from typing import Optional, List, Any
 from pathlib import Path
 
@@ -83,3 +84,50 @@ def ipsw_version() -> str:
         return version
 
     raise RuntimeError(f"Couldn't parse version from ipsw output: {output}")
+
+
+class Arch(Enum):
+    ARM64E = "arm64e"
+    ARM64 = "arm64"
+    ARM64_32 = "arm64_32"
+    ARMV7 = "armv7"
+    ARMV7K = "armv7k"
+    ARMV7S = "armv7s"
+
+
+@dataclass(frozen=True)
+class Device:
+    product: str
+    model: str
+    description: str
+    cpu: str
+    arch: Arch
+    mem_class: int
+
+
+def ipsw_device_list() -> List[Device]:
+    result = subprocess.run(["ipsw", "device-list"], capture_output=True, check=True)
+    data_start = False
+    device_list = []
+    for line in result.stdout.decode("utf-8").splitlines():
+        if data_start:
+            # match = re.findall(r"\||([\w,\-().+ ]*)", line)
+            match = re.match(
+                r"\|\s([\w,\-]*)\s*\|\s([a-z0-9]*)\s*\|\s([\w,\-(). ]*)\s*\|\s([a-z0-9]*)\s*\|\s([a-z0-9]*)\s*\|\s(\d*)",
+                line,
+            )
+            if match:
+                device_list.append(
+                    Device(
+                        product=match.group(1),
+                        model=match.group(2),
+                        description=match.group(3).strip(),
+                        cpu=match.group(4),
+                        arch=Arch(match.group(5)),
+                        mem_class=int(match.group(6)),
+                    )
+                )
+        elif line.startswith("|--"):
+            data_start = True
+
+    return device_list

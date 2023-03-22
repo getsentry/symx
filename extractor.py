@@ -7,7 +7,6 @@ import sys
 import tempfile
 from argparse import Namespace
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import Optional
 
@@ -16,16 +15,9 @@ import common
 DYLD_SHARED_CACHE = "dyld_shared_cache"
 
 
-class Arch(Enum):
-    ARM64E = "arm64e"
-    ARM64 = "arm64"
-    ARM64_32 = "arm64_32"
-    ARMV7K = "armv7k"
-
-
 @dataclass
 class DSCSearchResult:
-    arch: Arch
+    arch: common.Arch
     artifact: Path
     split_dir: Optional[Path]
 
@@ -160,7 +152,7 @@ def find_dsc(input_dir: Path) -> list[DSCSearchResult]:
 
     dsc_search_results = []
     for path_prefix in dsc_path_prefix_options:
-        for arch in Arch:
+        for arch in common.Arch:
             dsc_path = input_dir / (path_prefix + DYLD_SHARED_CACHE + "_" + arch.value)
             if os.path.isfile(dsc_path):
                 dsc_search_results.append(
