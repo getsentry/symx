@@ -1,8 +1,5 @@
-import argparse
 import json
 import subprocess
-import sys
-from argparse import Namespace
 from pathlib import Path
 
 import common
@@ -25,27 +22,6 @@ def download_otas(output_dir: Path, platform: str) -> None:
     ota_beta_download_cmd = ota_download_cmd.copy()
     ota_beta_download_cmd.append("--beta")
     subprocess.run(ota_beta_download_cmd)
-
-
-def parse_args() -> Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--output_dir",
-        dest="output_dir",
-        required=True,
-        type=common.directory_arg_type,
-        help="path to the output directory where the extracted symbols are placed",
-    )
-    return parser.parse_args()
-
-
-def validate_shell_deps() -> None:
-    version = common.ipsw_version()
-    if version:
-        print(f"Using ipsw {version}")
-    else:
-        print("ipsw not installed")
-        sys.exit(1)
 
 
 def parse_download_meta_output(
@@ -129,12 +105,9 @@ def download_ota_metadata(output_dir: Path) -> None:
 
 
 def main() -> None:
-    args = parse_args()
-    validate_shell_deps()
+    args = common.downloader_parse_args()
+    common.downloader_validate_shell_deps()
 
-    device_list = common.ipsw_device_list()
-    for device in device_list:
-        print(device)
     # get the meta-data for all platforms first, so we can be sure to continuously update the meta-data store
     # for __all__ platforms everytime we start the downloader.
     download_ota_metadata(args.output_dir)

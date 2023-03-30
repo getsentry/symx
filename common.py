@@ -1,12 +1,14 @@
+import argparse
 import dataclasses
 import json
 import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, List, Any
 from pathlib import Path
+from typing import Optional, List, Any
 
 from filelock import FileLock
 
@@ -104,6 +106,39 @@ class Device:
     arch: Arch
     mem_class: int
 
+    @property
+    def search_name(self) -> str:
+        if self.product.endswith("-A") or self.product.endswith("-B"):
+            return self.product[:-2]
+
+        return self.product
+
+
+def downloader_parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--output_dir",
+        dest="output_dir",
+        required=True,
+        type=directory_arg_type,
+        help="path to the output directory where the extracted symbols are placed",
+    )
+    return parser.parse_args()
+
+
+def downloader_validate_shell_deps() -> None:
+    version = ipsw_version()
+    if version:
+        print(f"Using ipsw {version}")
+    else:
+        print("ipsw not installed")
+        sys.exit(1)
+
+
+DEVICE_ROW_RE = re.compile(
+    "\|\s([\w,\-]*)\s*\|\s([a-z0-9]*)\s*\|\s([\w,\-(). ]*)\s*\|\s([a-z0-9]*)\s*\|\s([a-z0-9]*)\s*\|\s(\d*)"
+)
+
 
 def ipsw_device_list() -> List[Device]:
     result = subprocess.run(["ipsw", "device-list"], capture_output=True, check=True)
@@ -111,11 +146,7 @@ def ipsw_device_list() -> List[Device]:
     device_list = []
     for line in result.stdout.decode("utf-8").splitlines():
         if data_start:
-            # match = re.findall(r"\||([\w,\-().+ ]*)", line)
-            match = re.match(
-                r"\|\s([\w,\-]*)\s*\|\s([a-z0-9]*)\s*\|\s([\w,\-(). ]*)\s*\|\s([a-z0-9]*)\s*\|\s([a-z0-9]*)\s*\|\s(\d*)",
-                line,
-            )
+            match = DEVICE_ROW_RE.match(line)
             if match:
                 device_list.append(
                     Device(
