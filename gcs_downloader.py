@@ -1,9 +1,4 @@
-from google.cloud.storage import Client as StorageClient  # type: ignore
-
 import ota
-
-PROJECT_ID = "glassy-totality-296020"
-BUCKET_NAME = "apple_ota_store"
 
 
 def update_ota_metadata() -> None:
@@ -14,12 +9,9 @@ def update_ota_metadata() -> None:
 
 
 def gcs_ota_downloader() -> None:
-    storage_client = StorageClient(project=PROJECT_ID)
-    bucket = storage_client.bucket(BUCKET_NAME)
-    blobs = storage_client.list_blobs(BUCKET_NAME)
-    for blob in blobs:
-        print(blob.name)
+    update_ota_metadata()
 
 
 if __name__ == "__main__":
+    ota.load_meta_from_gcs()
     gcs_ota_downloader()

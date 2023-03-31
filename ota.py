@@ -1,10 +1,12 @@
 import json
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List
 
 from filelock import FileLock
+from google.cloud.storage import Client as StorageClient  # type: ignore
 
 import common
 
@@ -120,33 +122,73 @@ def save_ota_images_meta(theirs: dict[str, OtaArtifact], save_dir: Path) -> None
             for k, v in json.load(fp).items():
                 ours[k] = OtaArtifact(**v)
 
-        for their_zip_id, their_item in theirs.items():
-            if their_zip_id in ours.keys():
-                our_item = ours[their_zip_id]
-                if not (
-                    their_item.build == our_item.build
-                    and their_item.description == our_item.description
-                    and their_item.version == our_item.version
-                    and their_item.platform == our_item.platform
-                    and their_item.url == our_item.url
-                    and their_item.devices == our_item.devices
-                    and their_item.hash == our_item.hash
-                    and their_item.hash_algorithm == our_item.hash_algorithm
-                ):
-                    raise RuntimeError(
-                        f"Same matching keys with different value:\n\tlocal: {our_item}\n\tapple: {their_item}"
-                    )
-                pass
-        else:
-            ours[their_zip_id] = their_item
+        merge_meta_data(ours, theirs)
 
         with open(save_path, "w") as fp:
             json.dump(ours, fp, cls=common.DataClassJSONEncoder)
 
 
+def merge_meta_data(ours, theirs):
+    for their_zip_id, their_item in theirs.items():
+        if their_zip_id in ours.keys():
+            our_item = ours[their_zip_id]
+            # TODO: this is at the core of the question what is enough identity for apple, what is enough identity
+            #       for sentry. If in an artifact everything stays the same except the description, is it the same
+            #       artifact? What should we do about it? Example: watchOS95DevBeta1 vs watchOS95PublicBeta1
+            if not (
+                their_item.build == our_item.build
+                and their_item.description == our_item.description
+                and their_item.version == our_item.version
+                and their_item.platform == our_item.platform
+                and their_item.url == our_item.url
+                and their_item.devices == our_item.devices
+                and their_item.hash == our_item.hash
+                and their_item.hash_algorithm == our_item.hash_algorithm
+            ):
+                raise RuntimeError(
+                    f"Same matching keys with different value:\n\tlocal: {our_item}\n\tapple: {their_item}"
+                )
+            pass
+        else:
+            ours[their_zip_id] = their_item
+
+
+PROJECT_ID = "glassy-totality-296020"
+BUCKET_NAME = "apple_ota_store"
+
+
 def load_meta_from_gcs() -> dict[str, OtaArtifact]:
-    return {}
+    result = {}
+    storage_client = StorageClient(project=PROJECT_ID)
+    bucket = storage_client.get_bucket(BUCKET_NAME)
+    blob = bucket.blob(ARTIFACTS_META_JSON)
+    if not blob.exists():
+        return result
+
+    with tempfile.NamedTemporaryFile() as f:
+        blob.download_to_filename(f.name)
+        for k, v in json.load(f.file).items():
+            result[k] = OtaArtifact(**v)
+
+    return result
 
 
-def save_meta_to_gcs(meta_data: dict[str, OtaArtifact]) -> None:
-    return None
+def save_meta_to_gcs(theirs: dict[str, OtaArtifact]) -> None:
+    storage_client = StorageClient(project=PROJECT_ID)
+    bucket = storage_client.get_bucket(BUCKET_NAME)
+    blob = bucket.blob(ARTIFACTS_META_JSON)
+    ours = {}
+    if blob.exists():
+        with tempfile.NamedTemporaryFile() as f:
+            blob.download_to_filename(f.name)
+            generation_match_precondition = blob.generation
+            for k, v in json.load(f.file).items():
+                ours[k] = OtaArtifact(**v)
+    else:
+        generation_match_precondition = 0
+
+    merge_meta_data(ours, theirs)
+    blob.upload_from_string(
+        json.dumps(ours, cls=common.DataClassJSONEncoder),
+        if_generation_match=generation_match_precondition,
+    )
