@@ -27,9 +27,8 @@ def download_otas(output_dir: Path, platform: str) -> None:
 def download_ota_metadata(output_dir: Path) -> None:
     print("Updating meta-data for...")
 
-    meta_data_store = ota.load_meta_from_fs(output_dir)
-    ota.retrieve_current_meta(meta_data_store)
-    ota.save_ota_images_meta(meta_data_store, output_dir)
+    new_meta_data = ota.retrieve_current_meta()
+    ota.save_ota_images_meta(new_meta_data, output_dir)
 
 
 def main() -> None:

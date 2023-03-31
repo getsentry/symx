@@ -9,9 +9,8 @@ BUCKET_NAME = "apple_ota_store"
 def update_ota_metadata() -> None:
     print("Updating meta-data for...")
 
-    meta_data_store = ota.load_meta_from_gcs()
-    ota.retrieve_current_meta(meta_data_store)
-    ota.save_meta_to_gcs(meta_data_store)
+    new_meta_data = ota.retrieve_current_meta()
+    ota.save_meta_to_gcs(new_meta_data)
 
 
 def gcs_ota_downloader() -> None:

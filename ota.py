@@ -38,7 +38,7 @@ class OtaArtifact:
 def parse_download_meta_output(
     platform: str,
     result: subprocess.CompletedProcess[bytes],
-    meta_data_store: dict[str, OtaArtifact],
+    meta_data: dict[str, OtaArtifact],
 ) -> None:
     if result.returncode != 0:
         print(result.stderr)
@@ -50,38 +50,22 @@ def parse_download_meta_output(
             if len(zip_id) != 40:
                 raise RuntimeError(f"Unexpected url-format in {meta_item}")
 
-            if zip_id in meta_data_store.keys():
-                store_item = meta_data_store[zip_id]
-                if not (
-                    store_item.build == meta_item["build"]
-                    and store_item.description == meta_item.get("description")
-                    and store_item.version == meta_item["version"]
-                    and store_item.platform == platform
-                    and store_item.url == url
-                    and store_item.devices == meta_item.get("devices")
-                    and store_item.hash == meta_item["hash"]
-                    and store_item.hash_algorithm == meta_item["hash_algorithm"]
-                ):
-                    raise RuntimeError(
-                        f"Same matching keys with different value:\n\tlocal: {store_item}\n\tapple: {meta_item}"
-                    )
-                pass
-            else:
-                meta_data_store[zip_id] = OtaArtifact(
-                    id=zip_id,
-                    build=meta_item["build"],
-                    description=meta_item.get("description"),
-                    version=meta_item["version"],
-                    platform=platform,
-                    url=url,
-                    devices=meta_item.get("devices"),
-                    download_path=None,
-                    hash=meta_item["hash"],
-                    hash_algorithm=meta_item["hash_algorithm"],
-                )
+            meta_data[zip_id] = OtaArtifact(
+                id=zip_id,
+                build=meta_item["build"],
+                description=meta_item.get("description"),
+                version=meta_item["version"],
+                platform=platform,
+                url=url,
+                devices=meta_item.get("devices"),
+                download_path=None,
+                hash=meta_item["hash"],
+                hash_algorithm=meta_item["hash_algorithm"],
+            )
 
 
-def retrieve_current_meta(meta_data: dict[str, OtaArtifact]) -> None:
+def retrieve_current_meta() -> dict[str, OtaArtifact]:
+    meta = {}
     for platform in PLATFORMS:
         print(platform)
         cmd = [
@@ -97,7 +81,7 @@ def retrieve_current_meta(meta_data: dict[str, OtaArtifact]) -> None:
         parse_download_meta_output(
             platform,
             subprocess.run(cmd, capture_output=True),
-            meta_data,
+            meta,
         )
 
         ota_beta_download_meta_cmd = cmd.copy()
@@ -105,8 +89,10 @@ def retrieve_current_meta(meta_data: dict[str, OtaArtifact]) -> None:
         parse_download_meta_output(
             platform,
             subprocess.run(ota_beta_download_meta_cmd, capture_output=True),
-            meta_data,
+            meta,
         )
+
+    return meta
 
 
 def load_meta_from_fs(load_dir: Path) -> dict[str, OtaArtifact]:
@@ -124,13 +110,38 @@ def load_meta_from_fs(load_dir: Path) -> dict[str, OtaArtifact]:
     return result
 
 
-def save_ota_images_meta(meta_data: dict[str, OtaArtifact], save_dir: Path) -> None:
+def save_ota_images_meta(theirs: dict[str, OtaArtifact], save_dir: Path) -> None:
     save_path = save_dir / ARTIFACTS_META_JSON
     lock_path = save_path.parent / (save_path.name + ".lock")
 
+    ours = {}
     with FileLock(lock_path, timeout=5):
+        with open(save_path) as fp:
+            for k, v in json.load(fp).items():
+                ours[k] = OtaArtifact(**v)
+
+        for their_zip_id, their_item in theirs.items():
+            if their_zip_id in ours.keys():
+                our_item = ours[their_zip_id]
+                if not (
+                    their_item.build == our_item.build
+                    and their_item.description == our_item.description
+                    and their_item.version == our_item.version
+                    and their_item.platform == our_item.platform
+                    and their_item.url == our_item.url
+                    and their_item.devices == our_item.devices
+                    and their_item.hash == our_item.hash
+                    and their_item.hash_algorithm == our_item.hash_algorithm
+                ):
+                    raise RuntimeError(
+                        f"Same matching keys with different value:\n\tlocal: {our_item}\n\tapple: {their_item}"
+                    )
+                pass
+        else:
+            ours[their_zip_id] = their_item
+
         with open(save_path, "w") as fp:
-            json.dump(meta_data, fp, cls=common.DataClassJSONEncoder)
+            json.dump(ours, fp, cls=common.DataClassJSONEncoder)
 
 
 def load_meta_from_gcs() -> dict[str, OtaArtifact]:
