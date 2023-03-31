@@ -1,6 +1,15 @@
-tmp
-venv_homebrew
-symsorter
+# dev tools
+__pycache__
+.mypy_cache
 .idea
+venv_homebrew
+
+# transient app output
+tmp
 processed
 failed
+throw_away
+wiki_db.json
+
+# cli tools that currently are accessed via CWD rather than PATH
+symsorter
