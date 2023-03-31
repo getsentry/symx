@@ -1,33 +1,44 @@
 import json
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional, List
+
+from filelock import FileLock
 
 import common
 
+ARTIFACTS_META_JSON = "ota_image_meta.json"
 
-def download_otas(output_dir: Path, platform: str) -> None:
-    ota_download_cmd = [
-        "ipsw",
-        "download",
-        "ota",
-        "--output",
-        str(output_dir),
-        "-y",
-        "--platform",
-        platform,
-        "--resume-all",
-    ]
-    subprocess.run(ota_download_cmd)
+PLATFORMS = [
+    "ios",
+    "watchos",
+    "tvos",
+    "audioos",
+    "accessory",
+    "macos",
+    "recovery",
+]
 
-    ota_beta_download_cmd = ota_download_cmd.copy()
-    ota_beta_download_cmd.append("--beta")
-    subprocess.run(ota_beta_download_cmd)
+
+@dataclass
+class OtaArtifact:
+    build: str
+    description: Optional[str]
+    version: str
+    platform: str
+    id: str
+    url: str
+    download_path: Optional[str]
+    devices: Optional[List[str]]
+    hash: str
+    hash_algorithm: str
 
 
 def parse_download_meta_output(
     platform: str,
     result: subprocess.CompletedProcess[bytes],
-    meta_data_store: dict[str, common.OtaArtifact],
+    meta_data_store: dict[str, OtaArtifact],
 ) -> None:
     if result.returncode != 0:
         print(result.stderr)
@@ -56,7 +67,7 @@ def parse_download_meta_output(
                     )
                 pass
             else:
-                meta_data_store[zip_id] = common.OtaArtifact(
+                meta_data_store[zip_id] = OtaArtifact(
                     id=zip_id,
                     build=meta_item["build"],
                     description=meta_item.get("description"),
@@ -70,14 +81,10 @@ def parse_download_meta_output(
                 )
 
 
-def download_ota_metadata(output_dir: Path) -> None:
-    print("Updating meta-data for...")
-
-    meta_data_store = common.load_ota_images_meta(output_dir)
-
-    for platform in common.OTA_PLATFORMS:
+def retrieve_current_meta(meta_data: dict[str, OtaArtifact]) -> None:
+    for platform in PLATFORMS:
         print(platform)
-        ota_download_meta_cmd = [
+        cmd = [
             "ipsw",
             "download",
             "ota",
@@ -89,34 +96,46 @@ def download_ota_metadata(output_dir: Path) -> None:
 
         parse_download_meta_output(
             platform,
-            subprocess.run(ota_download_meta_cmd, capture_output=True),
-            meta_data_store,
+            subprocess.run(cmd, capture_output=True),
+            meta_data,
         )
 
-        ota_beta_download_meta_cmd = ota_download_meta_cmd.copy()
+        ota_beta_download_meta_cmd = cmd.copy()
         ota_beta_download_meta_cmd.append("--beta")
         parse_download_meta_output(
             platform,
             subprocess.run(ota_beta_download_meta_cmd, capture_output=True),
-            meta_data_store,
+            meta_data,
         )
 
-    common.save_ota_images_meta(meta_data_store, output_dir)
+
+def load_meta_from_fs(load_dir: Path) -> dict[str, OtaArtifact]:
+    load_path = load_dir / ARTIFACTS_META_JSON
+    lock_path = load_path.parent / (load_path.name + ".lock")
+    result = {}
+    if load_path.is_file():
+        with FileLock(lock_path, timeout=5):
+            try:
+                with open(load_path) as fp:
+                    for k, v in json.load(fp).items():
+                        result[k] = OtaArtifact(**v)
+            except OSError:
+                pass
+    return result
 
 
-def main() -> None:
-    args = common.downloader_parse_args()
-    common.downloader_validate_shell_deps()
+def save_ota_images_meta(meta_data: dict[str, OtaArtifact], save_dir: Path) -> None:
+    save_path = save_dir / ARTIFACTS_META_JSON
+    lock_path = save_path.parent / (save_path.name + ".lock")
 
-    # get the meta-data for all platforms first, so we can be sure to continuously update the meta-data store
-    # for __all__ platforms everytime we start the downloader.
-    download_ota_metadata(args.output_dir)
-
-    # only now start with the mirroring process
-    for platform in common.OTA_PLATFORMS:
-        print(f"Downloading OTAs for {platform}...")
-        download_otas(args.output_dir, platform)
+    with FileLock(lock_path, timeout=5):
+        with open(save_path, "w") as fp:
+            json.dump(meta_data, fp, cls=common.DataClassJSONEncoder)
 
 
-if __name__ == "__main__":
-    main()
+def load_meta_from_gcs() -> dict[str, OtaArtifact]:
+    return {}
+
+
+def save_meta_to_gcs(meta_data: dict[str, OtaArtifact]) -> None:
+    return None

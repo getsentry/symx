@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 import common
+import ota
 
 DYLD_SHARED_CACHE = "dyld_shared_cache"
 
@@ -264,7 +265,7 @@ def split_and_symsort_dsc(
 
 
 def extract_dyld_cache(artifact: Path, input_dir: Path, output_dir: Path) -> None:
-    meta_data = common.load_ota_images_meta(input_dir)
+    meta_data = ota.load_meta_from_fs(input_dir)
     zip_id = artifact.name[artifact.name.rfind("_") + 1 : -4]
     if zip_id not in meta_data.keys():
         raise DscNoMetaData(
