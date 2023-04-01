@@ -2,6 +2,7 @@ import json
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from math import floor
 from pathlib import Path
 from typing import Optional, List, Tuple
 
@@ -225,17 +226,22 @@ def save_meta_to_gcs(theirs: OtaMetaData) -> OtaMetaData:
 def download_ota(ota_meta: OtaArtifact, download_dir: Path) -> Path:
     print(f"Downloading {ota_meta}")
     res = requests.get(ota_meta.url, stream=True)
-    total_length = res.headers.get("content-length")
+    total_length = int(res.headers.get("content-length")) // (1024 * 1024)
     # TODO: how much prefix for identity?
     filepath = (
         download_dir / f"{ota_meta.platform}_{ota_meta.version}_{ota_meta.id}.zip"
     )
     with open(filepath, "wb") as f:
         actual = 0
+        last_print = 0
         for chunk in res.iter_content(chunk_size=8192):
-            print(f"{actual} / {total_length}")
             f.write(chunk)
             actual = actual + len(chunk)
+
+            actual_mib = actual / (1024 * 1024)
+            if actual_mib - last_print > 100:
+                print(f"{floor(actual_mib)}/{total_length} MiB")
+                last_print = actual_mib
 
     return filepath
 
