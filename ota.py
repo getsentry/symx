@@ -4,7 +4,7 @@ import tempfile
 from dataclasses import dataclass
 from math import floor
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, BinaryIO
 
 import requests
 from filelock import FileLock
@@ -223,44 +223,72 @@ def save_meta_to_gcs(theirs: OtaMetaData) -> OtaMetaData:
     raise RuntimeError("Failed to update meta-data")
 
 
+def check_hash(ota_meta: OtaArtifact, f: BinaryIO) -> bool:
+    if ota_meta.hash_algorithm != "SHA-1":
+        raise RuntimeError(f"Unexpected hash-algo: {ota_meta.hash_algorithm}")
+
+    sha1sum = hashlib.sha1()
+    block = f.read(2**16)
+    while len(block) != 0:
+        sha1sum.update(block)
+        block = f.read(2**16)
+
+    return sha1sum.hexdigest() == ota_meta.hash
+
+
 def download_ota(ota_meta: OtaArtifact, download_dir: Path) -> Path:
     print(f"Downloading {ota_meta}")
+
     res = requests.get(ota_meta.url, stream=True)
-    total_length = int(res.headers.get("content-length")) // (1024 * 1024)
+    content_length = res.headers.get("content-length")
+    if not content_length:
+        raise RuntimeError("OTA Url does not respond with a content-length header")
+
+    total = int(content_length)
+    total_mib = total / (1024 * 1024)
+    print(f"Filesize in MiB: {total_mib}")
+
     # TODO: how much prefix for identity?
     filepath = (
         download_dir / f"{ota_meta.platform}_{ota_meta.version}_{ota_meta.id}.zip"
     )
     with open(filepath, "wb") as f:
         actual = 0
-        last_print = 0
+        last_print = 0.0
         for chunk in res.iter_content(chunk_size=8192):
             f.write(chunk)
             actual = actual + len(chunk)
 
             actual_mib = actual / (1024 * 1024)
             if actual_mib - last_print > 100:
-                print(f"{floor(actual_mib)}/{total_length} MiB")
+                print(f"{floor(actual_mib)} MiB")
                 last_print = actual_mib
 
-    return filepath
+        if check_hash(ota_meta, f):
+            print(f"{floor(actual_mib)}/{total_mib} MiB")
+            print("Download completed")
+            return filepath
+
+    raise RuntimeError("Failed to download")
 
 
 def upload_ota_to_gcs(ota_meta: OtaArtifact, ota_file: Path) -> None:
     if not ota_file.is_file():
         raise RuntimeError("Path to upload must be a file")
 
+    print("Start upload...")
     storage_client = StorageClient(project=PROJECT_ID)
     bucket = storage_client.get_bucket(BUCKET_NAME)
     blob = bucket.blob(ota_file.name)
     if blob.exists():
         raise RuntimeError(
-            "This file was already uploaded, maybe we have an identity crisis or corrupted meta-data"
+            "This file was already uploaded, maybe we have an identity problem or corrupted meta-data"
         )
 
     # this file will be split into considerable chunks set timeout to something high
     blob.upload_from_filename(ota_file, timeout=3600)
 
+    print("Upload finished. Updating OTA meta-data.")
     ota_meta.download_path = ota_file.name
     update_meta_item(ota_meta)
 
