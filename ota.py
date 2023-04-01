@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Tuple
 
+import requests
 from filelock import FileLock
 from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Client as StorageClient, Blob  # type: ignore
@@ -219,3 +220,65 @@ def save_meta_to_gcs(theirs: OtaMetaData) -> OtaMetaData:
             retry = retry - 1
 
     raise RuntimeError("Failed to update meta-data")
+
+
+def download_ota(ota_meta: OtaArtifact, download_dir: Path) -> Path:
+    print(f"Downloading {ota_meta}")
+    res = requests.get(ota_meta.url, stream=True)
+    total_length = res.headers.get("content-length")
+    # TODO: how much prefix for identity?
+    filepath = (
+        download_dir / f"{ota_meta.platform}_{ota_meta.version}_{ota_meta.id}.zip"
+    )
+    with open(filepath, "wb") as f:
+        actual = 0
+        for chunk in res.iter_content(chunk_size=8192):
+            print(f"{actual} / {total_length}")
+            f.write(chunk)
+            actual = actual + len(chunk)
+
+    return filepath
+
+
+def upload_ota_to_gcs(ota_meta: OtaArtifact, ota_file: Path) -> None:
+    if not ota_file.is_file():
+        raise RuntimeError("Path to upload must be a file")
+
+    storage_client = StorageClient(project=PROJECT_ID)
+    bucket = storage_client.get_bucket(BUCKET_NAME)
+    blob = bucket.blob(ota_file.name)
+    if blob.exists():
+        raise RuntimeError(
+            "This file was already uploaded, maybe we have an identity crisis or corrupted meta-data"
+        )
+
+    # this file will be split into considerable chunks set timeout to something high
+    blob.upload_from_filename(ota_file, timeout=3600)
+
+    ota_meta.download_path = ota_file.name
+    update_meta_item(ota_meta)
+
+
+def update_meta_item(ota_meta: OtaArtifact) -> OtaMetaData:
+    storage_client = StorageClient(project=PROJECT_ID)
+    bucket = storage_client.get_bucket(BUCKET_NAME)
+    retry = 5
+
+    while retry > 0:
+        blob = bucket.blob(ARTIFACTS_META_JSON)
+        if blob.exists():
+            ours, generation_match_precondition = download_meta_blob(blob)
+        else:
+            ours, generation_match_precondition = {}, 0
+
+        ours[ota_meta.id] = ota_meta
+        try:
+            blob.upload_from_string(
+                json.dumps(ours, cls=common.DataClassJSONEncoder),
+                if_generation_match=generation_match_precondition,
+            )
+            return ours
+        except PreconditionFailed:
+            retry = retry - 1
+
+    raise RuntimeError("Failed to update meta-data item")
