@@ -1,10 +1,11 @@
+import hashlib
 import json
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from math import floor
 from pathlib import Path
-from typing import Optional, List, Tuple, BinaryIO
+from typing import Optional, List, Tuple
 
 import requests
 from filelock import FileLock
@@ -223,15 +224,16 @@ def save_meta_to_gcs(theirs: OtaMetaData) -> OtaMetaData:
     raise RuntimeError("Failed to update meta-data")
 
 
-def check_hash(ota_meta: OtaArtifact, f: BinaryIO) -> bool:
+def check_hash(ota_meta: OtaArtifact, filepath: Path) -> bool:
     if ota_meta.hash_algorithm != "SHA-1":
         raise RuntimeError(f"Unexpected hash-algo: {ota_meta.hash_algorithm}")
 
     sha1sum = hashlib.sha1()
-    block = f.read(2**16)
-    while len(block) != 0:
-        sha1sum.update(block)
+    with open(filepath, "rb") as f:
         block = f.read(2**16)
+        while len(block) != 0:
+            sha1sum.update(block)
+            block = f.read(2**16)
 
     return sha1sum.hexdigest() == ota_meta.hash
 
@@ -246,11 +248,12 @@ def download_ota(ota_meta: OtaArtifact, download_dir: Path) -> Path:
 
     total = int(content_length)
     total_mib = total / (1024 * 1024)
-    print(f"Filesize in MiB: {floor(total_mib)}")
+    print(f"OTA Filesize: {floor(total_mib)} MiB")
 
     # TODO: how much prefix for identity?
     filepath = (
-        download_dir / f"{ota_meta.platform}_{ota_meta.version}_{ota_meta.id}.zip"
+        download_dir
+        / f"{ota_meta.platform}_{ota_meta.version}_{ota_meta.build}_{ota_meta.id}.zip"
     )
     with open(filepath, "wb") as f:
         actual = 0
@@ -264,10 +267,10 @@ def download_ota(ota_meta: OtaArtifact, download_dir: Path) -> Path:
                 print(f"{floor(actual_mib)} MiB")
                 last_print = actual_mib
 
-        if check_hash(ota_meta, f):
-            print(f"{floor(actual_mib)}/{total_mib} MiB")
-            print("Download completed")
-            return filepath
+    print(f"{floor(actual_mib)} MiB")
+    if check_hash(ota_meta, filepath):
+        print("Download completed")
+        return filepath
 
     raise RuntimeError("Failed to download")
 
