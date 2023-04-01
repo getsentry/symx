@@ -8,20 +8,19 @@ from typing import Optional, List, Tuple
 from filelock import FileLock
 from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Client as StorageClient, Blob  # type: ignore
-from google.resumable_media import InvalidResponse
 
 import common
 
 ARTIFACTS_META_JSON = "ota_image_meta.json"
 
 PLATFORMS = [
-    #    "ios",
-    #    "watchos",
-    #    "tvos",
-    #    "audioos",
-    #    "accessory",
-    #    "macos",
-    #    "recovery",
+    "ios",
+    "watchos",
+    "tvos",
+    "audioos",
+    "accessory",
+    "macos",
+    "recovery",
 ]
 
 
