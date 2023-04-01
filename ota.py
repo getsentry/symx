@@ -246,7 +246,7 @@ def download_ota(ota_meta: OtaArtifact, download_dir: Path) -> Path:
 
     total = int(content_length)
     total_mib = total / (1024 * 1024)
-    print(f"Filesize in MiB: {total_mib}")
+    print(f"Filesize in MiB: {floor(total_mib)}")
 
     # TODO: how much prefix for identity?
     filepath = (
