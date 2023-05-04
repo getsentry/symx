@@ -6,10 +6,10 @@ on:
 jobs:
   list-bucket-contents:
     name: 'List bucket contents'
-    runs-on: 'ubuntu-latest'
-    # permissions:
-    #   contents: 'read'
-    #   id-token: 'write'
+    runs-on: 'macos-13'
+    permissions:
+      contents: 'read'
+      id-token: 'write'
 
     steps:
     - id: 'auth'
@@ -24,4 +24,4 @@ jobs:
         version: '>= 363.0.0'
 
     - name: 'List bucket contents'
-      run: 'cloud storage ls --recursive gs://symbol-collector-dev'
+      run: 'gcloud storage ls --recursive gs://symbol-collector-dev'
