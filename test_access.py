@@ -1,6 +1,6 @@
 import os
 from google.cloud import storage
-from google.auth import compute_engine
+from google.auth import default
 
 # Set the GCP bucket name
 # bucket_name = os.environ['GCP_BUCKET_NAME']
@@ -8,7 +8,7 @@ from google.auth import compute_engine
 bucket_name = 'symbol-collector-dev'
 metadata_path = 'metadata.json'
 
-credentials = compute_engine.Credentials()
+credentials = default()[0]
 storage_client = storage.Client(credentials=credentials)
 
 # Get the GCP bucket object
