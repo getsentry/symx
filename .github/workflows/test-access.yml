@@ -12,7 +12,10 @@ jobs:
       id-token: "write"
 
     steps:
-      - id: Auth
+      - name: Checkout sources
+        uses: actions/checkout@v3      
+      
+      - name: Auth
         uses: google-github-actions/auth@v1
         with:
           workload_identity_provider: projects/868781662168/locations/global/workloadIdentityPools/prod-github/providers/github-oidc-pool
@@ -32,9 +35,6 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install google-cloud-storage
-
-      - name: Checkout sources
-        uses: actions/checkout@v3
 
       - name: Check access
         run: python test_access.py
