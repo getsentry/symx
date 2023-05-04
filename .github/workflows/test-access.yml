@@ -38,3 +38,5 @@ jobs:
 
       - name: Check access
         run: python test_access.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
