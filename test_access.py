@@ -1,5 +1,6 @@
 import os
 from google.cloud import storage
+from google.auth import compute_engine
 
 # Set the GCP bucket name
 # bucket_name = os.environ['GCP_BUCKET_NAME']
@@ -7,8 +8,8 @@ from google.cloud import storage
 bucket_name = 'symbol-collector-dev'
 metadata_path = 'metadata.json'
 
-# Authenticate with the GCP account using the GitHub Action token
-storage_client = storage.Client(credentials=os.environ['GITHUB_TOKEN'])
+credentials = compute_engine.Credentials()
+storage_client = storage.Client(credentials=credentials)
 
 # Get the GCP bucket object
 bucket = storage_client.bucket(bucket_name)
