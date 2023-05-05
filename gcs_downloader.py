@@ -1,7 +1,10 @@
+import os
 import tempfile
+
 from pathlib import Path
 
 import ota
+import sentry_sdk
 
 
 def update_ota_metadata() -> ota.OtaMetaData:
@@ -28,5 +31,8 @@ def gcs_ota_downloader() -> None:
 
 
 if __name__ == "__main__":
+    SENTRY_DSN = os.environ.get("SENTRY_DSN", None)
+    if SENTRY_DSN:
+        sentry_sdk.init(dsn=os.environ["SENTRY_DSN"], traces_sample_rate=1.0)
     ota.load_meta_from_gcs()
     gcs_ota_downloader()
