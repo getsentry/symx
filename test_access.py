@@ -15,3 +15,6 @@ if blob.exists():
     print(f'The file {metadata_path} exists in the GCP bucket.')
 else:
     print(f'The file {metadata_path} does not exist in the GCP bucket.')
+
+import ota
+ota.load_meta_from_gcs()
