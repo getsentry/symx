@@ -28,3 +28,4 @@ if __name__ == "__main__":
     # Get the GCP bucket object
     bucket = storage_client.bucket(BUCKET_NAME)
     download_meta_from_gcs(bucket)
+    download_meta_from_gcs(bucket)
