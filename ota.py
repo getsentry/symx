@@ -7,6 +7,7 @@ from math import floor
 from pathlib import Path
 from typing import Optional, List, Tuple
 
+import os
 import requests
 from filelock import FileLock
 from google.cloud.exceptions import PreconditionFailed
@@ -14,7 +15,9 @@ from google.cloud.storage import Client as StorageClient, Blob  # type: ignore
 
 import common
 
-ARTIFACTS_META_JSON = "ota_image_meta.json"
+ARTIFACTS_META_JSON = os.environ.get('ARTIFACTS_META_JSON', "ota_image_meta.json")
+PROJECT_ID = os.environ.get("PROJECT_ID", None)
+BUCKET_NAME = os.environ.get("BUCKET_NAME")
 
 PLATFORMS = [
     "ios",
@@ -171,8 +174,6 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
             ours[their_zip_id] = their_item
 
 
-PROJECT_ID = "glassy-totality-296020"
-BUCKET_NAME = "apple_ota_store"
 
 
 def download_meta_blob(blob: Blob) -> Tuple[OtaMetaData, int]:

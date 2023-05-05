@@ -1,0 +1,43 @@
+name: Download images 
+
+on:
+  workflow_dispatch:
+
+jobs:
+  download-images:
+    name: Test GCP access
+    runs-on: "macos-13"
+    permissions:
+      contents: "read"
+      id-token: "write"
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v3      
+      
+      - name: Auth
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: projects/868781662168/locations/global/workloadIdentityPools/prod-github/providers/github-oidc-pool
+          service_account: symx-downloader@sac-prod-sa.iam.gserviceaccount.com
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          version: ">= 363.0.0"
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: "3.x"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          brew install blacktop/tap/ipsw
+
+      - name: Download
+        run: python gcs_downloader.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
