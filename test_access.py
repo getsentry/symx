@@ -1,18 +1,14 @@
 import os
 from google.cloud import storage
-from google.auth import default
 
-# Set the GCP bucket name
-# bucket_name = os.environ['GCP_BUCKET_NAME']
-# metadata_path = os.environ['METADATA']
-bucket_name = 'symbol-collector-dev'
+BUCKET_NAME = os.environ["BUCKET_NAME"]
+PROJECT_ID = os.environ.get("PROJECT", None)
 metadata_path = 'metadata.json'
 
-#credentials = default()[0]
-storage_client = storage.Client(project=None)
+storage_client = storage.Client(project=PROJECT_ID)
 
 # Get the GCP bucket object
-bucket = storage_client.bucket(bucket_name)
+bucket = storage_client.bucket(BUCKET_NAME)
 
 blob = bucket.blob(metadata_path)
 if blob.exists():

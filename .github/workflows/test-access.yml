@@ -39,4 +39,5 @@ jobs:
       - name: Check access
         run: python test_access.py
         env:
+          BUCKET_NAME: symbol-collector-dev
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
