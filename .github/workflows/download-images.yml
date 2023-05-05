@@ -5,7 +5,7 @@ on:
 
 jobs:
   download-images:
-    name: Test GCP access
+    name: Download all images
     runs-on: "macos-13"
     permissions:
       contents: "read"
@@ -40,4 +40,5 @@ jobs:
       - name: Download
         run: python gcs_downloader.py
         env:
+          BUCKET_NAME: "symbol-collector-dev"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
