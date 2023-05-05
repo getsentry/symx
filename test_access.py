@@ -8,8 +8,8 @@ from google.auth import default
 bucket_name = 'symbol-collector-dev'
 metadata_path = 'metadata.json'
 
-credentials = default()[0]
-storage_client = storage.Client(credentials=credentials)
+#credentials = default()[0]
+storage_client = storage.Client(project=None)
 
 # Get the GCP bucket object
 bucket = storage_client.bucket(bucket_name)
