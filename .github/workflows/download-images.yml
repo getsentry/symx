@@ -40,6 +40,6 @@ jobs:
       - name: Download
         run: python gcs_downloader.py
         env:
-          BUCKET_NAME: "symbol-collector-dev"
+          BUCKET_NAME: symbol-collector-dev
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

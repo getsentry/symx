@@ -17,7 +17,7 @@ import common
 
 ARTIFACTS_META_JSON = os.environ.get('ARTIFACTS_META_JSON', "ota_image_meta.json")
 PROJECT_ID = os.environ.get("PROJECT_ID", None)
-BUCKET_NAME = os.environ.get("BUCKET_NAME")
+BUCKET_NAME = os.environ["BUCKET_NAME"]
 
 PLATFORMS = [
     "ios",
