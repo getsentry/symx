@@ -34,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install google-cloud-storage
+          pip install -r requirements.txt
 
       - name: Check access
         run: python test_access.py
