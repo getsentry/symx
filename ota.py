@@ -188,6 +188,7 @@ def download_meta_blob(blob: Blob) -> Tuple[OtaMetaData, int]:
 
 
 def load_meta_from_gcs() -> OtaMetaData:
+    print(f"Loading meta-data from {BUCKET_NAME}/{ARTIFACTS_META_JSON}")
     result: OtaMetaData = {}
     storage_client = StorageClient(project=PROJECT_ID)
     bucket = storage_client.get_bucket(BUCKET_NAME)
