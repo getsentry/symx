@@ -4,7 +4,7 @@ from google.cloud import storage
 
 BUCKET_NAME = os.environ["BUCKET_NAME"]
 PROJECT_ID = os.environ.get("PROJECT", None)
-ARTIFACT_META_JSON = 'metadata.json'
+ARTIFACTS_META_JSON = 'metadata.json'
 
 storage_client = storage.Client(project=PROJECT_ID)
 
