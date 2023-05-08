@@ -1,5 +1,6 @@
 import json
 import tempfile
+import logging
 
 from pathlib import Path
 from typing import Optional, Tuple
@@ -10,6 +11,7 @@ from google.cloud.exceptions import PreconditionFailed
 from ._common import DataClassJSONEncoder
 from ._ota import OtaArtifact, OtaMetaData, merge_meta_data
 
+logger = logging.getLogger(__name__)
 
 ARTIFACTS_META_JSON = "ota_image_meta.json"
 
@@ -19,10 +21,6 @@ class GoogleStorage:
         self.project = project
         self.client = Client(project=self.project)
         self.bucket = self.client.bucket(bucket)
-        blobs = self.client.list_blobs(self.bucket)
-
-        for blob in blobs:
-            print(blob.name)
 
     def save_meta(self, theirs: OtaMetaData) -> OtaMetaData:
         retry = 5
@@ -50,7 +48,7 @@ class GoogleStorage:
         if not ota_file.is_file():
             raise RuntimeError("Path to upload must be a file")
 
-        print("Start upload...")
+        logger.info(f"Start uploading {ota_file.name} to {self.bucket.name}")
         blob = self.bucket.blob(ota_file.name)
         if blob.exists():
             raise RuntimeError(
@@ -61,7 +59,7 @@ class GoogleStorage:
         # this file will be split into considerable chunks set timeout to something high
         blob.upload_from_filename(ota_file, timeout=3600)
 
-        print("Upload finished. Updating OTA meta-data.")
+        logger.info("Upload finished. Updating OTA meta-data.")
         ota_meta.download_path = ota_file.name
         self.update_meta_item(ota_meta)
 

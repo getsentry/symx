@@ -23,7 +23,7 @@ app.add_typer(ota_app, name="ota")
 @app.callback()
 def main(verbose: bool = typer.Option(False, "--verbose", "-v")):
     lvl = logging.INFO
-    fmt = "%(message)s"
+    fmt = "[%(levelname)s] %(asctime)s | %(name)s - - %(message)s"
     if verbose:
         lvl = logging.DEBUG
     logging.basicConfig(level=lvl, format=fmt)

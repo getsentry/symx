@@ -49,7 +49,7 @@ def parse_download_meta_output(
     meta_data: OtaMetaData,
 ) -> None:
     if result.returncode != 0:
-        print(result.stderr)
+        logger.error(f"Error: {result.stderr}")
     else:
         platform_meta = json.loads(result.stdout)
         for meta_item in platform_meta:
@@ -80,7 +80,7 @@ def parse_download_meta_output(
 def retrieve_current_meta() -> OtaMetaData:
     meta: OtaMetaData = {}
     for platform in PLATFORMS:
-        print(platform)
+        logger.info(f"Downloading meta for {platform}")
         cmd = [
             "ipsw",
             "download",
@@ -179,7 +179,7 @@ def download_ota(ota_meta: OtaArtifact, download_dir: Path) -> Path:
                 logger.debug(f"{floor(actual_mib)} MiB")
                 last_print = actual_mib
 
-    print(f"{floor(actual_mib)} MiB")
+    logger.debug(f"{floor(actual_mib)} MiB")
     if check_hash(ota_meta, filepath):
         logger.info(f"Downloading {ota_meta} completed")
         return filepath
