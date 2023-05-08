@@ -27,19 +27,18 @@ jobs:
           version: ">= 363.0.0"
 
       - name: Set up Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v4
         with:
-          python-version: "3.x"
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -e ./ 
           brew install blacktop/tap/ipsw
 
       - name: Download
-        run: python gcs_downloader.py
+        run: symx -v ota download -s gcs://symbol-collector-dev
         env:
-          BUCKET_NAME: symbol-collector-dev
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
