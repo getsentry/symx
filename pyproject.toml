@@ -1,0 +1,54 @@
+[tool.poetry]
+name = "symx"
+version = "0.1.0"
+description = ""
+authors = ["Ashley Camba Garrido <ashwoods@gmail.com>"]
+readme = "README.md"
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+typer = {extras = ["all"], version = "^0.9.0"}
+sentry-sdk = "^1.23.1"
+google-cloud-storage = "^2.9.0"
+
+
+[tool.poetry.group.dev.dependencies]
+mypy = "^1.2.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+symx = "symx:app"
+
+[tool.isort]
+py_version = 37
+profile = "black"
+force_single_line = false
+combine_as_imports = true
+src_paths = ["symx", "tests"]
+extend_skip = ["setup.py"]
+
+
+[tool.black]
+target-version = ['py37']
+preview = true
+force-exclude = '''
+.*/setup\.py$
+'''
+
+
+[tool.mypy]
+files = "symx"
+mypy_path = "symx"
+namespace_packages = true
+explicit_package_bases = true
+show_error_codes = true
+strict = true
+enable_error_code = [
+    "ignore-without-code",
+    "redundant-expr",
+    "truthy-bool",
+]

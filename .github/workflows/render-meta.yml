@@ -1,0 +1,29 @@
+name: 'Render meta-data'
+
+on:
+  workflow_dispatch:
+
+jobs:
+  list-bucket-contents:
+    name: 'Render the meta-data.json'
+    runs-on: 'macos-13'
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+    - id: 'auth'
+      uses: 'google-github-actions/auth@v1'
+      with:
+        workload_identity_provider: 'projects/868781662168/locations/global/workloadIdentityPools/prod-github/providers/github-oidc-pool'
+        service_account: 'symx-downloader@sac-prod-sa.iam.gserviceaccount.com'
+
+    - name: 'Set up Cloud SDK'
+      uses: 'google-github-actions/setup-gcloud@v1'
+      with:
+        version: '>= 363.0.0'
+
+    - name: 'Render meta-data'
+      run: |
+        gcloud storage cp gs://symbol-collector-dev/ota_image_meta.json .
+        cat ota_image_meta.json | jq
