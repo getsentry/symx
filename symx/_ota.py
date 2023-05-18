@@ -107,6 +107,7 @@ def retrieve_current_meta() -> OtaMetaData:
 
     return meta
 
+
 def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
     for their_zip_id, their_item in theirs.items():
         if their_zip_id in ours.keys():
@@ -137,6 +138,7 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
         else:
             ours[their_zip_id] = their_item
 
+
 def check_hash(ota_meta: OtaArtifact, filepath: Path) -> bool:
     if ota_meta.hash_algorithm != "SHA-1":
         raise RuntimeError(f"Unexpected hash-algo: {ota_meta.hash_algorithm}")
@@ -165,7 +167,8 @@ def download_ota(ota_meta: OtaArtifact, download_dir: Path) -> Path:
 
     # TODO: how much prefix for identity?
     filepath = (
-        download_dir / f"{ota_meta.platform}_{ota_meta.version}_{ota_meta.build}_{ota_meta.id}.zip"
+        download_dir
+        / f"{ota_meta.platform}_{ota_meta.version}_{ota_meta.build}_{ota_meta.id}.zip"
     )
     with open(filepath, "wb") as f:
         actual = 0
@@ -194,8 +197,8 @@ class Ota:
 
     def update_meta(self) -> None:
         logger.debug("Updating OTA meta-data")
-        self.meta = retrieve_current_meta()
-        self.storage.save_meta(self.meta)
+        apple_meta = retrieve_current_meta()
+        self.meta = self.storage.save_meta(apple_meta)
 
     def download(self) -> None:
         logger.debug(f"Downloading OTA images to {self.storage.bucket.name}")

@@ -12,13 +12,14 @@ SENTRY_DSN = os.environ.get("SENTRY_DSN", None)
 if SENTRY_DSN:
     sentry_sdk.init(
         dsn=SENTRY_DSN,
-    traces_sample_rate=1.0,
-)
+        traces_sample_rate=1.0,
+    )
 
 app = typer.Typer()
 
 ota_app = typer.Typer()
 app.add_typer(ota_app, name="ota")
+
 
 @app.callback()
 def main(verbose: bool = typer.Option(False, "--verbose", "-v")):
@@ -30,7 +31,9 @@ def main(verbose: bool = typer.Option(False, "--verbose", "-v")):
 
 
 @ota_app.command()
-def download(storage: str = typer.Option(..., "--storage", "-s", help="Storage")) -> None:
+def download(
+    storage: str = typer.Option(..., "--storage", "-s", help="Storage")
+) -> None:
     """
     Download OTA images to storage
     """
