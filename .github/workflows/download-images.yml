@@ -38,7 +38,7 @@ jobs:
           brew install blacktop/tap/ipsw
 
       - name: Download
-        run: symx -v ota download -s gcs://symbol-collector-dev
+        run: symx -v ota download -s gs://symbol-collector-dev
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

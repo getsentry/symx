@@ -1,4 +1,6 @@
 import typer
+from rich import print
+
 from urllib.parse import urlparse
 import sentry_sdk
 import os
@@ -38,7 +40,11 @@ def download(
     Download OTA images to storage
     """
     uri = urlparse(storage)
-    if uri.scheme == "gcs":
+    if uri.scheme == "gs":
         storage_backend = GoogleStorage(project=uri.username, bucket=uri.hostname)
         ota = Ota(storage=storage_backend)
         ota.download()
+    else:
+        print(
+            '[bold red]Unsupported "--storage" URI-scheme used:[/bold red] currently symx supports "gs://" only'
+        )
