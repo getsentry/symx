@@ -3,14 +3,12 @@ import json
 import logging
 import subprocess
 import tempfile
-
 from dataclasses import dataclass
 from math import floor
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import requests
-
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +22,9 @@ PLATFORMS = [
     "macos",
     "recovery",
 ]
+
+
+ARTIFACTS_META_JSON = "ota_image_meta.json"
 
 
 @dataclass

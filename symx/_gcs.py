@@ -9,11 +9,20 @@ from google.cloud.storage import Blob, Client  # type: ignore
 from google.cloud.exceptions import PreconditionFailed
 
 from ._common import DataClassJSONEncoder
-from ._ota import OtaArtifact, OtaMetaData, merge_meta_data
+from ._ota import OtaArtifact, OtaMetaData, merge_meta_data, ARTIFACTS_META_JSON
 
 logger = logging.getLogger(__name__)
 
-ARTIFACTS_META_JSON = "ota_image_meta.json"
+
+def _download_and_hydrate_meta(blob: Blob) -> Tuple[OtaMetaData, int]:
+    result: OtaMetaData = {}
+    with tempfile.NamedTemporaryFile() as f:
+        blob.download_to_filename(f.name)
+        generation = blob.generation
+        for k, v in json.load(f.file).items():
+            result[k] = OtaArtifact(**v)
+
+    return result, generation
 
 
 class GoogleStorage:
@@ -28,7 +37,7 @@ class GoogleStorage:
         while retry > 0:
             blob = self.bucket.blob(ARTIFACTS_META_JSON)
             if blob.exists():
-                ours, generation_match_precondition = self.download_meta_blob(blob)
+                ours, generation_match_precondition = _download_and_hydrate_meta(blob)
             else:
                 ours, generation_match_precondition = {}, 0
 
@@ -63,23 +72,13 @@ class GoogleStorage:
         ota_meta.download_path = ota_file.name
         self.update_meta_item(ota_meta)
 
-    def download_meta_blob(self, blob: Blob) -> Tuple[OtaMetaData, int]:
-        result: OtaMetaData = {}
-        with tempfile.NamedTemporaryFile() as f:
-            blob.download_to_filename(f.name)
-            generation = blob.generation
-            for k, v in json.load(f.file).items():
-                result[k] = OtaArtifact(**v)
-
-        return result, generation
-
     def update_meta_item(self, ota_meta: OtaArtifact) -> OtaMetaData:
         retry = 5
 
         while retry > 0:
             blob = self.bucket.blob(ARTIFACTS_META_JSON)
             if blob.exists():
-                ours, generation_match_precondition = self.download_meta_blob(blob)
+                ours, generation_match_precondition = _download_and_hydrate_meta(blob)
             else:
                 ours, generation_match_precondition = {}, 0
 
