@@ -33,11 +33,9 @@ def main(verbose: bool = typer.Option(False, "--verbose", "-v")):
 
 
 @ota_app.command()
-def download(
-    storage: str = typer.Option(..., "--storage", "-s", help="Storage")
-) -> None:
+def mirror(storage: str = typer.Option(..., "--storage", "-s", help="Storage")) -> None:
     """
-    Download OTA images to storage
+    Mirror OTA images to storage
     """
     uri = urlparse(storage)
     if uri.scheme == "gs":
