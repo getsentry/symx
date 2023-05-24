@@ -1,0 +1,32 @@
+name: 'Interact with GCS'
+
+on:
+  workflow_dispatch:
+
+jobs:
+  interact:
+    name: 'GCS shell'
+    runs-on: 'macos-13'
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+    - id: 'auth'
+      uses: 'google-github-actions/auth@v1'
+      with:
+        workload_identity_provider: 'projects/868781662168/locations/global/workloadIdentityPools/prod-github/providers/github-oidc-pool'
+        service_account: 'symx-downloader@sac-prod-sa.iam.gserviceaccount.com'
+
+    - name: 'Set up Cloud SDK'
+      uses: 'google-github-actions/setup-gcloud@v1'
+      with:
+        version: '>= 363.0.0'
+
+    - name: 'Setup upterm session'
+      uses: 'lhotari/action-upterm@v1'
+      with:
+        ## limits ssh access and adds the ssh public key for the user which triggered the workflow
+        limit-access-to-actor: true
+        ## limits ssh access and adds the ssh public keys of the listed GitHub users
+        limit-access-to-users: supervacuus,ashwoods
