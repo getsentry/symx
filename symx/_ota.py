@@ -201,8 +201,8 @@ class Ota:
         apple_meta = retrieve_current_meta()
         self.meta = self.storage.save_meta(apple_meta)
 
-    def download(self) -> None:
-        logger.debug(f"Downloading OTA images to {self.storage.bucket.name}")
+    def mirror(self) -> None:
+        logger.debug(f"Mirroring OTA images to {self.storage.bucket.name}")
 
         self.update_meta()
 
@@ -213,3 +213,4 @@ class Ota:
 
                 ota_file = download_ota(v, Path(download_dir))
                 self.storage.save_ota(v, ota_file)
+                ota_file.unlink()

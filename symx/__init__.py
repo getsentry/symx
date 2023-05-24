@@ -41,7 +41,7 @@ def mirror(storage: str = typer.Option(..., "--storage", "-s", help="Storage")) 
     if uri.scheme == "gs":
         storage_backend = GoogleStorage(project=uri.username, bucket=uri.hostname)
         ota = Ota(storage=storage_backend)
-        ota.download()
+        ota.mirror()
     else:
         print(
             '[bold red]Unsupported "--storage" URI-scheme used:[/bold red] currently symx supports "gs://" only'
