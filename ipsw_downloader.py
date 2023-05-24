@@ -1,10 +1,15 @@
 import subprocess
 from pathlib import Path
 
-import common
+from symx._common import (
+    Device,
+    downloader_parse_args,
+    downloader_validate_shell_deps,
+    ipsw_device_list,
+)
 
 
-def download_latest_ipsw_for(output_dir: Path, device: common.Device) -> None:
+def download_latest_ipsw_for(output_dir: Path, device: Device) -> None:
     """downloads latest IPSW for specific device"""
     cmd = [
         "ipsw",
@@ -52,15 +57,15 @@ def download_latest_ipsws(output_dir: Path) -> None:
 
 
 def main() -> None:
-    args = common.downloader_parse_args()
-    common.downloader_validate_shell_deps()
+    args = downloader_parse_args()
+    downloader_validate_shell_deps()
 
     # prioritize latest for download
     download_latest_ipsws(args.output_dir)
     download_latest_macos_ipsw(args.output_dir)
 
     # then load by device (or release backwards?)
-    device_list = common.ipsw_device_list()
+    device_list = ipsw_device_list()
     print(device_list)
     for device in device_list:
         download_latest_ipsw_for(args.output_dir, device)

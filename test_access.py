@@ -4,8 +4,7 @@ from google.cloud import storage
 
 BUCKET_NAME = os.environ["BUCKET_NAME"]
 PROJECT_ID = os.environ.get("PROJECT", None)
-ARTIFACTS_META_JSON = 'metadata.json'
-
+ARTIFACTS_META_JSON = "metadata.json"
 
 
 def download_meta_from_gcs(bucket) -> None:

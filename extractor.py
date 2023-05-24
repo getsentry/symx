@@ -10,15 +10,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-import common
-import ota
+import ota_meta_fs
+from symx._common import Arch, directory_arg_type, ipsw_version
 
 DYLD_SHARED_CACHE = "dyld_shared_cache"
 
 
 @dataclass
 class DSCSearchResult:
-    arch: common.Arch
+    arch: Arch
     artifact: Path
     split_dir: Optional[Path]
 
@@ -43,7 +43,7 @@ def parse_args() -> Namespace:
         "--input_dir",
         dest="input_dir",
         required=True,
-        type=common.directory_arg_type,
+        type=directory_arg_type,
         help="path to the input directory that is scanned for images to extract symbols from",
     )
     parser.add_argument(
@@ -56,7 +56,7 @@ def parse_args() -> Namespace:
 
 
 def validate_shell_deps() -> None:
-    version = common.ipsw_version()
+    version = ipsw_version()
     if version:
         print(f"Using ipsw {version}")
     else:
@@ -153,7 +153,7 @@ def find_dsc(input_dir: Path) -> list[DSCSearchResult]:
 
     dsc_search_results = []
     for path_prefix in dsc_path_prefix_options:
-        for arch in common.Arch:
+        for arch in Arch:
             dsc_path = input_dir / (path_prefix + DYLD_SHARED_CACHE + "_" + arch.value)
             if os.path.isfile(dsc_path):
                 dsc_search_results.append(
@@ -265,7 +265,7 @@ def split_and_symsort_dsc(
 
 
 def extract_dyld_cache(artifact: Path, input_dir: Path, output_dir: Path) -> None:
-    meta_data = ota.load_meta_from_fs(input_dir)
+    meta_data = ota_meta_fs.load_meta_from_fs(input_dir)
     zip_id = artifact.name[artifact.name.rfind("_") + 1 : -4]
     if zip_id not in meta_data.keys():
         raise DscNoMetaData(
