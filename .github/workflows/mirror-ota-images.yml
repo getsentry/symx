@@ -1,11 +1,10 @@
-name: Download images 
-
+name: Mirror OTA images
 on:
   workflow_dispatch:
 
 jobs:
-  download-images:
-    name: Download all images
+  mirror-images:
+    name: Mirror images
     runs-on: "macos-13"
     permissions:
       contents: "read"
@@ -37,7 +36,7 @@ jobs:
           pip install -e ./ 
           brew install blacktop/tap/ipsw
 
-      - name: Download
+      - name: symx OTA Mirror
         run: symx -v ota mirror -s gs://symbol-collector-dev
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
