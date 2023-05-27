@@ -1,0 +1,43 @@
+name: Migrate storage
+on:
+  workflow_dispatch:
+
+jobs:
+  mirror-images:
+    name: Migrate storage
+    runs-on: "macos-13"
+    permissions:
+      contents: "read"
+      id-token: "write"
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v3      
+      
+      - name: Auth
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: projects/868781662168/locations/global/workloadIdentityPools/prod-github/providers/github-oidc-pool
+          service_account: symx-downloader@sac-prod-sa.iam.gserviceaccount.com
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          version: ">= 363.0.0"
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ./ 
+          brew install blacktop/tap/ipsw
+
+      - name: symx OTA migrate-storage
+        run: symx -v ota migrate-storage -s gs://symbol-collector-dev
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
