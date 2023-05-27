@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import logging
 
@@ -9,12 +10,23 @@ from google.cloud.storage import Blob, Client  # type: ignore
 from google.cloud.exceptions import PreconditionFailed
 
 from ._common import DataClassJSONEncoder
-from ._ota import OtaArtifact, OtaMetaData, merge_meta_data, ARTIFACTS_META_JSON
+from ._ota import (
+    OtaArtifact,
+    OtaMetaData,
+    merge_meta_data,
+    ARTIFACTS_META_JSON,
+    OtaProcessingState,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _download_and_hydrate_meta(blob: Blob) -> Tuple[OtaMetaData, int]:
+def convert_image_name_to_path(old_name: str) -> str:
+    [platform, version, build, file] = old_name.split("_")
+    return f"mirror/ota/{platform}/{version}/{build}/{file}"
+
+
+def download_and_hydrate_meta(blob: Blob) -> Tuple[OtaMetaData, int]:
     result: OtaMetaData = {}
     with tempfile.NamedTemporaryFile() as f:
         blob.download_to_filename(f.name)
@@ -37,7 +49,7 @@ class GoogleStorage:
         while retry > 0:
             blob = self.bucket.blob(ARTIFACTS_META_JSON)
             if blob.exists():
-                ours, generation_match_precondition = _download_and_hydrate_meta(blob)
+                ours, generation_match_precondition = download_and_hydrate_meta(blob)
             else:
                 ours, generation_match_precondition = {}, 0
 
@@ -65,11 +77,15 @@ class GoogleStorage:
                 " meta-data"
             )
 
-        # this file will be split into considerable chunks set timeout to something high
+        # this file will be split into considerable chunks: set timeout to something high
         blob.upload_from_filename(ota_file, timeout=3600)
+        mirror_name = convert_image_name_to_path(ota_file.name)
+        self.bucket.rename(blob, mirror_name)
 
         logger.info("Upload finished. Updating OTA meta-data.")
-        ota_meta.download_path = ota_file.name
+        ota_meta.download_path = mirror_name
+        ota_meta.processing_state = OtaProcessingState.MIRRORED
+        ota_meta.last_run = int(os.getenv("GITHUB_RUN_ID", 0))
         self.update_meta_item(ota_meta)
 
     def update_meta_item(self, ota_meta: OtaArtifact) -> OtaMetaData:
@@ -78,7 +94,7 @@ class GoogleStorage:
         while retry > 0:
             blob = self.bucket.blob(ARTIFACTS_META_JSON)
             if blob.exists():
-                ours, generation_match_precondition = _download_and_hydrate_meta(blob)
+                ours, generation_match_precondition = download_and_hydrate_meta(blob)
             else:
                 ours, generation_match_precondition = {}, 0
 

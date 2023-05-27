@@ -1,17 +1,20 @@
 import hashlib
 import json
 import logging
+import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from enum import Enum
 from math import floor
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
 
-logger = logging.getLogger(__name__)
+MiB = 1024 * 1024
 
+logger = logging.getLogger(__name__)
 
 PLATFORMS = [
     "ios",
@@ -23,8 +26,37 @@ PLATFORMS = [
     "recovery",
 ]
 
-
 ARTIFACTS_META_JSON = "ota_image_meta.json"
+
+
+class OtaProcessingState(str, Enum):
+    # we retrieved metadata from apple and merged it with ours
+    INDEXED = "indexed"
+
+    # beta and normal releases are often the exact same file and don't need to be stored or processed twice
+    INDEXED_DUPLICATE = "indexed_duplicate"
+
+    # we mirrored that artifact, and it is ready for further processing
+    MIRRORED = "mirrored"
+
+    # we failed to retrieve or upload the artifact (OTAs can get unreachable)
+    MIRRORING_FAILED = "mirroring_failed"
+
+    # we stored the extracted dyld_shared_cache (optimization, not implemented yet)
+    DSC_EXTRACTED = "dsc_extracted"
+
+    # there was no dyld_shared_cache in the OTA, because it was a partial update
+    DSC_EXTRACTION_FAILED = "dsc_extraction_failed"
+
+    # the symx goal: symbols are stored for symbolicator to grab
+    SYMBOLS_EXTRACTED = "symbols_extracted"
+
+    # this would typically happen when we want to update the symbol store from a given image atomically,
+    # and it turns out there are debug-ids already present but with different hash or something similar.
+    SYMBOL_EXTRACTION_FAILED = "symbol_extraction_failed"
+
+    # manually assigned to ignore artifact from any processing
+    IGNORED = "ignored"
 
 
 @dataclass
@@ -39,6 +71,11 @@ class OtaArtifact:
     devices: Optional[List[str]]
     hash: str
     hash_algorithm: str
+    last_run: int = 0  # currently the run_id of the GHA Workflow so we can look it up
+    processing_state: OtaProcessingState = OtaProcessingState.INDEXED
+
+    def is_indexed(self) -> bool:
+        return self.processing_state == OtaProcessingState.INDEXED
 
 
 OtaMetaData = dict[str, OtaArtifact]
@@ -48,9 +85,10 @@ def parse_download_meta_output(
     platform: str,
     result: subprocess.CompletedProcess[bytes],
     meta_data: OtaMetaData,
+    beta: bool,
 ) -> None:
     if result.returncode != 0:
-        logger.error(f"Error: {result.stderr}")
+        logger.error(f"Error: {result.stderr!r}")
     else:
         platform_meta = json.loads(result.stdout)
         for meta_item in platform_meta:
@@ -64,7 +102,15 @@ def parse_download_meta_output(
             else:
                 desc = []
 
-            meta_data[zip_id] = OtaArtifact(
+            if beta:
+                # betas can have the same zip-id as later releases, often with the same contents
+                # they only differ by the build. we need to tag them in the key and we should add
+                # a state INDEXED_DUPLICATE as to not process them twice.
+                key = zip_id + "_beta"
+            else:
+                key = zip_id
+
+            meta_data[key] = OtaArtifact(
                 id=zip_id,
                 build=meta_item["build"],
                 description=desc,
@@ -75,6 +121,8 @@ def parse_download_meta_output(
                 download_path=None,
                 hash=meta_item["hash"],
                 hash_algorithm=meta_item["hash_algorithm"],
+                processing_state=OtaProcessingState.INDEXED,
+                last_run=int(os.getenv("GITHUB_RUN_ID", 0)),
             )
 
 
@@ -93,17 +141,13 @@ def retrieve_current_meta() -> OtaMetaData:
         ]
 
         parse_download_meta_output(
-            platform,
-            subprocess.run(cmd, capture_output=True),
-            meta,
+            platform, subprocess.run(cmd, capture_output=True), meta, False
         )
 
         beta_cmd = cmd.copy()
         beta_cmd.append("--beta")
         parse_download_meta_output(
-            platform,
-            subprocess.run(beta_cmd, capture_output=True),
-            meta,
+            platform, subprocess.run(beta_cmd, capture_output=True), meta, True
         )
 
     return meta
@@ -139,6 +183,19 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
         else:
             ours[their_zip_id] = their_item
 
+            our_item = ours[their_zip_id]
+            # identify beta <-> normal release duplicates
+            if (
+                their_item.hash == our_item.hash
+                and their_item.hash_algorithm == our_item.hash_algorithm
+                and their_item.platform == our_item.platform
+                and their_item.version == our_item.version
+                and their_item.build != our_item.build
+            ):
+                ours[
+                    their_zip_id
+                ].processing_state = OtaProcessingState.INDEXED_DUPLICATE
+
 
 def check_hash(ota_meta: OtaArtifact, filepath: Path) -> bool:
     if ota_meta.hash_algorithm != "SHA-1":
@@ -163,7 +220,7 @@ def download_ota(ota_meta: OtaArtifact, download_dir: Path) -> Path:
         raise RuntimeError("OTA Url does not respond with a content-length header")
 
     total = int(content_length)
-    total_mib = total / (1024 * 1024)
+    total_mib = total / MiB
     logger.debug(f"OTA Filesize: {floor(total_mib)} MiB")
 
     # TODO: how much prefix for identity?
@@ -178,7 +235,7 @@ def download_ota(ota_meta: OtaArtifact, download_dir: Path) -> Path:
             f.write(chunk)
             actual = actual + len(chunk)
 
-            actual_mib = actual / (1024 * 1024)
+            actual_mib = actual / MiB
             if actual_mib - last_print > 100:
                 logger.debug(f"{floor(actual_mib)} MiB")
                 last_print = actual_mib
@@ -207,10 +264,12 @@ class Ota:
         self.update_meta()
 
         with tempfile.TemporaryDirectory() as download_dir:
-            for k, v in self.meta.items():
-                if v.download_path:
+            key: str
+            ota: OtaArtifact
+            for key, ota in self.meta.items():
+                if not ota.is_indexed():
                     continue
 
-                ota_file = download_ota(v, Path(download_dir))
-                self.storage.save_ota(v, ota_file)
+                ota_file = download_ota(ota, Path(download_dir))
+                self.storage.save_ota(ota, ota_file)
                 ota_file.unlink()
