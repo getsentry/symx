@@ -34,7 +34,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -e ./ 
-          brew install blacktop/tap/ipsw
+          sudo snap install ipsw
 
       - name: Install Apple Inc. Root
         run: |
