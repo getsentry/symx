@@ -80,7 +80,7 @@ class GoogleStorage:
         # this file will be split into considerable chunks: set timeout to something high
         blob.upload_from_filename(ota_file, timeout=3600)
         mirror_name = convert_image_name_to_path(ota_file.name)
-        self.bucket.rename(blob, mirror_name)
+        self.bucket.rename_blob(blob, mirror_name)
 
         logger.info("Upload finished. Updating OTA meta-data.")
         ota_meta.download_path = mirror_name
