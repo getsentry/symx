@@ -34,6 +34,8 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -e ./ 
+          sudo apt update
+          sudo apt upgrade
           sudo snap install ipsw
 
       - name: symx OTA Mirror
