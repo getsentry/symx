@@ -5,7 +5,7 @@ from google.cloud.storage import Bucket, Blob
 
 from symx._common import DataClassJSONEncoder
 from symx._gcs import convert_image_name_to_path, download_and_hydrate_meta
-from symx._ota import ARTIFACTS_META_JSON, OtaMetaData, OtaArtifact, OtaProcessingState
+from symx._ota import ARTIFACTS_META_JSON, OtaMetaData, OtaProcessingState
 
 
 def _apply_new_directory_layout(bucket: Bucket) -> Optional[Blob]:
@@ -26,26 +26,18 @@ def _apply_new_directory_layout(bucket: Bucket) -> Optional[Blob]:
 
 
 def _update_meta(meta: OtaMetaData) -> None:
-    key: str
-    ota: OtaArtifact
-    beta_keys = []
-    for key, ota in meta.items():
-        # Step 2: let all metas reference our first long mirroring run
-        meta[key].last_run = 5017535638
-        if ota.download_path:
-            # Step 3: make sure the new filenames are reflected in the mirrored artifacts
-            meta[key].download_path = convert_image_name_to_path(ota.download_path)
-            # Step 4: make sure "mirrored" state is recorded
-            meta[key].processing_state = OtaProcessingState.MIRRORED
+    ota_id = "d3e35075eee610c4c54c0dd94a35b46c22ce9cbe"
 
-        # Step 5a: retrieve known BETAs...
-        if ota.build in ("20F6066", "20L6563", "20L6562"):
-            beta_keys.append(key)
+    # Step 2: make sure the new filenames are reflected in the mirrored artifacts
+    meta[ota_id].download_path = convert_image_name_to_path(
+        "ios_16.5_20F66_d3e35075eee610c4c54c0dd94a35b46c22ce9cbe.zip"
+    )
 
-    # Step 5b: ...and mark them as beta in the look-up key, so we
-    # can keep them together with later releases of the same name
-    for key in beta_keys:
-        meta[key + "_beta"] = meta.pop(key)
+    # Step 3: make sure "mirrored" state is recorded
+    meta[ota_id].processing_state = OtaProcessingState.MIRRORED
+
+    # Step 4: set last run to where it was downloaded (since the error was unrelated to the artifact processed)
+    meta[ota_id].last_run = 5122972649
 
 
 def migrate(bucket: Bucket) -> None:
