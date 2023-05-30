@@ -34,9 +34,14 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -e ./ 
-          sudo apt update
-          sudo apt upgrade
           sudo snap install ipsw
+
+      - name: Install Apple Inc. Root
+        run: |
+          wget https://www.apple.com/appleca/AppleIncRootCertificate.cer
+          openssl x509 -inform DER -in AppleIncRootCertificate.cer -out AppleIncRootCertificate.crt
+          sudo cp AppleIncRootCertificate.crt /usr/local/share/ca-certificates
+          sudo update-ca-certificates
 
       - name: symx OTA Mirror
         run: symx -v ota mirror -s gs://symbol-collector-dev
