@@ -5,7 +5,7 @@ on:
 jobs:
   mirror-images:
     name: Mirror images
-    runs-on: "macos-13"
+    runs-on: "ubuntu-22.04"
     permissions:
       contents: "read"
       id-token: "write"
@@ -34,7 +34,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -e ./ 
-          brew install blacktop/tap/ipsw
+          sudo snap install ipsw
 
       - name: symx OTA Mirror
         run: symx -v ota mirror -s gs://symbol-collector-dev
