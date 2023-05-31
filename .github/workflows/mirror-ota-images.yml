@@ -1,6 +1,7 @@
 name: Mirror OTA images
 on:
   workflow_dispatch:
+concurrency: ota_mirror
 
 jobs:
   mirror-images:
