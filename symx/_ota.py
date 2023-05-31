@@ -1,9 +1,11 @@
+import datetime
 import hashlib
 import json
 import logging
 import os
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from enum import Enum
 from math import floor
@@ -104,7 +106,7 @@ def parse_download_meta_output(
 
             if beta:
                 # betas can have the same zip-id as later releases, often with the same contents
-                # they only differ by the build. we need to tag them in the key and we should add
+                # they only differ by the build. we need to tag them in the key, and we should add
                 # a state INDEXED_DUPLICATE as to not process them twice.
                 key = zip_id + "_beta"
             else:
@@ -258,15 +260,21 @@ class Ota:
         apple_meta = retrieve_current_meta()
         self.meta = self.storage.save_meta(apple_meta)
 
-    def mirror(self) -> None:
+    def mirror(self, timeout: datetime.timedelta) -> None:
         logger.debug(f"Mirroring OTA images to {self.storage.bucket.name}")
 
+        start = time.time()
         self.update_meta()
-
         with tempfile.TemporaryDirectory() as download_dir:
             key: str
             ota: OtaArtifact
             for key, ota in self.meta.items():
+                if int(time.time() - start) > timeout.seconds:
+                    logger.info(
+                        f"Exiting OTA mirror due to elapsed timeout of {timeout}"
+                    )
+                    return
+
                 if not ota.is_indexed():
                     continue
 

@@ -1,16 +1,16 @@
+import datetime
+import logging
+import os
 from typing import Optional
+from urllib.parse import urlparse
 
+import sentry_sdk
 import typer
 from rich import print
 
-from urllib.parse import urlparse
-import sentry_sdk
-import os
-import logging
-
 from ._gcs import GoogleStorage
-from ._ota import Ota
 from ._maintenance import migrate
+from ._ota import Ota
 
 SENTRY_DSN = os.environ.get("SENTRY_DSN", None)
 
@@ -53,15 +53,24 @@ def _init_storage(storage: str) -> Optional[GoogleStorage]:
 
 
 @ota_app.command()
-def mirror(storage: str = typer.Option(..., "--storage", "-s", help="Storage")) -> None:
+def mirror(
+    storage: str = typer.Option(
+        ..., "--storage", "-s", help="URI to a supported storage backend"
+    ),
+    timeout: int = typer.Option(
+        330,
+        "--timeout",
+        "-t",
+        help="timeout in minutes triggering an ordered shutdown after it elapsed",
+    ),
+) -> None:
     """
     Mirror OTA images to storage
-    :param storage: URI to a supported storage backend
     """
     storage_backend = _init_storage(storage)
     if storage_backend:
         ota = Ota(storage=storage_backend)
-        ota.mirror()
+        ota.mirror(datetime.timedelta(minutes=timeout))
 
 
 @ota_app.command()
