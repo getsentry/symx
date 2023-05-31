@@ -1,11 +1,11 @@
-name: 'Render meta-data'
+name: 'Query meta-data'
 
 on:
   workflow_dispatch:
 
 jobs:
   list-bucket-contents:
-    name: 'Render the meta-data.json'
+    name: 'Query the meta-data store'
     runs-on: 'ubuntu-22.04'
     permissions:
       contents: 'read'
@@ -27,3 +27,8 @@ jobs:
       run: |
         gcloud storage cp gs://symbol-collector-dev/ota_image_meta.json .
         cat ota_image_meta.json | jq
+
+    - uses: actions/upload-artifact@v3
+      with:
+        name: ota-image-meta
+        path: ota_image_meta.json
