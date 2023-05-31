@@ -70,7 +70,7 @@ class OtaArtifact:
     id: str
     url: str
     download_path: Optional[str]
-    devices: Optional[List[str]]
+    devices: List[str]
     hash: str
     hash_algorithm: str
     last_run: int = 0  # currently the run_id of the GHA Workflow so we can look it up
@@ -155,16 +155,21 @@ def retrieve_current_meta() -> OtaMetaData:
     return meta
 
 
+def merge_lists(a: List[str], b: List[str]) -> List[str]:
+    return list(set(a + b))
+
+
 def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
-    for their_zip_id, their_item in theirs.items():
-        if their_zip_id in ours.keys():
-            our_item = ours[their_zip_id]
-            if (
-                their_item.description != our_item.description
-                and len(their_item.description) != 0
-                and their_item.description[0] not in our_item.description
-            ):
-                ours[their_zip_id].description.extend(their_item.description)
+    for their_key, their_item in theirs.items():
+        if their_key in ours.keys():
+            # we already have that id in out meta-store
+            our_item = ours[their_key]
+
+            # merge data that can change over time but has no effect on the identity of the artifact
+            ours[their_key].description = merge_lists(
+                our_item.description, their_item.description
+            )
+            ours[their_key].devices = merge_lists(our_item.devices, their_item.devices)
 
             # this is a little bit the core of the whole thing:
             # - what does apple consider identity?
