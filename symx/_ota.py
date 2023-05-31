@@ -175,7 +175,6 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
                 and their_item.version == our_item.version
                 and their_item.platform == our_item.platform
                 and their_item.url == our_item.url
-                and their_item.devices == our_item.devices
                 and their_item.hash == our_item.hash
                 and their_item.hash_algorithm == our_item.hash_algorithm
             ):
@@ -183,20 +182,21 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
                     f"Same matching keys with different value:\n\tlocal: {our_item}\n\tapple: {their_item}"
                 )
         else:
-            ours[their_zip_id] = their_item
+            # it is a new key, store their item in our store
+            ours[their_key] = their_item
 
-            our_item = ours[their_zip_id]
-            # identify beta <-> normal release duplicates
-            if (
-                their_item.hash == our_item.hash
-                and their_item.hash_algorithm == our_item.hash_algorithm
-                and their_item.platform == our_item.platform
-                and their_item.version == our_item.version
-                and their_item.build != our_item.build
-            ):
-                ours[
-                    their_zip_id
-                ].processing_state = OtaProcessingState.INDEXED_DUPLICATE
+            # identify and mark beta <-> normal release duplicates
+            for our_k, our_v in ours.items():
+                if (
+                    their_item.hash == our_v.hash
+                    and their_item.hash_algorithm == our_v.hash_algorithm
+                    and their_item.platform == our_v.platform
+                    and their_item.version == our_v.version
+                    and their_item.build != our_v.build
+                ):
+                    ours[
+                        their_key
+                    ].processing_state = OtaProcessingState.INDEXED_DUPLICATE
 
 
 def check_hash(ota_meta: OtaArtifact, filepath: Path) -> bool:

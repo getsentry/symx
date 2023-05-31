@@ -1,7 +1,7 @@
 import json
 from typing import Optional
 
-from google.cloud.storage import Bucket, Blob
+from google.cloud.storage import Bucket, Blob  # type: ignore
 
 from symx._common import DataClassJSONEncoder
 from symx._gcs import convert_image_name_to_path, download_and_hydrate_meta
