@@ -119,7 +119,7 @@ def parse_download_meta_output(
                 version=meta_item["version"],
                 platform=platform,
                 url=url,
-                devices=meta_item.get("devices"),
+                devices=meta_item.get("devices", []),
                 download_path=None,
                 hash=meta_item["hash"],
                 hash_algorithm=meta_item["hash_algorithm"],
@@ -156,6 +156,10 @@ def retrieve_current_meta() -> OtaMetaData:
 
 
 def merge_lists(a: List[str], b: List[str]) -> List[str]:
+    if a is None:
+        a = []
+    if b is None:
+        b = []
     return list(set(a + b))
 
 
