@@ -24,4 +24,4 @@ jobs:
         version: '>= 363.0.0'
 
     - name: 'List bucket contents'
-      run: 'gcloud storage ls --recursive gs://symbol-collector-dev'
+      run: 'gcloud storage ls -r -a -L gs://symbol-collector-dev'
