@@ -14,13 +14,16 @@ from ._ota import Ota
 
 SENTRY_DSN = os.environ.get("SENTRY_DSN", None)
 
-if SENTRY_DSN:
-    sentry_sdk.init(
-        dsn=SENTRY_DSN,
-        traces_sample_rate=1.0,
-    )
 
-app = typer.Typer()
+def sentry_init() -> None:
+    if SENTRY_DSN:
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            traces_sample_rate=1.0,
+        )
+
+
+app = typer.Typer(callback=sentry_init)
 
 ota_app = typer.Typer()
 app.add_typer(ota_app, name="ota")
