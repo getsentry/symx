@@ -2,7 +2,7 @@ name: Mirror OTA images
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */4 * * *"
+    - cron: "30 */6 * * *"
 
 concurrency: ota_mirror
 
