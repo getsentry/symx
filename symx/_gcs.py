@@ -70,7 +70,7 @@ class GoogleStorage:
         if blob.exists():
             ours, _ = download_and_hydrate_meta(blob)
         else:
-            logging.warning("Failed to load meta-data")
+            logger.warning("Failed to load meta-data")
             return None
 
         return ours
@@ -85,10 +85,10 @@ class GoogleStorage:
         mirror_filename = convert_image_name_to_path(ota_file.name)
         blob = self.bucket.blob(mirror_filename)
         if blob.exists():
-            raise RuntimeError(
-                "This file was already uploaded, maybe we have an identity problem or corrupted"
-                " meta-data"
+            logger.error(
+                "This file was already uploaded, maybe we have an identity problem or corrupted meta-data"
             )
+            return
 
         # this file will be split into considerable chunks: set timeout to something high
         blob.upload_from_filename(ota_file, timeout=3600)
