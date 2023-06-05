@@ -70,7 +70,8 @@ class GoogleStorage:
             raise RuntimeError("Path to upload must be a file")
 
         logger.info(f"Start uploading {ota_file.name} to {self.bucket.name}")
-        blob = self.bucket.blob(ota_file.name)
+        mirror_filename = convert_image_name_to_path(ota_file.name)
+        blob = self.bucket.blob(mirror_filename)
         if blob.exists():
             raise RuntimeError(
                 "This file was already uploaded, maybe we have an identity problem or corrupted"
@@ -79,11 +80,9 @@ class GoogleStorage:
 
         # this file will be split into considerable chunks: set timeout to something high
         blob.upload_from_filename(ota_file, timeout=3600)
-        mirror_name = convert_image_name_to_path(ota_file.name)
-        self.bucket.rename_blob(blob, mirror_name)
 
         logger.info("Upload finished. Updating OTA meta-data.")
-        ota_meta.download_path = mirror_name
+        ota_meta.download_path = mirror_filename
         ota_meta.processing_state = OtaProcessingState.MIRRORED
         ota_meta.last_run = int(os.getenv("GITHUB_RUN_ID", 0))
         self.update_meta_item(ota_meta)
