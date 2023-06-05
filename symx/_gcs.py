@@ -111,18 +111,23 @@ class GoogleStorage:
             blob.reload()
             remote_hash = blob.md5_hash
             local_hash = _fs_md5_hash(ota_file)
-            if remote_hash != local_hash:
+            if remote_hash == local_hash:
+                logger.info(
+                    f'"{mirror_filename}" was already uploaded with matching MD5 hash. '
+                    f'Updating meta for "{ota_meta_key}" accordingly.'
+                )
+            else:
                 logger.error(
                     f'"{mirror_filename}" was already uploaded and MD5 hash differs from the one uploaded '
-                    f"(remote = {remote_hash}, local = {local_hash}) "
-                    f"maybe we have an identity problem or corrupted meta-data"
+                    f"(remote = {remote_hash}, local = {local_hash}). "
+                    f"Maybe we have insufficient identity or corrupted meta-data?"
                 )
                 return
         else:
             # this file will be split into considerable chunks: set timeout to something high
             blob.upload_from_filename(ota_file, timeout=3600)
+            logger.info("Upload finished. Updating OTA meta-data.")
 
-        logger.info("Upload finished. Updating OTA meta-data.")
         ota_meta.download_path = mirror_filename
         ota_meta.processing_state = OtaProcessingState.MIRRORED
         ota_meta.last_run = int(os.getenv("GITHUB_RUN_ID", 0))
