@@ -65,7 +65,19 @@ class GoogleStorage:
 
         raise RuntimeError("Failed to update meta-data")
 
-    def save_ota(self, ota_meta: OtaArtifact, ota_file: Path) -> None:
+    def load_meta(self) -> Optional[OtaMetaData]:
+        blob = self.bucket.blob(ARTIFACTS_META_JSON)
+        if blob.exists():
+            ours, _ = download_and_hydrate_meta(blob)
+        else:
+            logging.warning("Failed to load meta-data")
+            return None
+
+        return ours
+
+    def save_ota(
+        self, ota_meta_key: str, ota_meta: OtaArtifact, ota_file: Path
+    ) -> None:
         if not ota_file.is_file():
             raise RuntimeError("Path to upload must be a file")
 
@@ -85,9 +97,9 @@ class GoogleStorage:
         ota_meta.download_path = mirror_filename
         ota_meta.processing_state = OtaProcessingState.MIRRORED
         ota_meta.last_run = int(os.getenv("GITHUB_RUN_ID", 0))
-        self.update_meta_item(ota_meta)
+        self.update_meta_item(ota_meta_key, ota_meta)
 
-    def update_meta_item(self, ota_meta: OtaArtifact) -> OtaMetaData:
+    def update_meta_item(self, ota_meta_key: str, ota_meta: OtaArtifact) -> OtaMetaData:
         retry = 5
 
         while retry > 0:
@@ -97,7 +109,7 @@ class GoogleStorage:
             else:
                 ours, generation_match_precondition = {}, 0
 
-            ours[ota_meta.id] = ota_meta
+            ours[ota_meta_key] = ota_meta
             try:
                 blob.upload_from_string(
                     json.dumps(ours, cls=DataClassJSONEncoder),

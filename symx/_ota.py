@@ -288,5 +288,5 @@ class Ota:
                     continue
 
                 ota_file = download_ota(ota, Path(download_dir))
-                self.storage.save_ota(ota, ota_file)
+                self.storage.save_ota(key, ota, ota_file)
                 ota_file.unlink()
