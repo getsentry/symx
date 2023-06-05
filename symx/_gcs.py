@@ -108,6 +108,7 @@ class GoogleStorage:
             # if the existing remote file has the same MD5 hash as the file we are about to upload, we can go on without
             # uploading and only update meta, since that means some meta is still set to INDEXED instead of MIRRORED.
             # On the other hand, if the hashes differ, then we have a problem and should be getting out
+            blob.reload()
             remote_hash = blob.md5_hash
             local_hash = _fs_md5_hash(ota_file)
             if remote_hash != local_hash:
