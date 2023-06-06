@@ -129,7 +129,7 @@ class GoogleStorage(OtaStorage):
                 return
         else:
             # this file will be split into considerable chunks: set timeout to something high
-            blob.upload_from_filename(ota_file.name, timeout=3600)
+            blob.upload_from_filename(str(ota_file), timeout=3600)
             logger.info("Upload finished. Updating OTA meta-data.")
 
         ota_meta.download_path = mirror_filename
