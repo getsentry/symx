@@ -10,7 +10,7 @@ from rich import print
 
 from ._gcs import GoogleStorage
 from ._maintenance import migrate
-from ._ota import Ota
+from ._ota import OtaMirror, OtaExtract
 
 SENTRY_DSN = os.environ.get("SENTRY_DSN", None)
 
@@ -69,8 +69,29 @@ def mirror(
     """
     storage_backend = _init_storage(storage)
     if storage_backend:
-        ota = Ota(storage=storage_backend)
+        ota = OtaMirror(storage=storage_backend)
         ota.mirror(datetime.timedelta(minutes=timeout))
+
+
+@ota_app.command()
+def extract(
+    storage: str = typer.Option(
+        ..., "--storage", "-s", help="URI to a supported storage backend"
+    ),
+    timeout: int = typer.Option(
+        330,
+        "--timeout",
+        "-t",
+        help="timeout in minutes triggering an ordered shutdown after it elapsed",
+    ),
+) -> None:
+    """
+    Extract dyld_shared_cache and symbols from OTA images to storage
+    """
+    storage_backend = _init_storage(storage)
+    if storage_backend:
+        ota = OtaExtract(storage=storage_backend)
+        ota.extract(datetime.timedelta(minutes=timeout))
 
 
 @ota_app.command()
