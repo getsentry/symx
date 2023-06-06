@@ -144,13 +144,13 @@ class GoogleStorage(OtaStorage):
             blob.reload()
         except NotFound:
             logger.error(
-                f"The {ota} references a mirror-path that is no longer accessible (probably TTL rn)"
+                f"The OTA references a mirror-path that is no longer accessible (probably TTL rn)"
             )
             return None
 
         blob.download_to_filename(str(local_ota_path))
         if not check_hash(ota, local_ota_path):
-            logger.error(f"The SHA1 mismatch between storage and meta-data for {ota}")
+            logger.error(f"The SHA1 mismatch between storage and meta-data for OTA")
             return None
 
         return local_ota_path
