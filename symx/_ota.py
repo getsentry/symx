@@ -13,11 +13,12 @@ from dataclasses import dataclass
 from enum import Enum
 from math import floor
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Iterator, Tuple
+from typing import List, Optional, Iterator, Tuple
 
 import requests
 
 from symx._common import Arch, ipsw_version
+from abc import ABC, abstractmethod
 
 MiB = 1024 * 1024
 
@@ -89,6 +90,39 @@ class OtaArtifact:
 
 
 OtaMetaData = dict[str, OtaArtifact]
+
+
+class OtaStorage(ABC):
+    """
+    Not an ultra-big fan of this, but this is just here to keep the door open and not fall into circular business.
+    Maybe we can get rid of the polymorphic storage in the end, but maybe it makes sense.
+    """
+
+    @abstractmethod
+    def save_meta(self, theirs: OtaMetaData) -> OtaMetaData:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def save_ota(
+        self, ota_meta_key: str, ota_meta: OtaArtifact, ota_file: Path
+    ) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def load_meta(self) -> Optional[OtaMetaData]:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def load_ota(self, ota: OtaArtifact, download_dir: Path) -> Optional[Path]:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def name(self) -> str:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def update_meta_item(self, ota_meta_key: str, ota_meta: OtaArtifact) -> OtaMetaData:
+        raise NotImplementedError()
 
 
 def parse_download_meta_output(
@@ -267,15 +301,10 @@ def download_ota_from_apple(ota_meta: OtaArtifact, download_dir: Path) -> Path:
     raise RuntimeError("Failed to download")
 
 
-def download_ota_from_mirror(ota: OtaArtifact, download_dir: Path) -> Path:
-    logger.debug(f"gcs download {ota} to {download_dir}")
-    return download_dir / "artifact.zip"
-
-
 class OtaMirror:
-    def __init__(self, storage: Any) -> None:
+    def __init__(self, storage: OtaStorage) -> None:
         self.storage = storage
-        self.meta: Dict[Any, Any] = {}
+        self.meta: OtaMetaData = {}
 
     def update_meta(self) -> None:
         logger.debug("Updating OTA meta-data")
@@ -283,7 +312,7 @@ class OtaMirror:
         self.meta = self.storage.save_meta(apple_meta)
 
     def mirror(self, timeout: datetime.timedelta) -> None:
-        logger.debug(f"Mirroring OTA images to {self.storage.bucket.name}")
+        logger.debug(f"Mirroring OTA images to {self.storage.name()}")
 
         start = time.time()
         self.update_meta()
@@ -510,17 +539,25 @@ def log_artifact_as(name: str, artifact: Path) -> None:
 
 
 class OtaExtract:
-    def __init__(self, storage: Any) -> None:
+    def __init__(self, storage: OtaStorage) -> None:
         self.storage = storage
-        self.meta: Dict[Any, Any] = {}
+        self.meta: OtaMetaData = {}
 
     def iter_mirror(self) -> Iterator[Tuple[str, OtaArtifact]]:
+        """
+        A generator that reloads the meta-data on every iteration, so we fetch updated mirrored artifacts. This allows
+        us to modify the meta-data in the loop that iterates over the output.
+        :return: The next current mirrored OtaArtifact to be processed together with its key.
+        """
         while True:
-            key: str
-            ota: OtaArtifact
             mirrored_key: Optional[str] = None
             mirrored_ota: Optional[OtaArtifact] = None
-            for key, ota in self.storage.load_meta():
+            ota_meta = self.storage.load_meta()
+            if ota_meta is None:
+                logger.error(f"Could not retrieve meta-data from storage.")
+                return
+
+            for key, ota in ota_meta.items():
                 if ota.is_mirrored():
                     logger.debug(f"Found mirrored OTA: {ota}")
                     mirrored_key = key
@@ -528,8 +565,8 @@ class OtaExtract:
                     break
 
             if mirrored_ota is None or mirrored_key is None:
-                # this means we could not find any mirrored OTAs
-                logger.warning(f"OTA artifact was not set exiting generator.")
+                # this means we could not find any more mirrored OTAs
+                logger.info(f"No more mirrored OTAs available exiting iter_mirror().")
                 return
             else:
                 logger.debug(
@@ -538,9 +575,7 @@ class OtaExtract:
                 yield mirrored_key, mirrored_ota
 
     def extract(self, timeout: datetime.timedelta) -> None:
-        logger.debug(
-            f"Extracting symbols from OTA images in {self.storage.bucket.name}"
-        )
+        logger.debug(f"Extracting symbols from OTA images in {self.storage.name()}")
         start = time.time()
         with tempfile.TemporaryDirectory() as work_dir:
             key: str
@@ -553,7 +588,16 @@ class OtaExtract:
                     )
                     return
 
-                local_ota_path = download_ota_from_mirror(ota, work_dir_path)
+                local_ota_path = self.download_ota_from_mirror(ota, work_dir_path)
+                if local_ota_path is None:
+                    # means there is no OTA at the specified OTA location, although this was defined as MIRRORED
+                    # let's set this back to INDEXED, so the mirror workflow tries to download this again.
+                    ota.download_path = None
+                    ota.processing_state = OtaProcessingState.INDEXED
+                    ota.last_run = int(os.getenv("GITHUB_RUN_ID", 0))
+                    self.storage.update_meta_item(key, ota)
+                    continue
+
                 try:
                     self.extract_symbols_from_ota(local_ota_path, ota, work_dir_path)
                     # log_artifact_as("processed", artifact)
@@ -669,3 +713,10 @@ class OtaExtract:
                 f"{category.version}_{category.build}_{split_result.arch.value}",
             )
             # TODO: after the symsorter ran, we could update the meta-data of each debug-id with a ref to the artifact
+
+    def download_ota_from_mirror(
+        self, ota: OtaArtifact, download_dir: Path
+    ) -> Optional[Path]:
+        logger.debug(f"Download mirrored {ota} to {download_dir}")
+
+        return self.storage.load_ota(ota, download_dir)

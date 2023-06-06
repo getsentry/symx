@@ -1,15 +1,14 @@
 import base64
 import hashlib
 import json
+import logging
 import os
 import tempfile
-import logging
-
 from pathlib import Path
 from typing import Optional, Tuple
 
-from google.cloud.storage import Blob, Client  # type: ignore
 from google.cloud.exceptions import PreconditionFailed
+from google.cloud.storage import Blob, Client, Bucket  # type: ignore
 
 from ._common import DataClassJSONEncoder
 from ._ota import (
@@ -18,6 +17,8 @@ from ._ota import (
     merge_meta_data,
     ARTIFACTS_META_JSON,
     OtaProcessingState,
+    OtaStorage,
+    check_hash,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,11 +58,14 @@ def _fs_md5_hash(file_path: Path) -> str:
     return base64.b64encode(hash_md5.digest()).decode()
 
 
-class GoogleStorage:
+class GoogleStorage(OtaStorage):
     def __init__(self, project: Optional[str], bucket: str) -> None:
         self.project = project
-        self.client = Client(project=self.project)
-        self.bucket = self.client.bucket(bucket)
+        self.client: Client = Client(project=self.project)
+        self.bucket: Bucket = self.client.bucket(bucket)
+
+    def name(self) -> str:
+        return str(self.bucket.name)
 
     def save_meta(self, theirs: OtaMetaData) -> OtaMetaData:
         retry = 5
@@ -125,13 +129,32 @@ class GoogleStorage:
                 return
         else:
             # this file will be split into considerable chunks: set timeout to something high
-            blob.upload_from_filename(ota_file, timeout=3600)
+            blob.upload_from_filename(ota_file.name, timeout=3600)
             logger.info("Upload finished. Updating OTA meta-data.")
 
         ota_meta.download_path = mirror_filename
         ota_meta.processing_state = OtaProcessingState.MIRRORED
         ota_meta.last_run = int(os.getenv("GITHUB_RUN_ID", 0))
         self.update_meta_item(ota_meta_key, ota_meta)
+
+    def load_ota(self, ota: OtaArtifact, download_dir: Path) -> Optional[Path]:
+        blob = self.bucket.blob(ota.download_path)
+        blob.reload()
+        local_ota_path = download_dir / f"{ota.id}.zip"
+        if blob.exists():
+            blob.download_to_filename(str(local_ota_path))
+            if not check_hash(ota, local_ota_path):
+                logger.error(
+                    f"The SHA1 mismatch between storage and meta-data for {ota}"
+                )
+                return None
+        else:
+            logger.error(
+                f"The {ota} references a mirror-path that is no longer accessible (probably TTL rn)"
+            )
+            return None
+
+        return local_ota_path
 
     def update_meta_item(self, ota_meta_key: str, ota_meta: OtaArtifact) -> OtaMetaData:
         retry = 5
