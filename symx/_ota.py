@@ -1,3 +1,4 @@
+import collections
 import datetime
 import glob
 import hashlib
@@ -13,7 +14,7 @@ from dataclasses import dataclass
 from enum import Enum
 from math import floor
 from pathlib import Path
-from typing import List, Optional, Iterator, Tuple
+from typing import List, Optional, Iterator, Tuple, Iterable, OrderedDict
 
 import requests
 
@@ -63,6 +64,10 @@ class OtaProcessingState(str, Enum):
     # and it turns out there are debug-ids already present but with different hash or something similar.
     SYMBOL_EXTRACTION_FAILED = "symbol_extraction_failed"
 
+    # we already know that the bundle_id is too coarse to discriminate between sensible duplicates. we probably should
+    # merge rather ignore images that result in existing bundle-ids. until this is implemented we mark images with this.
+    BUNDLE_DUPLICATION_DETECTED = "bundle_duplication_detected"
+
     # manually assigned to ignore artifact from any processing
     IGNORED = "ignored"
 
@@ -79,7 +84,9 @@ class OtaArtifact:
     devices: List[str]
     hash: str
     hash_algorithm: str
-    last_run: int = 0  # currently the run_id of the GHA Workflow so we can look it up
+
+    # currently the run_id of the GHA Workflow so we can look it up
+    last_run: int = int(os.getenv("GITHUB_RUN_ID", 0))
     processing_state: OtaProcessingState = OtaProcessingState.INDEXED
 
     def is_indexed(self) -> bool:
@@ -87,6 +94,9 @@ class OtaArtifact:
 
     def is_mirrored(self) -> bool:
         return self.processing_state == OtaProcessingState.MIRRORED
+
+    def update_last_run(self) -> None:
+        self.last_run = int(os.getenv("GITHUB_RUN_ID", 0))
 
 
 OtaMetaData = dict[str, OtaArtifact]
@@ -122,6 +132,12 @@ class OtaStorage(ABC):
 
     @abstractmethod
     def update_meta_item(self, ota_meta_key: str, ota_meta: OtaArtifact) -> OtaMetaData:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def upload_symbols(
+        self, input_dir: Path, ota_meta_key: str, ota_meta: OtaArtifact, bundle_id: str
+    ) -> None:
         raise NotImplementedError()
 
 
@@ -165,8 +181,6 @@ def parse_download_meta_output(
                 download_path=None,
                 hash=meta_item["hash"],
                 hash_algorithm=meta_item["hash_algorithm"],
-                processing_state=OtaProcessingState.INDEXED,
-                last_run=int(os.getenv("GITHUB_RUN_ID", 0)),
             )
 
 
@@ -337,11 +351,11 @@ class OtaMirror:
 DYLD_SHARED_CACHE = "dyld_shared_cache"
 
 
-@dataclass
+@dataclass(frozen=True)
 class DSCSearchResult:
     arch: Arch
     artifact: Path
-    split_dir: Optional[Path]
+    split_dir: Path
 
 
 @dataclass(frozen=True)
@@ -349,13 +363,6 @@ class MountInfo:
     dev: str
     id: str
     point: Path
-
-
-@dataclass(frozen=True)
-class ArtifactCategory:
-    platform: str
-    version: str
-    build: str
 
 
 def validate_shell_deps() -> None:
@@ -403,45 +410,33 @@ def parse_hdiutil_mount_output(cmd_output: str) -> MountInfo:
     return MountInfo(mount_info[0], mount_info[1], Path(mount_info[2]))
 
 
-def mount_and_split_dsc(dmg: Path, output_dir: Path) -> list[DSCSearchResult]:
-    result = subprocess.run(["hdiutil", "mount", dmg], capture_output=True, check=True)
-
-    mount = parse_hdiutil_mount_output(result.stdout.decode("utf-8"))
-    split_dsc_dir = split_dsc(
-        mount.point, output_dir / (mount.point.name + "_libraries")
+def split_dsc(search_result: DSCSearchResult) -> None:
+    logger.info(f"\t\tSplitting {DYLD_SHARED_CACHE} of {search_result.artifact}")
+    result = subprocess.run(
+        [
+            "ipsw",
+            "dyld",
+            "split",
+            str(search_result.artifact),
+            str(search_result.split_dir),
+        ],
+        capture_output=True,
     )
-    result = subprocess.run(["hdiutil", "detach", mount.dev], capture_output=True)
-    logger.debug(f"\t\t\tResult from detach: {result}")
-
-    return split_dsc_dir
-
-
-def split_dsc(input_dir: Path, output_dir: Path) -> list[DSCSearchResult]:
-    logger.info(f"\t\tSplitting {DYLD_SHARED_CACHE} of {input_dir}")
-    dsc_search_results = find_dsc(input_dir)
-    for search_result in dsc_search_results:
-        # TODO: if we don't create a separate tmp directory here, we are potentially overwriting shit
-        search_result.split_dir = output_dir
-        # TODO: this file fails kinda silently with two results (test in detail):
-        #  /Users/mischan/devel/tmp/ota_downloads/iOS16.3.2_OTAs/AppleTV14,1_a7c3d4ce39aaeebd94e975e0520a0754deff506a.zip
-        result = subprocess.run(
-            [
-                "ipsw",
-                "dyld",
-                "split",
-                search_result.artifact,
-                search_result.split_dir,
-            ],
-            capture_output=True,
+    if result.returncode != 0:
+        logger.error(
+            f"Split for {search_result.artifact} (arch: {search_result.arch} failed: {result}"
         )
+    else:
         logger.debug(f"\t\t\tResult from split: {result}")
-    return dsc_search_results
 
 
-def find_dsc(input_dir: Path) -> list[DSCSearchResult]:
+def find_dsc(
+    input_dir: Path, ota_meta: OtaArtifact, output_dir: Path
+) -> list[DSCSearchResult]:
     # TODO: are we also interested in the DriverKit dyld_shared_cache?
     #  System/DriverKit/System/Library/dyld/
     dsc_path_prefix_options = [
+        "System/Library/dyld/",
         "System/Library/Caches/com.apple.dyld/",
         "AssetData/payloadv2/patches/System/Library/Caches/com.apple.dyld/",
         "AssetData/payloadv2/ecc_data/System/Library/Caches/com.apple.dyld/",
@@ -453,7 +448,13 @@ def find_dsc(input_dir: Path) -> list[DSCSearchResult]:
             dsc_path = input_dir / (path_prefix + DYLD_SHARED_CACHE + "_" + arch)
             if os.path.isfile(dsc_path):
                 dsc_search_results.append(
-                    DSCSearchResult(arch=Arch(arch), artifact=dsc_path, split_dir=None)
+                    DSCSearchResult(
+                        arch=Arch(arch),
+                        artifact=dsc_path,
+                        split_dir=output_dir
+                        / "split_symbols"
+                        / f"{ota_meta.version}_{ota_meta.build}_{arch}",
+                    )
                 )
 
     if len(dsc_search_results) == 0:
@@ -473,10 +474,6 @@ def find_dsc(input_dir: Path) -> list[DSCSearchResult]:
 
 def symsort(dsc_split_dir: Path, output_dir: Path, prefix: str, bundle_id: str) -> None:
     logger.info(f"\t\t\tSymsorting {dsc_split_dir} to {output_dir}")
-    # TODO: symsorter just writes into the output_path, but in the final scenario we want to change this behavior
-    #  to check whether there would be any overwrites, if those overwrites actually contain different content (vs.
-    #  just different meta-data) and then atomically do (or not) the write to final output directory.
-    # TODO: since this is a terminal node in the process, we should upload the results and add this to OtaExtract
 
     subprocess.run(
         [
@@ -512,30 +509,50 @@ def find_path_prefix_in_dsc_extract_cmd_output(
     raise RuntimeError(f"Couldn't find path_prefix in command-output: {cmd_output}")
 
 
-class DscNoMetaData(Exception):
-    pass
+def detach_dev(dev: str) -> None:
+    result = subprocess.run(["hdiutil", "detach", dev], capture_output=True, check=True)
+    logger.debug(f"\t\t\tResult from detach: {result}")
 
 
-class DscExtractionFailed(Exception):
-    pass
+def mount_dmg(dmg: Path) -> MountInfo:
+    result = subprocess.run(
+        ["hdiutil", "mount", str(dmg)],
+        capture_output=True,
+        check=True,
+    )
+    return parse_hdiutil_mount_output(result.stdout.decode("utf-8"))
 
 
-def list_dsc_files(artifact: Path) -> None:
-    ps = subprocess.Popen(["ipsw", "ota", "ls", str(artifact)], stdout=subprocess.PIPE)
-    try:
-        output = subprocess.check_output(("grep", DYLD_SHARED_CACHE), stdin=ps.stdout)
-        ps.wait()
-        logger.info(output.decode("utf-8"))
-    except subprocess.CalledProcessError:
-        logger.warning(f"no {DYLD_SHARED_CACHE} found in {str(artifact)}")
-        # TODO: in this case we should update the meta-data to reflect processing state
-        #       DSC_MISSING, which means this should become an OtaExtract member
+def extract_ota(artifact: Path, output_dir: Path) -> Optional[Path]:
+    result = subprocess.run(
+        [
+            "ipsw",
+            "ota",
+            "extract",
+            artifact,
+            DYLD_SHARED_CACHE,
+            "-o",
+            output_dir,
+        ],
+        capture_output=True,
+    )
 
+    if result.returncode == 1:
+        error_lines = []
+        for line in result.stderr.decode("utf-8").splitlines():
+            if line.startswith("   ⨯"):
+                error_lines.append(line)
+        errors = "\n\t".join(error_lines)
+        logger.error(
+            f"Failed to extract {DYLD_SHARED_CACHE} from {artifact}:\n\t{errors}"
+        )
+        return None
 
-# TODO: to be replaced with an update of the corresponding meta-data
-def log_artifact_as(name: str, artifact: Path) -> None:
-    with open(name, "a") as process_log_file:
-        process_log_file.write(str(artifact) + "\n")
+    logger.info(f"\t\tSuccessfully extracted {DYLD_SHARED_CACHE} from: {artifact}")
+    return find_path_prefix_in_dsc_extract_cmd_output(
+        result.stderr.decode("utf-8"),
+        Path(output_dir),
+    )
 
 
 class OtaExtract:
@@ -575,148 +592,145 @@ class OtaExtract:
                 yield mirrored_key, mirrored_ota
 
     def extract(self, timeout: datetime.timedelta) -> None:
+        validate_shell_deps()
+
         logger.debug(f"Extracting symbols from OTA images in {self.storage.name()}")
         start = time.time()
-        with tempfile.TemporaryDirectory() as work_dir:
-            key: str
-            ota: OtaArtifact
-            work_dir_path = Path(work_dir)
-            for key, ota in self.iter_mirror():
-                if int(time.time() - start) > timeout.seconds:
-                    logger.warning(
-                        f"Exiting OTA extract due to elapsed timeout of {timeout}"
-                    )
-                    return
+        key: str
+        ota: OtaArtifact
+        for key, ota in self.iter_mirror():
+            if int(time.time() - start) > timeout.seconds:
+                logger.warning(
+                    f"Exiting OTA extract due to elapsed timeout of {timeout}"
+                )
+                return
 
-                local_ota_path = self.download_ota_from_mirror(ota, work_dir_path)
+            with tempfile.TemporaryDirectory() as ota_work_dir:
+                work_dir_path = Path(ota_work_dir)
+
+                logger.debug(f"Download mirrored {ota} to {work_dir_path}")
+                local_ota_path = self.storage.load_ota(ota, work_dir_path)
                 if local_ota_path is None:
                     # means there is no OTA at the specified OTA location, although this was defined as MIRRORED
                     # let's set this back to INDEXED, so the mirror workflow tries to download this again.
                     ota.download_path = None
                     ota.processing_state = OtaProcessingState.INDEXED
-                    ota.last_run = int(os.getenv("GITHUB_RUN_ID", 0))
+                    ota.update_last_run()
                     self.storage.update_meta_item(key, ota)
                     continue
 
-                try:
-                    self.extract_symbols_from_ota(local_ota_path, ota, work_dir_path)
-                    # log_artifact_as("processed", artifact)
-                except DscNoMetaData as e:
-                    logger.error(e)
-                    # log_artifact_as("no_meta_data", artifact)
-                except DscExtractionFailed as e:
-                    logger.error(e)
-                    # log_artifact_as("extraction_failed", artifact)
+                self.extract_symbols_from_ota(local_ota_path, key, ota, work_dir_path)
 
-                local_ota_path.unlink()
+                # TODO: we currently do not assign anything in the error case... this is by design because we want to
+                #  rerun everything that errored out. Only the success case (and the bundle duplication should currently
+                #  be marked in the meta-data store).
 
-    def extract_symbols_from_ota(
-        self, artifact: Path, ota: OtaArtifact, output_dir: Path
-    ) -> None:
-        category = ArtifactCategory(
-            ota.platform,
-            ota.build,
-            ota.version,
-        )
-
-        with tempfile.TemporaryDirectory(suffix="_symx") as cryptex_patch_dir:
-            logger.info(f"Trying patch_cryptex_dmg with {artifact}")
-            extracted_dmgs = patch_cryptex_dmg(artifact, Path(cryptex_patch_dir))
+    def try_processing_ota_as_cryptex(
+        self, local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path
+    ) -> bool:
+        with tempfile.TemporaryDirectory(suffix="_cryptex_dmg") as cryptex_patch_dir:
+            logger.info(f"Trying patch_cryptex_dmg with {local_ota}")
+            extracted_dmgs = patch_cryptex_dmg(local_ota, Path(cryptex_patch_dir))
             if len(extracted_dmgs) != 0:
                 logger.info(
-                    f"\tCryptex patch successful. Mount, split, symsorting {DYLD_SHARED_CACHE} for: {artifact}"
+                    f"\tCryptex patch successful. Mount, split, symsorting {DYLD_SHARED_CACHE} for: {local_ota}"
                 )
-                self.process_cryptex_dmg(extracted_dmgs, category, output_dir)
-            else:
-                logger.info(
-                    f"\tNot a cryptex, so extracting OTA {DYLD_SHARED_CACHE} directly"
+                self.process_cryptex_dmg(
+                    extracted_dmgs, ota_meta_key, ota_meta, work_dir
                 )
-                with tempfile.TemporaryDirectory(
-                    suffix="_symex"
-                ) as extract_dsc_tmp_dir:
-                    extracted_dsc_dir = self.extract_ota(
-                        artifact, Path(extract_dsc_tmp_dir)
-                    )
-                    logger.info(
-                        f"\t\tSplitting & symsorting {DYLD_SHARED_CACHE} for: {artifact}"
-                    )
-                    self.split_and_symsort_dsc(extracted_dsc_dir, category, output_dir)
+                # TODO: maybe instead of bool that should be a container of paths produced in work_dir
+                return True
 
-    def extract_ota(self, artifact: Path, output_dir: Path) -> Path:
-        result = subprocess.run(
-            [
-                "ipsw",
-                "ota",
-                "extract",
-                artifact,
-                DYLD_SHARED_CACHE,
-                "-o",
-                output_dir,
-            ],
-            capture_output=True,
-        )
-        if result.returncode == 1:
-            error_lines = []
-            for line in result.stderr.decode("utf-8").splitlines():
-                if line.startswith("   ⨯"):
-                    error_lines.append(line)
-            errors = "\n\t".join(error_lines)
-            raise DscExtractionFailed(
-                f"Failed to extract {DYLD_SHARED_CACHE} from {artifact}:\n\t{errors}"
-            )
-        else:
+        return False
+
+    def process_ota_directly(
+        self, local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path
+    ) -> None:
+        with tempfile.TemporaryDirectory(suffix="_dsc_extract") as extract_dsc_tmp_dir:
+            extracted_dsc_dir = extract_ota(local_ota, Path(extract_dsc_tmp_dir))
             logger.info(
-                f"\t\tSuccessfully extracted {DYLD_SHARED_CACHE} from: {artifact}"
+                f"\t\tSplitting & symsorting {DYLD_SHARED_CACHE} for: {local_ota}"
             )
-            return find_path_prefix_in_dsc_extract_cmd_output(
-                result.stderr.decode("utf-8"),
-                Path(output_dir),
+
+            if extracted_dsc_dir:
+                self.split_and_symsort_dsc(
+                    extracted_dsc_dir, ota_meta_key, ota_meta, work_dir
+                )
+
+    def extract_symbols_from_ota(
+        self, local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path
+    ) -> None:
+        if not self.try_processing_ota_as_cryptex(
+            local_ota, ota_meta_key, ota_meta, work_dir
+        ):
+            logger.info(
+                f"\tNot a cryptex, so extracting OTA {DYLD_SHARED_CACHE} directly"
             )
+            self.process_ota_directly(local_ota, ota_meta_key, ota_meta, work_dir)
 
     def split_and_symsort_dsc(
-        self, input_dir: Path, category: ArtifactCategory, output_dir: Path
+        self,
+        input_dir: Path,
+        ota_meta_key: str,
+        ota_meta: OtaArtifact,
+        output_dir: Path,
     ) -> None:
-        with tempfile.TemporaryDirectory(suffix="_symex") as split_temp_dir:
-            split_results = split_dsc(
-                input_dir,
-                Path(split_temp_dir),
-            )
-            self.symsort_split_results(split_results, category, output_dir)
+        dsc_search_results = find_dsc(input_dir, ota_meta, output_dir)
+
+        for idx, search_result in enumerate(dsc_search_results):
+            split_dsc(search_result)
+
+        self.symsort_split_results(
+            dsc_search_results, ota_meta_key, ota_meta, output_dir
+        )
 
     def process_cryptex_dmg(
         self,
         extracted_dmgs: dict[str, Path],
-        category: ArtifactCategory,
+        ota_meta_key: str,
+        ota_meta: OtaArtifact,
         output_dir: Path,
     ) -> None:
-        with tempfile.TemporaryDirectory(suffix="_symex") as mount_and_split_temp_dir:
-            split_results = mount_and_split_dsc(
-                extracted_dmgs["cryptex-system-arm64e"],
-                Path(mount_and_split_temp_dir),
-            )
-            self.symsort_split_results(split_results, category, output_dir)
+        mount = mount_dmg(extracted_dmgs["cryptex-system-arm64e"])
+
+        dsc_search_results = find_dsc(mount.point, ota_meta, output_dir)
+
+        # doing this without further guards assumes that if we find multiple DSC in the image, and they target the same
+        # architecture, then duplicates between them will be the same.
+        for idx, search_result in enumerate(dsc_search_results):
+            split_dsc(search_result)
+
+        detach_dev(mount.dev)
+
+        self.symsort_split_results(
+            dsc_search_results, ota_meta_key, ota_meta, output_dir
+        )
 
     def symsort_split_results(
         self,
-        split_cache_results: list[DSCSearchResult],
-        category: ArtifactCategory,
+        split_cache_results: Iterable[DSCSearchResult],
+        ota_meta_key: str,
+        ota_meta: OtaArtifact,
         output_dir: Path,
     ) -> None:
-        for split_result in split_cache_results:
-            if not split_result.split_dir:
+        # make sure that we do not have duplicates when iterating over DSC results, since symsorter would overwrite
+        # the bundle_id index
+        unique_results: OrderedDict[Path, DSCSearchResult] = collections.OrderedDict()
+        for result in split_cache_results:
+            unique_results.setdefault(result.split_dir, result)
+
+        for result in unique_results.values():
+            if not result.split_dir:
                 continue
 
+            bundle_id = f"{ota_meta.version}_{ota_meta.build}_{result.arch.value}"
+            symbols_output_dir = output_dir / "symbols" / bundle_id
             symsort(
-                split_result.split_dir,
-                output_dir,
-                category.platform,
-                f"{category.version}_{category.build}_{split_result.arch.value}",
+                result.split_dir,
+                symbols_output_dir,
+                ota_meta.platform,
+                bundle_id,
             )
-            # TODO: after the symsorter ran, we could update the meta-data of each debug-id with a ref to the artifact
-
-    def download_ota_from_mirror(
-        self, ota: OtaArtifact, download_dir: Path
-    ) -> Optional[Path]:
-        logger.debug(f"Download mirrored {ota} to {download_dir}")
-
-        return self.storage.load_ota(ota, download_dir)
+            self.storage.upload_symbols(
+                symbols_output_dir, ota_meta_key, ota_meta, bundle_id
+            )

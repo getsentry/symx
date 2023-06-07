@@ -134,13 +134,14 @@ class GoogleStorage(OtaStorage):
 
         ota_meta.download_path = mirror_filename
         ota_meta.processing_state = OtaProcessingState.MIRRORED
-        ota_meta.last_run = int(os.getenv("GITHUB_RUN_ID", 0))
+        ota_meta.update_last_run()
         self.update_meta_item(ota_meta_key, ota_meta)
 
     def load_ota(self, ota: OtaArtifact, download_dir: Path) -> Optional[Path]:
         blob = self.bucket.blob(ota.download_path)
         local_ota_path = download_dir / f"{ota.id}.zip"
         try:
+            # TODO: figure out why this was necessary
             blob.reload()
         except NotFound:
             logger.error(
@@ -176,3 +177,29 @@ class GoogleStorage(OtaStorage):
                 retry = retry - 1
 
         raise RuntimeError("Failed to update meta-data item")
+
+    def upload_symbols(
+        self, input_dir: Path, ota_key: str, ota_meta: OtaArtifact, bundle_id: str
+    ) -> None:
+        dest_blob_prefix = Path("symbols") / ota_meta.platform
+        bundle_index_path = dest_blob_prefix / "bundles" / bundle_id
+        blob = self.bucket.blob(str(bundle_index_path))
+        if blob.exists():
+            logger.error(
+                f"We already have a `bundle_id` {bundle_id} for {ota_meta.platform} in the symbol store. "
+                f"Overwriting corrupts the `bundle_id` index. We must implement a merge strategy."
+            )
+            ota_meta.processing_state = OtaProcessingState.BUNDLE_DUPLICATION_DETECTED
+            ota_meta.update_last_run()
+            return
+
+        for root, dirs, files in os.walk(input_dir):
+            for file in files:
+                local_file = os.path.join(root, file)
+                dest_blob_name = os.path.join(dest_blob_prefix, local_file)
+                blob = self.bucket.blob(dest_blob_name)
+                blob.upload_from_filename(local_file)
+                logger.debug(f"File {local_file} uploaded to {dest_blob_name}.")
+
+        ota_meta.processing_state = OtaProcessingState.SYMBOLS_EXTRACTED
+        ota_meta.update_last_run()
