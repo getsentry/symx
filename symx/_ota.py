@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import List, Optional, Iterator, Tuple, Iterable, OrderedDict
 
 import requests
+import sentry_sdk
 
 from symx._common import Arch, ipsw_version
 from abc import ABC, abstractmethod
@@ -148,14 +149,16 @@ def parse_download_meta_output(
     beta: bool,
 ) -> None:
     if result.returncode != 0:
-        logger.error(f"Error: {result.stderr!r}")
+        raise RuntimeError(f"Download meta failed: {result.stderr!r}")
     else:
         platform_meta = json.loads(result.stdout)
         for meta_item in platform_meta:
             url = meta_item["url"]
             zip_id = url[url.rfind("/") + 1 : -4]
             if len(zip_id) != 40:
-                raise RuntimeError(f"Unexpected url-format in {meta_item}")
+                raise RuntimeError(
+                    f"Parsing download meta: unexpected url-format in {meta_item}"
+                )
 
             if "description" in meta_item:
                 desc = [meta_item["description"]]
@@ -290,7 +293,6 @@ def download_ota_from_apple(ota_meta: OtaArtifact, download_dir: Path) -> Path:
     total_mib = total / MiB
     logger.debug(f"OTA Filesize: {floor(total_mib)} MiB")
 
-    # TODO: how much prefix for identity?
     filepath = (
         download_dir
         / f"{ota_meta.platform}_{ota_meta.version}_{ota_meta.build}_{ota_meta.id}.zip"
@@ -312,7 +314,7 @@ def download_ota_from_apple(ota_meta: OtaArtifact, download_dir: Path) -> Path:
         logger.info(f"Downloading {ota_meta} completed")
         return filepath
 
-    raise RuntimeError("Failed to download")
+    raise RuntimeError(f"Failed to download {ota_meta.url}")
 
 
 class OtaMirror:
@@ -410,6 +412,10 @@ def parse_hdiutil_mount_output(cmd_output: str) -> MountInfo:
     return MountInfo(mount_info[0], mount_info[1], Path(mount_info[2]))
 
 
+class OtaExtractError(Exception):
+    pass
+
+
 def split_dsc(search_result: DSCSearchResult) -> None:
     logger.info(f"\t\tSplitting {DYLD_SHARED_CACHE} of {search_result.artifact}")
     result = subprocess.run(
@@ -423,7 +429,7 @@ def split_dsc(search_result: DSCSearchResult) -> None:
         capture_output=True,
     )
     if result.returncode != 0:
-        logger.error(
+        raise OtaExtractError(
             f"Split for {search_result.artifact} (arch: {search_result.arch} failed: {result}"
         )
     else:
@@ -458,7 +464,7 @@ def find_dsc(
                 )
 
     if len(dsc_search_results) == 0:
-        raise RuntimeError(
+        raise OtaExtractError(
             f"Couldn't find any {DYLD_SHARED_CACHE} paths in {input_dir}"
         )
     elif len(dsc_search_results) > 1:
@@ -506,7 +512,7 @@ def find_path_prefix_in_dsc_extract_cmd_output(
 
         return top_output_dir / line[extraction_name_start:extraction_name_end]
 
-    raise RuntimeError(f"Couldn't find path_prefix in command-output: {cmd_output}")
+    raise OtaExtractError(f"Couldn't find path_prefix in command-output: {cmd_output}")
 
 
 def detach_dev(dev: str) -> None:
@@ -543,10 +549,9 @@ def extract_ota(artifact: Path, output_dir: Path) -> Optional[Path]:
             if line.startswith("   ⨯"):
                 error_lines.append(line)
         errors = "\n\t".join(error_lines)
-        logger.error(
+        raise OtaExtractError(
             f"Failed to extract {DYLD_SHARED_CACHE} from {artifact}:\n\t{errors}"
         )
-        return None
 
     logger.info(f"\t\tSuccessfully extracted {DYLD_SHARED_CACHE} from: {artifact}")
     return find_path_prefix_in_dsc_extract_cmd_output(
@@ -619,11 +624,18 @@ class OtaExtract:
                     self.storage.update_meta_item(key, ota)
                     continue
 
-                self.extract_symbols_from_ota(local_ota_path, key, ota, work_dir_path)
-
-                # TODO: we currently do not assign anything in the error case... this is by design because we want to
-                #  rerun everything that errored out. Only the success case (and the bundle duplication should currently
-                #  be marked in the meta-data store).
+                try:
+                    self.extract_symbols_from_ota(
+                        local_ota_path, key, ota, work_dir_path
+                    )
+                except OtaExtractError as e:
+                    # we only "handle" OtaExtractError as something where we can go on, all
+                    # other exceptions should just stop the symbol-extraction process.
+                    sentry_sdk.capture_exception(e)
+                    # also need to mark failing cases, because otherwise they will fail again
+                    ota.processing_state = OtaProcessingState.SYMBOL_EXTRACTION_FAILED
+                    ota.update_last_run()
+                    self.storage.update_meta_item(key, ota)
 
     def try_processing_ota_as_cryptex(
         self, local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path
