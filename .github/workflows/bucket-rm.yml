@@ -1,0 +1,31 @@
+name: 'Remove bucket contents'
+
+on:
+  workflow_dispatch:
+    inputs:
+      gs_cli_parameters:
+        description: 'gcloud storage rm parameters'
+        required: true
+        default: 'gs://symbol-collector-dev//var/**'
+jobs:
+  list-bucket-contents:
+    name: 'Remove bucket contents'
+    runs-on: 'ubuntu-22.04'
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+    - id: 'auth'
+      uses: 'google-github-actions/auth@v1'
+      with:
+        workload_identity_provider: 'projects/868781662168/locations/global/workloadIdentityPools/prod-github/providers/github-oidc-pool'
+        service_account: 'symx-downloader@sac-prod-sa.iam.gserviceaccount.com'
+
+    - name: 'Set up Cloud SDK'
+      uses: 'google-github-actions/setup-gcloud@v1'
+      with:
+        version: '>= 363.0.0'
+
+    - name: 'Remove bucket contents'
+      run: 'gcloud storage rm ${{ github.event.inputs.gs_cli_parameters }}'
