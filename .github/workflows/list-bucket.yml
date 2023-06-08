@@ -2,7 +2,11 @@ name: 'List bucket contents'
 
 on:
   workflow_dispatch:
-
+    inputs:
+      gs_cli_parameters:
+        description: 'gcloud storage ls parameters'
+        required: true
+        default: '-r -a -L gs://symbol-collector-dev'
 jobs:
   list-bucket-contents:
     name: 'List bucket contents'
@@ -24,4 +28,4 @@ jobs:
         version: '>= 363.0.0'
 
     - name: 'List bucket contents'
-      run: 'gcloud storage ls -r -a -L gs://symbol-collector-dev'
+      run: 'gcloud storage ls ${{ github.event.inputs.gs_cli_parameters }}'
