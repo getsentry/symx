@@ -191,6 +191,7 @@ class GoogleStorage(OtaStorage):
             )
             ota_meta.processing_state = OtaProcessingState.BUNDLE_DUPLICATION_DETECTED
             ota_meta.update_last_run()
+            self.update_meta_item(ota_key, ota_meta)
             return
 
         for root, dirs, files in os.walk(input_dir):
@@ -205,3 +206,4 @@ class GoogleStorage(OtaStorage):
 
         ota_meta.processing_state = OtaProcessingState.SYMBOLS_EXTRACTED
         ota_meta.update_last_run()
+        self.update_meta_item(ota_key, ota_meta)
