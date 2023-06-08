@@ -185,7 +185,7 @@ class GoogleStorage(OtaStorage):
         bundle_index_path = dest_blob_prefix / ota_meta.platform / "bundles" / bundle_id
         blob = self.bucket.blob(str(bundle_index_path))
         if blob.exists():
-            logger.error(
+            logger.warning(
                 f"We already have a `bundle_id` {bundle_id} for {ota_meta.platform} in the symbol store. "
                 f"Overwriting corrupts the `bundle_id` index. We must implement a merge strategy."
             )
