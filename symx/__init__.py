@@ -58,7 +58,7 @@ def mirror(
         ..., "--storage", "-s", help="URI to a supported storage backend"
     ),
     timeout: int = typer.Option(
-        330,
+        345,
         "--timeout",
         "-t",
         help="timeout in minutes triggering an ordered shutdown after it elapsed",
@@ -79,7 +79,7 @@ def extract(
         ..., "--storage", "-s", help="URI to a supported storage backend"
     ),
     timeout: int = typer.Option(
-        330,
+        345,
         "--timeout",
         "-t",
         help="timeout in minutes triggering an ordered shutdown after it elapsed",
