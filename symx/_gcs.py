@@ -195,10 +195,12 @@ class GoogleStorage(OtaStorage):
 
         for root, dirs, files in os.walk(input_dir):
             for file in files:
-                local_file = os.path.join(root, file)
-                dest_blob_name = os.path.join(dest_blob_prefix, local_file)
-                blob = self.bucket.blob(dest_blob_name)
-                blob.upload_from_filename(local_file)
+                local_file = Path(root) / file
+                dest_blob_name = (
+                    dest_blob_prefix / Path(root).relative_to(input_dir) / file
+                )
+                blob = self.bucket.blob(str(dest_blob_name))
+                blob.upload_from_filename(str(local_file))
                 logger.debug(f"File {local_file} uploaded to {dest_blob_name}.")
 
         ota_meta.processing_state = OtaProcessingState.SYMBOLS_EXTRACTED
