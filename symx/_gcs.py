@@ -201,7 +201,7 @@ class GoogleStorage(OtaStorage):
                     dest_blob_prefix / Path(root).relative_to(input_dir) / file
                 )
                 blob = self.bucket.blob(str(dest_blob_name))
-                blob.upload_from_filename(str(local_file))
+                blob.upload_from_filename(str(local_file), num_retries=10)
                 logger.debug(f"File {local_file} uploaded to {dest_blob_name}.")
 
         ota_meta.processing_state = OtaProcessingState.SYMBOLS_EXTRACTED
