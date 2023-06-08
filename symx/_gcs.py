@@ -181,8 +181,8 @@ class GoogleStorage(OtaStorage):
     def upload_symbols(
         self, input_dir: Path, ota_key: str, ota_meta: OtaArtifact, bundle_id: str
     ) -> None:
-        dest_blob_prefix = Path("symbols") / ota_meta.platform
-        bundle_index_path = dest_blob_prefix / "bundles" / bundle_id
+        dest_blob_prefix = Path("symbols")
+        bundle_index_path = dest_blob_prefix / ota_meta.platform / "bundles" / bundle_id
         blob = self.bucket.blob(str(bundle_index_path))
         if blob.exists():
             logger.error(
