@@ -142,6 +142,10 @@ class OtaStorage(ABC):
         raise NotImplementedError()
 
 
+class OtaMirrorError(Exception):
+    pass
+
+
 def parse_download_meta_output(
     platform: str,
     result: subprocess.CompletedProcess[bytes],
@@ -149,14 +153,14 @@ def parse_download_meta_output(
     beta: bool,
 ) -> None:
     if result.returncode != 0:
-        raise RuntimeError(f"Download meta failed: {result.stderr!r}")
+        logger.error(f"Download meta failed: {result.stderr!r}")
     else:
         platform_meta = json.loads(result.stdout)
         for meta_item in platform_meta:
             url = meta_item["url"]
             zip_id = url[url.rfind("/") + 1 : -4]
             if len(zip_id) != 40:
-                raise RuntimeError(
+                logger.error(
                     f"Parsing download meta: unexpected url-format in {meta_item}"
                 )
 
