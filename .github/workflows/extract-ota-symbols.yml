@@ -39,7 +39,7 @@ jobs:
           pip install --upgrade pip
           pip install -e ./ 
           brew install blacktop/tap/ipsw
-          curl -L https://github.com/getsentry/symbolicator/releases/latest/download/symsorter-Darwin-universal > symsorter
+          curl -L https://github.com/getsentry/symbolicator/releases/download/23.5.2/symbolicator-Darwin-universal > symsorter
           chmod +x symsorter
 
       - name: symx OTA Extract
