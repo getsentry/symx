@@ -564,6 +564,13 @@ def extract_ota(artifact: Path, output_dir: Path) -> Optional[Path]:
     )
 
 
+def set_sentry_artifact_tags(key: str, ota: OtaArtifact) -> None:
+    sentry_sdk.set_tag("artifact.key", key)
+    sentry_sdk.set_tag("artifact.platform", ota.platform)
+    sentry_sdk.set_tag("artifact.version", ota.version)
+    sentry_sdk.set_tag("artifact.build", ota.build)
+
+
 class OtaExtract:
     def __init__(self, storage: OtaStorage) -> None:
         self.storage = storage
@@ -585,7 +592,7 @@ class OtaExtract:
 
             for key, ota in ota_meta.items():
                 if ota.is_mirrored():
-                    logger.debug(f"Found mirrored OTA: {ota}")
+                    logger.debug(f"Found mirrored OTA: {key}")
                     mirrored_key = key
                     mirrored_ota = ota
                     break
@@ -614,10 +621,11 @@ class OtaExtract:
                 )
                 return
 
+            set_sentry_artifact_tags(key, ota)
+
             with tempfile.TemporaryDirectory() as ota_work_dir:
                 work_dir_path = Path(ota_work_dir)
-
-                logger.debug(f"Download mirrored {ota} to {work_dir_path}")
+                logger.debug(f"Download mirrored {key} to {work_dir_path}")
                 local_ota_path = self.storage.load_ota(ota, work_dir_path)
                 if local_ota_path is None:
                     # means there is no OTA at the specified OTA location, although this was defined as MIRRORED
