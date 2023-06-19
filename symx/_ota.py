@@ -321,6 +321,13 @@ def download_ota_from_apple(ota_meta: OtaArtifact, download_dir: Path) -> Path:
     raise RuntimeError(f"Failed to download {ota_meta.url}")
 
 
+def set_sentry_artifact_tags(key: str, ota: OtaArtifact) -> None:
+    sentry_sdk.set_tag("artifact.key", key)
+    sentry_sdk.set_tag("artifact.platform", ota.platform)
+    sentry_sdk.set_tag("artifact.version", ota.version)
+    sentry_sdk.set_tag("artifact.build", ota.build)
+
+
 class OtaMirror:
     def __init__(self, storage: OtaStorage) -> None:
         self.storage = storage
@@ -349,6 +356,7 @@ class OtaMirror:
                 if not ota.is_indexed():
                     continue
 
+                set_sentry_artifact_tags(key, ota)
                 ota_file = download_ota_from_apple(ota, Path(download_dir))
                 self.storage.save_ota(key, ota, ota_file)
                 ota_file.unlink()
@@ -562,13 +570,6 @@ def extract_ota(artifact: Path, output_dir: Path) -> Optional[Path]:
         result.stderr.decode("utf-8"),
         Path(output_dir),
     )
-
-
-def set_sentry_artifact_tags(key: str, ota: OtaArtifact) -> None:
-    sentry_sdk.set_tag("artifact.key", key)
-    sentry_sdk.set_tag("artifact.platform", ota.platform)
-    sentry_sdk.set_tag("artifact.version", ota.version)
-    sentry_sdk.set_tag("artifact.build", ota.build)
 
 
 class OtaExtract:
