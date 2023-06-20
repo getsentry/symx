@@ -392,7 +392,6 @@ def validate_shell_deps() -> None:
         symsorter_version = result.stdout.decode("utf-8")
         logger.info(f"Using {symsorter_version}")
     else:
-        # TODO: download symsorter if missing or outdated?
         logger.error("Cannot find symsorter in CWD")
         sys.exit(1)
 
