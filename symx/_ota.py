@@ -1,4 +1,3 @@
-import collections
 import datetime
 import glob
 import hashlib
@@ -14,7 +13,7 @@ from dataclasses import dataclass
 from enum import Enum
 from math import floor
 from pathlib import Path
-from typing import List, Optional, Iterator, Tuple, Iterable, OrderedDict
+from typing import List, Optional, Iterator, Tuple
 
 import requests
 import sentry_sdk
@@ -427,7 +426,7 @@ class OtaExtractError(Exception):
     pass
 
 
-def split_dsc(search_result: DSCSearchResult) -> None:
+def split_dsc(search_result: DSCSearchResult) -> Path:
     logger.info(f"\t\tSplitting {DYLD_SHARED_CACHE} of {search_result.artifact}")
     result = subprocess.run(
         [
@@ -446,10 +445,12 @@ def split_dsc(search_result: DSCSearchResult) -> None:
     else:
         logger.debug(f"\t\t\tResult from split: {result}")
 
+    return search_result.split_dir
+
 
 def find_dsc(
     input_dir: Path, ota_meta: OtaArtifact, output_dir: Path
-) -> list[DSCSearchResult]:
+) -> DSCSearchResult:
     # TODO: are we also interested in the DriverKit dyld_shared_cache?
     #  System/DriverKit/System/Library/dyld/
     dsc_path_prefix_options = [
@@ -482,11 +483,11 @@ def find_dsc(
         printable_paths = "\n".join(
             [str(result.artifact) for result in dsc_search_results]
         )
-        logger.warning(
+        raise OtaExtractError(
             f"Found more than one {DYLD_SHARED_CACHE} path in {input_dir}:\n{printable_paths}"
         )
 
-    return dsc_search_results
+    return dsc_search_results[0]
 
 
 def symsort(dsc_split_dir: Path, output_dir: Path, prefix: str, bundle_id: str) -> None:
@@ -699,14 +700,9 @@ class OtaExtract:
         ota_meta: OtaArtifact,
         output_dir: Path,
     ) -> None:
-        dsc_search_results = find_dsc(input_dir, ota_meta, output_dir)
+        split_dir = split_dsc(find_dsc(input_dir, ota_meta, output_dir))
 
-        for idx, search_result in enumerate(dsc_search_results):
-            split_dsc(search_result)
-
-        self.symsort_split_results(
-            dsc_search_results, ota_meta_key, ota_meta, output_dir
-        )
+        self.symsort_split_results(split_dir, ota_meta_key, ota_meta, output_dir)
 
     def process_cryptex_dmg(
         self,
@@ -717,44 +713,27 @@ class OtaExtract:
     ) -> None:
         mount = mount_dmg(extracted_dmgs["cryptex-system-arm64e"])
 
-        dsc_search_results = find_dsc(mount.point, ota_meta, output_dir)
-
-        # doing this without further guards assumes that if we find multiple DSC in the image, and they target the same
-        # architecture, then duplicates between them will be the same.
-        for idx, search_result in enumerate(dsc_search_results):
-            split_dsc(search_result)
+        split_dir = split_dsc(find_dsc(mount.point, ota_meta, output_dir))
 
         detach_dev(mount.dev)
 
-        self.symsort_split_results(
-            dsc_search_results, ota_meta_key, ota_meta, output_dir
-        )
+        self.symsort_split_results(split_dir, ota_meta_key, ota_meta, output_dir)
 
     def symsort_split_results(
         self,
-        split_cache_results: Iterable[DSCSearchResult],
+        split_dir: Path,
         ota_meta_key: str,
         ota_meta: OtaArtifact,
         output_dir: Path,
     ) -> None:
-        # make sure that we do not have duplicates when iterating over DSC results, since symsorter would overwrite
-        # the bundle_id index
-        unique_results: OrderedDict[Path, DSCSearchResult] = collections.OrderedDict()
-        for result in split_cache_results:
-            unique_results.setdefault(result.split_dir, result)
-
-        for result in unique_results.values():
-            if not result.split_dir:
-                continue
-
-            bundle_id = f"{ota_meta.version}_{ota_meta.build}_{result.arch.value}"
-            symbols_output_dir = output_dir / "symbols" / bundle_id
-            symsort(
-                result.split_dir,
-                symbols_output_dir,
-                ota_meta.platform,
-                bundle_id,
-            )
-            self.storage.upload_symbols(
-                symbols_output_dir, ota_meta_key, ota_meta, bundle_id
-            )
+        bundle_id = f"ota_{ota_meta_key}"
+        symbols_output_dir = output_dir / "symbols" / bundle_id
+        symsort(
+            split_dir,
+            symbols_output_dir,
+            ota_meta.platform,
+            bundle_id,
+        )
+        self.storage.upload_symbols(
+            symbols_output_dir, ota_meta_key, ota_meta, bundle_id
+        )
