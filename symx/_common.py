@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import List, Any
 
 
+HASH_BLOCK_SIZE = 2**16
+
+MiB = 1024 * 1024
+
+
 class Arch(str, Enum):
     ARM64E = "arm64e"
     ARM64 = "arm64"

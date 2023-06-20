@@ -10,7 +10,7 @@ from typing import Optional, Tuple
 from google.cloud.exceptions import PreconditionFailed, NotFound
 from google.cloud.storage import Blob, Client, Bucket  # type: ignore
 
-from ._common import DataClassJSONEncoder
+from ._common import DataClassJSONEncoder, HASH_BLOCK_SIZE
 from ._ota import (
     OtaArtifact,
     OtaMetaData,
@@ -20,6 +20,7 @@ from ._ota import (
     OtaStorage,
     check_hash,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +51,10 @@ def _fs_md5_hash(file_path: Path) -> str:
     """
     hash_md5 = hashlib.md5()
     with open(file_path, "rb") as f:
-        block = f.read(2**16)
+        block = f.read(HASH_BLOCK_SIZE)
         while len(block) != 0:
             hash_md5.update(block)
-            block = f.read(2**16)
+            block = f.read(HASH_BLOCK_SIZE)
 
     return base64.b64encode(hash_md5.digest()).decode()
 

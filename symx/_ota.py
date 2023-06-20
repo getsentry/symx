@@ -18,10 +18,9 @@ from typing import List, Optional, Iterator, Tuple
 import requests
 import sentry_sdk
 
-from symx._common import Arch, ipsw_version
+from symx._common import Arch, ipsw_version, MiB, HASH_BLOCK_SIZE
 from abc import ABC, abstractmethod
 
-MiB = 1024 * 1024
 
 logger = logging.getLogger(__name__)
 
@@ -276,10 +275,10 @@ def check_hash(ota_meta: OtaArtifact, filepath: Path) -> bool:
 
     sha1sum = hashlib.sha1()
     with open(filepath, "rb") as f:
-        block = f.read(2**16)
+        block = f.read(HASH_BLOCK_SIZE)
         while len(block) != 0:
             sha1sum.update(block)
-            block = f.read(2**16)
+            block = f.read(HASH_BLOCK_SIZE)
 
     return sha1sum.hexdigest() == ota_meta.hash
 
