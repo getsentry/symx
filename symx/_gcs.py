@@ -58,6 +58,28 @@ def _fs_md5_hash(file_path: Path) -> str:
     return base64.b64encode(hash_md5.digest()).decode()
 
 
+def _compare_md5_hash(local_file: Path, remote_blob: Blob) -> bool:
+    """
+    Reads the remote md5 meta from the blob and compares it with the md5 of the local file.
+    :param local_file: a Path to the local file
+    :param remote_blob: a loaded (!) GCS bucket blob
+    :return: True if the hashes are equal, otherwise False
+    """
+    remote_hash = remote_blob.md5_hash
+    local_hash = _fs_md5_hash(local_file)
+    if remote_hash == local_hash:
+        logger.info(
+            f'"{remote_blob.name}" was already uploaded with matching MD5 hash.'
+        )
+        return True
+    else:
+        logger.error(
+            f'"{remote_blob.name}" was already uploaded but MD5 hash differs from the one uploaded '
+            f"(remote = {remote_hash}, local = {local_hash}). "
+        )
+        return False
+
+
 class GoogleStorage(OtaStorage):
     def __init__(self, project: Optional[str], bucket: str) -> None:
         self.project = project
@@ -112,20 +134,7 @@ class GoogleStorage(OtaStorage):
             # if the existing remote file has the same MD5 hash as the file we are about to upload, we can go on without
             # uploading and only update meta, since that means some meta is still set to INDEXED instead of MIRRORED.
             # On the other hand, if the hashes differ, then we have a problem and should be getting out
-            blob.reload()
-            remote_hash = blob.md5_hash
-            local_hash = _fs_md5_hash(ota_file)
-            if remote_hash == local_hash:
-                logger.info(
-                    f'"{mirror_filename}" was already uploaded with matching MD5 hash. '
-                    f'Updating meta for "{ota_meta_key}" accordingly.'
-                )
-            else:
-                logger.error(
-                    f'"{mirror_filename}" was already uploaded and MD5 hash differs from the one uploaded '
-                    f"(remote = {remote_hash}, local = {local_hash}). "
-                    f"Maybe we have insufficient identity or corrupted meta-data?"
-                )
+            if not _compare_md5_hash(ota_file, blob):
                 return
         else:
             # this file will be split into considerable chunks: set timeout to something high
@@ -187,12 +196,7 @@ class GoogleStorage(OtaStorage):
         if blob.exists():
             logger.warning(
                 f"We already have a `bundle_id` {bundle_id} for {ota_meta.platform} in the symbol store. "
-                f"Overwriting corrupts the `bundle_id` index. We must implement a merge strategy."
             )
-            ota_meta.processing_state = OtaProcessingState.BUNDLE_DUPLICATION_DETECTED
-            ota_meta.update_last_run()
-            self.update_meta_item(ota_key, ota_meta)
-            return
 
         for root, dirs, files in os.walk(input_dir):
             for file in files:
@@ -201,6 +205,13 @@ class GoogleStorage(OtaStorage):
                     dest_blob_prefix / Path(root).relative_to(input_dir) / file
                 )
                 blob = self.bucket.blob(str(dest_blob_name))
+
+                if blob.exists():
+                    # if the blob exists we can continue with the next file and
+                    # let _compare_md5_hash log an error if there is a mismatch
+                    _compare_md5_hash(local_file, blob)
+                    continue
+
                 blob.upload_from_filename(str(local_file), num_retries=10)
                 logger.debug(f"File {local_file} uploaded to {dest_blob_name}.")
 
