@@ -388,8 +388,13 @@ def validate_shell_deps() -> None:
 
     result = subprocess.run(["./symsorter", "--version"], capture_output=True)
     if result.returncode == 0:
-        symsorter_version = result.stdout.decode("utf-8")
-        logger.info(f"Using {symsorter_version}")
+        symsorter_version_parts = result.stdout.decode("utf-8").splitlines()
+        if len(symsorter_version_parts) < 1:
+            logger.error("Cannot parse symsorter version")
+            sys.exit(1)
+
+        symsorter_version = symsorter_version_parts[0].split(" ").pop()
+        logger.info(f"Using symsorter {symsorter_version}")
         sentry_sdk.set_tag("symsorter.version", symsorter_version)
     else:
         logger.error("Cannot find symsorter in CWD")
