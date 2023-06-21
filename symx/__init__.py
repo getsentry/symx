@@ -28,6 +28,8 @@ def main(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
         lvl = logging.DEBUG
     logging.basicConfig(level=lvl, format=fmt)
 
+    sentry_sdk.set_tag("github.run.id", int(os.getenv("GITHUB_RUN_ID", 0)))
+
     if SENTRY_DSN:
         sentry_sdk.init(
             dsn=SENTRY_DSN,
