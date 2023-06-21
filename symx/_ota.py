@@ -381,6 +381,7 @@ def validate_shell_deps() -> None:
     version = ipsw_version()
     if version:
         logger.info(f"Using ipsw {version}")
+        sentry_sdk.set_tag("ipsw.version", version)
     else:
         logger.error("ipsw not installed")
         sys.exit(1)
@@ -389,6 +390,7 @@ def validate_shell_deps() -> None:
     if result.returncode == 0:
         symsorter_version = result.stdout.decode("utf-8")
         logger.info(f"Using {symsorter_version}")
+        sentry_sdk.set_tag("symsorter.version", symsorter_version)
     else:
         logger.error("Cannot find symsorter in CWD")
         sys.exit(1)

@@ -10,6 +10,7 @@ from enum import Enum
 from pathlib import Path
 from typing import List, Any
 
+import sentry_sdk
 
 HASH_BLOCK_SIZE = 2**16
 
@@ -83,6 +84,7 @@ def downloader_validate_shell_deps() -> None:
     version = ipsw_version()
     if version:
         print(f"Using ipsw {version}")
+        sentry_sdk.set_tag("ipsw.version", version)
     else:
         print("ipsw not installed")
         sys.exit(1)
