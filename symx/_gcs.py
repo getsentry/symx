@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Tuple
 
-from google.cloud.exceptions import PreconditionFailed, NotFound
+from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Client, Bucket  # type: ignore
 
 from ._common import DataClassJSONEncoder, HASH_BLOCK_SIZE
@@ -20,7 +20,6 @@ from ._ota import (
     OtaStorage,
     check_hash,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +65,7 @@ def _compare_md5_hash(local_file: Path, remote_blob: Blob) -> bool:
     :param remote_blob: a loaded (!) GCS bucket blob
     :return: True if the hashes are equal, otherwise False
     """
+    remote_blob.reload()
     remote_hash = remote_blob.md5_hash
     local_hash = _fs_md5_hash(local_file)
     if remote_hash == local_hash:
@@ -150,12 +150,9 @@ class GoogleStorage(OtaStorage):
     def load_ota(self, ota: OtaArtifact, download_dir: Path) -> Optional[Path]:
         blob = self.bucket.blob(ota.download_path)
         local_ota_path = download_dir / f"{ota.id}.zip"
-        try:
-            # TODO: figure out why this was necessary
-            blob.reload()
-        except NotFound:
+        if not blob.exists():
             logger.error(
-                f"The OTA references a mirror-path that is no longer accessible (probably TTL rn)"
+                f"The OTA references a mirror-path that is no longer accessible"
             )
             return None
 
