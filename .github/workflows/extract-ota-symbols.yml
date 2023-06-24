@@ -1,8 +1,8 @@
 name: Extract OTA symbols
 on:
   workflow_dispatch:
-  #schedule:
-  #  - cron: "30 */6 * * *"
+  schedule:
+    - cron: "30 */6 * * *"
 
 concurrency: ota_extract
 
