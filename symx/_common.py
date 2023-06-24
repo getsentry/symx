@@ -6,7 +6,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import List, Any
 
@@ -17,7 +17,7 @@ HASH_BLOCK_SIZE = 2**16
 MiB = 1024 * 1024
 
 
-class Arch(str, Enum):
+class Arch(StrEnum):
     ARM64E = "arm64e"
     ARM64 = "arm64"
     ARM64_32 = "arm64_32"
