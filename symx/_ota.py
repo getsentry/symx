@@ -477,7 +477,7 @@ def find_dsc(
                         artifact=dsc_path,
                         split_dir=output_dir
                         / "split_symbols"
-                        / f"{ota_meta.version}_{ota_meta.build}_{arch}",
+                        / f"{ota_meta.version}_{ota_meta.build}_" + arch,
                     )
                 )
 
