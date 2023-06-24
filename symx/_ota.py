@@ -514,7 +514,7 @@ def symsort(dsc_split_dir: Path, output_dir: Path, prefix: str, bundle_id: str) 
         capture_output=True,
     )
     if result.returncode == 1:
-        logger.error(f"Symsorter failed with {result}")
+        raise OtaExtractError(f"Symsorter failed with {result}")
 
 
 def find_path_prefix_in_dsc_extract_cmd_output(
