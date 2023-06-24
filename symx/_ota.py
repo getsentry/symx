@@ -499,7 +499,7 @@ def find_dsc(
 def symsort(dsc_split_dir: Path, output_dir: Path, prefix: str, bundle_id: str) -> None:
     logger.info(f"\t\t\tSymsorting {dsc_split_dir} to {output_dir}")
 
-    subprocess.run(
+    result = subprocess.run(
         [
             "./symsorter",
             "-zz",
@@ -511,8 +511,10 @@ def symsort(dsc_split_dir: Path, output_dir: Path, prefix: str, bundle_id: str) 
             bundle_id,
             dsc_split_dir,
         ],
-        check=True,
+        capture_output=True,
     )
+    if result.returncode == 1:
+        logger.error(f"Symsorter failed with {result}")
 
 
 def find_path_prefix_in_dsc_extract_cmd_output(
