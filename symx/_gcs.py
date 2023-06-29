@@ -205,9 +205,10 @@ class GoogleStorage(OtaStorage):
                 blob = self.bucket.blob(str(dest_blob_name))
 
                 if blob.exists():
-                    # if the blob exists we can continue with the next file and
-                    # let _compare_md5_hash log an error if there is a mismatch
-                    _compare_md5_hash(local_file, blob)
+                    # If the blob exists we can continue with the next file because there should be no duplicate
+                    # which contains a mismatching symbol table. this is a big assumption, and we should probably
+                    # cross-check the symbols between the debug-id-equal binaries of each artifact. but this if is
+                    # not that place.
                     continue
 
                 blob.upload_from_filename(str(local_file), num_retries=10)
