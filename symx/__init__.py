@@ -109,4 +109,4 @@ def migrate_storage(
     """
     storage_backend = _init_storage(storage)
     if storage_backend:
-        migrate(storage_backend.bucket)
+        migrate(storage_backend)
