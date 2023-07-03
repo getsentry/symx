@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 from math import floor
@@ -18,9 +19,7 @@ from typing import List, Optional, Iterator, Tuple
 import requests
 import sentry_sdk
 
-from symx._common import Arch, ipsw_version, MiB, HASH_BLOCK_SIZE
-from abc import ABC, abstractmethod
-
+from symx._common import Arch, ipsw_version, MiB, HASH_BLOCK_SIZE, github_run_id
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +84,7 @@ class OtaArtifact:
     hash_algorithm: str
 
     # currently the run_id of the GHA Workflow so we can look it up
-    last_run: int = int(os.getenv("GITHUB_RUN_ID", 0))
+    last_run: int = github_run_id()
     processing_state: OtaProcessingState = OtaProcessingState.INDEXED
 
     def is_indexed(self) -> bool:
@@ -95,7 +94,7 @@ class OtaArtifact:
         return self.processing_state == OtaProcessingState.MIRRORED
 
     def update_last_run(self) -> None:
-        self.last_run = int(os.getenv("GITHUB_RUN_ID", 0))
+        self.last_run = github_run_id()
 
 
 OtaMetaData = dict[str, OtaArtifact]

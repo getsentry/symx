@@ -117,3 +117,7 @@ def ipsw_device_list() -> List[Device]:
             data_start = True
 
     return device_list
+
+
+def github_run_id() -> int:
+    return int(os.getenv("GITHUB_RUN_ID", 0))

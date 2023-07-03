@@ -8,6 +8,7 @@ import sentry_sdk
 import typer
 from rich import print
 
+from ._common import github_run_id
 from ._gcs import GoogleStorage
 from ._maintenance import migrate
 from ._ota import OtaMirror, OtaExtract
@@ -28,7 +29,7 @@ def main(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
         lvl = logging.DEBUG
     logging.basicConfig(level=lvl, format=fmt)
 
-    sentry_sdk.set_tag("github.run.id", int(os.getenv("GITHUB_RUN_ID", 0)))
+    sentry_sdk.set_tag("github.run.id", github_run_id())
 
     if SENTRY_DSN:
         sentry_sdk.init(
