@@ -36,14 +36,14 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install -e ./ 
+          curl -sSL https://install.python-poetry.org | python3 -
+          poetry update
           brew install blacktop/tap/ipsw
           curl -L https://github.com/getsentry/symbolicator/releases/download/23.5.2/symsorter-Darwin-universal > symsorter
           chmod +x symsorter
 
       - name: symx OTA Extract
-        run: symx -v ota extract -s gs://symbol-collector-dev
+        run: symx -v ota extract -t 330 -s gs://symbol-collector-dev
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
