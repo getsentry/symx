@@ -5,7 +5,6 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Optional, Tuple
 
 from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Client, Bucket  # type: ignore[import]
@@ -29,7 +28,7 @@ def convert_image_name_to_path(old_name: str) -> str:
     return f"mirror/ota/{platform}/{version}/{build}/{file}"
 
 
-def download_and_hydrate_meta(blob: Blob) -> Tuple[OtaMetaData, int]:
+def download_and_hydrate_meta(blob: Blob) -> tuple[OtaMetaData, int]:
     result: OtaMetaData = {}
     with tempfile.NamedTemporaryFile() as f:
         blob.download_to_filename(f.name)
@@ -82,7 +81,7 @@ def _compare_md5_hash(local_file: Path, remote_blob: Blob) -> bool:
 
 
 class GoogleStorage(OtaStorage):
-    def __init__(self, project: Optional[str], bucket: str) -> None:
+    def __init__(self, project: str | None, bucket: str) -> None:
         self.project = project
         self.client: Client = Client(project=self.project)
         self.bucket: Bucket = self.client.bucket(bucket)
@@ -112,7 +111,7 @@ class GoogleStorage(OtaStorage):
 
         raise RuntimeError("Failed to update meta-data")
 
-    def load_meta(self) -> Optional[OtaMetaData]:
+    def load_meta(self) -> OtaMetaData | None:
         blob = self.bucket.blob(ARTIFACTS_META_JSON)
         if blob.exists():
             ours, _ = download_and_hydrate_meta(blob)
@@ -147,7 +146,7 @@ class GoogleStorage(OtaStorage):
         ota_meta.update_last_run()
         self.update_meta_item(ota_meta_key, ota_meta)
 
-    def load_ota(self, ota: OtaArtifact, download_dir: Path) -> Optional[Path]:
+    def load_ota(self, ota: OtaArtifact, download_dir: Path) -> Path | None:
         blob = self.bucket.blob(ota.download_path)
         local_ota_path = download_dir / f"{ota.id}.zip"
         if not blob.exists():

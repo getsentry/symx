@@ -1,7 +1,6 @@
 import datetime
 import logging
 import os
-from typing import Optional
 from urllib.parse import urlparse
 
 import sentry_sdk
@@ -38,7 +37,7 @@ def main(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
         )
 
 
-def _init_storage(storage: str) -> Optional[GoogleStorage]:
+def _init_storage(storage: str) -> GoogleStorage | None:
     uri = urlparse(storage)
     if uri.scheme != "gs":
         print(

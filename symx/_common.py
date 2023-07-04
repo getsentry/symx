@@ -8,7 +8,7 @@ import sys
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import List, Any
+from typing import Any
 
 import sentry_sdk
 
@@ -96,7 +96,7 @@ DEVICE_ROW_RE = re.compile(
 )
 
 
-def ipsw_device_list() -> List[Device]:
+def ipsw_device_list() -> list[Device]:
     result = subprocess.run(["ipsw", "device-list"], capture_output=True, check=True)
     data_start = False
     device_list = []

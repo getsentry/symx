@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from enum import Enum
 from math import floor
 from pathlib import Path
-from typing import List, Optional, Iterator, Tuple
+from typing import Iterator
 
 import requests
 import sentry_sdk
@@ -73,13 +73,13 @@ class OtaProcessingState(str, Enum):
 @dataclass
 class OtaArtifact:
     build: str
-    description: List[str]
+    description: list[str]
     version: str
     platform: str
     id: str
     url: str
-    download_path: Optional[str]
-    devices: List[str]
+    download_path: str | None
+    devices: list[str]
     hash: str
     hash_algorithm: str
 
@@ -117,11 +117,11 @@ class OtaStorage(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    def load_meta(self) -> Optional[OtaMetaData]:
+    def load_meta(self) -> OtaMetaData | None:
         raise NotImplementedError()
 
     @abstractmethod
-    def load_ota(self, ota: OtaArtifact, download_dir: Path) -> Optional[Path]:
+    def load_ota(self, ota: OtaArtifact, download_dir: Path) -> Path | None:
         raise NotImplementedError()
 
     @abstractmethod
@@ -215,7 +215,7 @@ def retrieve_current_meta() -> OtaMetaData:
     return meta
 
 
-def merge_lists(a: List[str], b: List[str]) -> List[str]:
+def merge_lists(a: list[str], b: list[str]) -> list[str]:
     if a is None:
         a = []
     if b is None:
@@ -551,7 +551,7 @@ def mount_dmg(dmg: Path) -> MountInfo:
     return parse_hdiutil_mount_output(result.stdout.decode("utf-8"))
 
 
-def extract_ota(artifact: Path, output_dir: Path) -> Optional[Path]:
+def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
     result = subprocess.run(
         [
             "ipsw",
@@ -587,15 +587,15 @@ class OtaExtract:
         self.storage = storage
         self.meta: OtaMetaData = {}
 
-    def iter_mirror(self) -> Iterator[Tuple[str, OtaArtifact]]:
+    def iter_mirror(self) -> Iterator[tuple[str, OtaArtifact]]:
         """
         A generator that reloads the meta-data on every iteration, so we fetch updated mirrored artifacts. This allows
         us to modify the meta-data in the loop that iterates over the output.
         :return: The next current mirrored OtaArtifact to be processed together with its key.
         """
         while True:
-            mirrored_key: Optional[str] = None
-            mirrored_ota: Optional[OtaArtifact] = None
+            mirrored_key: str | None = None
+            mirrored_ota: OtaArtifact | None = None
             ota_meta = self.storage.load_meta()
             if ota_meta is None:
                 logger.error("Could not retrieve meta-data from storage.")
