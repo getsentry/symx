@@ -14,8 +14,9 @@ google-cloud-storage = "^2.10"
 filelock = "^3.12"
 
 [tool.poetry.group.dev.dependencies]
-mypy = "1.2.0"
+mypy = "1.4.1"
 ruff = "0.0.276"
+black = "23.3.0"
 
 [build-system]
 requires = ["poetry-core"]
@@ -26,6 +27,7 @@ symx = "symx:app"
 
 [tool.ruff]
 target-version = "py311"
+line-length = 120
 
 [tool.black]
 target-version = ['py311']
@@ -36,7 +38,6 @@ force-exclude = '''
 
 [tool.mypy]
 files = "symx"
-mypy_path = "symx"
 namespace_packages = true
 explicit_package_bases = true
 show_error_codes = true
