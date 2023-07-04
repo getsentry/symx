@@ -82,7 +82,7 @@ def migrate(storage: GoogleStorage) -> None:
                         f"Expected bundle-index name to be equal to {old_bundle_id}"
                     )
 
-                for debug_id in bundle_idx["name"]:
+                for debug_id in bundle_idx["debug_ids"]:
                     common_back_ref_prefix = (
                         f"symbols/{platform}/{debug_id[0:2]}/{debug_id[2:]}/refs/"
                     )
