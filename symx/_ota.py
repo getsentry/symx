@@ -248,7 +248,8 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
                 and their_item.hash_algorithm == our_item.hash_algorithm
             ):
                 raise RuntimeError(
-                    f"Same matching keys with different value:\n\tlocal: {our_item}\n\tapple: {their_item}"
+                    "Same matching keys with different value:\n\tlocal:"
+                    f" {our_item}\n\tapple: {their_item}"
                 )
         else:
             # it is a new key, store their item in our store
@@ -263,9 +264,9 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
                     and their_item.version == our_v.version
                     and their_item.build != our_v.build
                 ):
-                    ours[
-                        their_key
-                    ].processing_state = OtaProcessingState.INDEXED_DUPLICATE
+                    ours[their_key].processing_state = (
+                        OtaProcessingState.INDEXED_DUPLICATE
+                    )
 
 
 def check_hash(ota_meta: OtaArtifact, filepath: Path) -> bool:
@@ -445,7 +446,8 @@ def split_dsc(search_result: DSCSearchResult) -> Path:
     )
     if result.returncode != 0:
         raise OtaExtractError(
-            f"Split for {search_result.artifact} (arch: {search_result.arch} failed: {result}"
+            f"Split for {search_result.artifact} (arch: {search_result.arch} failed:"
+            f" {result}"
         )
     else:
         logger.debug(f"\t\t\tResult from split: {result}")
@@ -489,7 +491,8 @@ def find_dsc(
             [str(result.artifact) for result in dsc_search_results]
         )
         raise OtaExtractError(
-            f"Found more than one {DYLD_SHARED_CACHE} path in {input_dir}:\n{printable_paths}"
+            f"Found more than one {DYLD_SHARED_CACHE} path in"
+            f" {input_dir}:\n{printable_paths}"
         )
 
     return dsc_search_results[0]
@@ -595,7 +598,7 @@ class OtaExtract:
             mirrored_ota: Optional[OtaArtifact] = None
             ota_meta = self.storage.load_meta()
             if ota_meta is None:
-                logger.error(f"Could not retrieve meta-data from storage.")
+                logger.error("Could not retrieve meta-data from storage.")
                 return
 
             for key, ota in ota_meta.items():
@@ -607,7 +610,7 @@ class OtaExtract:
 
             if mirrored_ota is None or mirrored_key is None:
                 # this means we could not find any more mirrored OTAs
-                logger.info(f"No more mirrored OTAs available exiting iter_mirror().")
+                logger.info("No more mirrored OTAs available exiting iter_mirror().")
                 return
             else:
                 logger.debug(
@@ -665,7 +668,8 @@ class OtaExtract:
             extracted_dmgs = patch_cryptex_dmg(local_ota, Path(cryptex_patch_dir))
             if len(extracted_dmgs) != 0:
                 logger.info(
-                    f"\tCryptex patch successful. Mount, split, symsorting {DYLD_SHARED_CACHE} for: {local_ota}"
+                    "\tCryptex patch successful. Mount, split, symsorting"
+                    f" {DYLD_SHARED_CACHE} for: {local_ota}"
                 )
                 self.process_cryptex_dmg(
                     extracted_dmgs, ota_meta_key, ota_meta, work_dir

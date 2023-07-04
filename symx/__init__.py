@@ -42,13 +42,15 @@ def _init_storage(storage: str) -> Optional[GoogleStorage]:
     uri = urlparse(storage)
     if uri.scheme != "gs":
         print(
-            '[bold red]Unsupported "--storage" URI-scheme used:[/bold red] currently symx supports "gs://" only'
+            '[bold red]Unsupported "--storage" URI-scheme used:[/bold red] currently'
+            ' symx supports "gs://" only'
         )
         return None
 
     if not uri.hostname:
         print(
-            "[bold red]You must supply at least a bucket-name for the GCS storage[/bold red]"
+            "[bold red]You must supply at least a bucket-name for the GCS storage[/bold"
+            " red]"
         )
         return None
 

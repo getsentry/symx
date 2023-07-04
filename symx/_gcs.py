@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from google.cloud.exceptions import PreconditionFailed
-from google.cloud.storage import Blob, Client, Bucket  # type: ignore
+from google.cloud.storage import Blob, Client, Bucket  # type: ignore[import]
 
 from ._common import DataClassJSONEncoder, HASH_BLOCK_SIZE
 from ._ota import (
@@ -75,8 +75,8 @@ def _compare_md5_hash(local_file: Path, remote_blob: Blob) -> bool:
         return True
     else:
         logger.error(
-            f'"{remote_blob.name}" was already uploaded but MD5 hash differs from the one uploaded '
-            f"(remote = {remote_hash}, local = {local_hash}). "
+            f'"{remote_blob.name}" was already uploaded but MD5 hash differs from the'
+            f" one uploaded (remote = {remote_hash}, local = {local_hash}). "
         )
         return False
 
@@ -152,13 +152,13 @@ class GoogleStorage(OtaStorage):
         local_ota_path = download_dir / f"{ota.id}.zip"
         if not blob.exists():
             logger.error(
-                f"The OTA references a mirror-path that is no longer accessible"
+                "The OTA references a mirror-path that is no longer accessible"
             )
             return None
 
         blob.download_to_filename(str(local_ota_path))
         if not check_hash(ota, local_ota_path):
-            logger.error(f"The SHA1 mismatch between storage and meta-data for OTA")
+            logger.error("The SHA1 mismatch between storage and meta-data for OTA")
             return None
 
         return local_ota_path
@@ -193,7 +193,8 @@ class GoogleStorage(OtaStorage):
         blob = self.bucket.blob(str(bundle_index_path))
         if blob.exists():
             logger.warning(
-                f"We already have a `bundle_id` {bundle_id} for {ota_meta.platform} in the symbol store. "
+                f"We already have a `bundle_id` {bundle_id} for {ota_meta.platform} in"
+                " the symbol store. "
             )
 
         for root, dirs, files in os.walk(input_dir):
