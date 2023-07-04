@@ -62,8 +62,9 @@ def migrate(storage: GoogleStorage) -> None:
     bucket = storage.bucket
     for platform, bundles in bundle_id_map.items():
         for old_key, new_key in bundles.items():
-            src_blob_path = f"{platform}/bundles/{old_key}"
-            dst_blob_path = f"{platform}/bundles/ota_{new_key}"
+            commont_path_prefix = f"symbols/{platform}/bundles/"
+            src_blob_path = f"{commont_path_prefix}{old_key}"
+            dst_blob_path = f"{commont_path_prefix}ota_{new_key}"
             blob = bucket.blob(src_blob_path)
             if blob.exists():
                 logger.info(f"dry-run: moving {src_blob_path} to {dst_blob_path}")
