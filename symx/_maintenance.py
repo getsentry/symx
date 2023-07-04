@@ -1,3 +1,4 @@
+import json
 import logging
 
 
@@ -61,12 +62,44 @@ bundle_id_map = {
 def migrate(storage: GoogleStorage) -> None:
     bucket = storage.bucket
     for platform, bundles in bundle_id_map.items():
-        for old_key, new_key in bundles.items():
-            commont_path_prefix = f"symbols/{platform}/bundles/"
-            src_blob_path = f"{commont_path_prefix}{old_key}"
-            dst_blob_path = f"{commont_path_prefix}ota_{new_key}"
-            blob = bucket.blob(src_blob_path)
-            if blob.exists():
-                logger.info(f"dry-run: moving {src_blob_path} to {dst_blob_path}")
+        for old_bundle_id, ota_key in bundles.items():
+            common_path_prefix = f"symbols/{platform}/bundles/"
+            new_bundle_id = f"ota_{ota_key}"
+            bundle_idx_src_blob_path = f"{common_path_prefix}{old_bundle_id}"
+            bundle_idx_dst_blob_path = f"{common_path_prefix}{new_bundle_id}"
+            bundle_idx_blob = bucket.blob(bundle_idx_src_blob_path)
+            if bundle_idx_blob.exists():
+                # TODO: 3: move that blob
+                logger.info(
+                    f"dry-run: moving {bundle_idx_src_blob_path} to"
+                    f" {bundle_idx_dst_blob_path}"
+                )
+                bundle_idx = json.loads(bundle_idx_blob.download_as_string())
+
+                # TODO: 2: overwrite the name in the bundle_idx and store in that blob
+                if bundle_idx["name"] != old_bundle_id:
+                    logger.error(
+                        f"Expected bundle-index name to be equal to {old_bundle_id}"
+                    )
+
+                for debug_id in bundle_idx["name"]:
+                    common_back_ref_prefix = (
+                        f"symbols/{platform}/{debug_id[0:2]}/{debug_id[2:]}/refs/"
+                    )
+                    old_bundle_id_back_ref = f"{common_back_ref_prefix}{old_bundle_id}"
+                    new_bundle_id_back_ref = f"{common_back_ref_prefix}{new_bundle_id}"
+                    back_ref_blob = bucket.blob(old_bundle_id_back_ref)
+                    if back_ref_blob.exists():
+                        # TODO 1: move the back-refs
+                        logger.info(
+                            f"dry-run: moving {old_bundle_id_back_ref} to"
+                            f" {new_bundle_id_back_ref}"
+                        )
+                    else:
+                        logger.error(
+                            f"Found debug-id ({debug_id}) in bundle-index"
+                            f" {bundle_idx_src_blob_path}, that doesn't back-ref via"
+                            f" {old_bundle_id_back_ref}"
+                        )
             else:
-                logger.error(f"Can't stat {src_blob_path}")
+                logger.error(f"Can't stat {bundle_idx_src_blob_path}")
