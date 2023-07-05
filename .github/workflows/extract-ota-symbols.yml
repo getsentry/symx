@@ -37,7 +37,8 @@ jobs:
       - name: Install dependencies
         run: |
           curl -sSL https://install.python-poetry.org | python3 -
-          poetry update
+          /Users/runner/.local/bin/poetry update
+          /Users/runner/.local/bin/poetry install
           brew install blacktop/tap/ipsw
           curl -L https://github.com/getsentry/symbolicator/releases/download/23.5.2/symsorter-Darwin-universal > symsorter
           chmod +x symsorter
