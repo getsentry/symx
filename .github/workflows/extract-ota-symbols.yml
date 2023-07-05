@@ -38,13 +38,12 @@ jobs:
         run: |
           curl -sSL https://install.python-poetry.org | python3 -
           /Users/runner/.local/bin/poetry update
-          /Users/runner/.local/bin/poetry install
           brew install blacktop/tap/ipsw
           curl -L https://github.com/getsentry/symbolicator/releases/download/23.5.2/symsorter-Darwin-universal > symsorter
           chmod +x symsorter
 
       - name: symx OTA Extract
-        run: symx -v ota extract -t 330 -s gs://symbol-collector-dev
+        run: /Users/runner/.local/bin/poetry run symx -v ota extract -t 330 -s gs://symbol-collector-dev
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
