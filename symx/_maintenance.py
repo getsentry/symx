@@ -66,7 +66,8 @@ def migrate(storage: GoogleStorage) -> None:
                         if not back_ref_blob.exists():
                             # if it doesn't then we'll just create the marker
                             logger.info(
-                                f"couldn't find either new or old back-ref... creating {new_bundle_id_back_ref}"
+                                "couldn't find either new or old back-ref... creating"
+                                f" {new_bundle_id_back_ref}"
                             )
                             back_ref_blob.upload_from_string("")
                         else:
