@@ -9,14 +9,7 @@ logger = logging.getLogger(__name__)
 
 bundle_id_map = {
     "watchos": {
-        # TODO: this artifact has been interrupted. Let's continue with the rest and adapt the script to this one.
-        #    "10.0_21R5275t_arm64_32": "c40f9ffd9b9c2e0107ecf69a6980d2ff0d2095aa_beta",
-        "8.7_19U66_arm64_32": "2bb717ee417743b101a2cec2edafbf0136736508",
-        "8.7.1_19U67_armv7k": "1da8fc0973850021bc8bee8bf4973a999355e1e4",
-        "9.5_20T562_arm64_32": "1c8f3750a4dd418150a7720c19d1aa9c62754580",
-        "9.5.1_20T570_arm64_32": "b399d1e697b9acbbb70dcb11274ff3b25e89c273",
-        "9.6_20U5527c_arm64_32": "c404a9468ff65646af56b5d1388d71e9ffb3d031_beta",
-        "9.6_20U5538d_arm64_32": "fd76ab4dd2c5c04c7d0223a5840bd655a3c3a4a9_beta",
+        "10.0_21R5275t_arm64_32": "c40f9ffd9b9c2e0107ecf69a6980d2ff0d2095aa_beta",
     },
 }
 
@@ -55,7 +48,7 @@ def migrate(storage: GoogleStorage) -> None:
                     back_ref_blob = bucket.blob(old_bundle_id_back_ref)
                     if back_ref_blob.exists():
                         logger.info(
-                            f"moving back-ref {old_bundle_id_back_ref} to"
+                            f"found back-ref {old_bundle_id_back_ref}... moving to"
                             f" {new_bundle_id_back_ref}"
                         )
                         # 1: move all back-refs
@@ -68,11 +61,18 @@ def migrate(storage: GoogleStorage) -> None:
                         except Exception as e:
                             sentry_sdk.capture_exception(e)
                     else:
-                        logger.error(
-                            f"Found debug-id ({debug_id}) in bundle-index"
-                            f" {bundle_idx_src_blob_path}, that doesn't back-ref via"
-                            f" {old_bundle_id_back_ref}"
-                        )
+                        # if we cannot find the old back-ref, the moved one should exist
+                        back_ref_blob = bucket.blob(new_bundle_id_back_ref)
+                        if not back_ref_blob.exists():
+                            # if it doesn't then we'll just create the marker
+                            logger.info(
+                                f"couldn't find either new or old back-ref... creating {new_bundle_id_back_ref}"
+                            )
+                            back_ref_blob.upload_from_string("")
+                        else:
+                            logger.info(
+                                f"back-ref was already move to {new_bundle_id_back_ref}"
+                            )
 
                 # 2: overwrite the name in the bundle_idx and store in that blob
                 bundle_idx["name"] = new_bundle_id
