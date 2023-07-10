@@ -12,6 +12,8 @@ typer = {extras = ["all"], version = "^0.9"}
 sentry-sdk = "^1.27"
 google-cloud-storage = "^2.10"
 filelock = "^3.12"
+pydantic = "^2.0"
+
 
 [tool.poetry.group.dev.dependencies]
 mypy = "1.4.1"
