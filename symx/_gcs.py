@@ -9,13 +9,12 @@ from pathlib import Path
 from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Client, Bucket  # type: ignore[import]
 
-from ._common import DataClassJSONEncoder, HASH_BLOCK_SIZE
+from ._common import DataClassJSONEncoder, HASH_BLOCK_SIZE, ArtifactProcessingState
 from ._ota import (
     OtaArtifact,
     OtaMetaData,
     merge_meta_data,
     ARTIFACTS_META_JSON,
-    ArtifactProcessingState,
     OtaStorage,
     check_hash,
 )
