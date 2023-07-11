@@ -11,7 +11,7 @@ import tempfile
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from math import floor
 from pathlib import Path
 from typing import Iterator
@@ -36,7 +36,7 @@ PLATFORMS = [
 ARTIFACTS_META_JSON = "ota_image_meta.json"
 
 
-class OtaProcessingState(str, Enum):
+class ArtifactProcessingState(StrEnum):
     # we retrieved metadata from apple and merged it with ours
     INDEXED = "indexed"
 
@@ -46,13 +46,13 @@ class OtaProcessingState(str, Enum):
     # we mirrored that artifact, and it is ready for further processing
     MIRRORED = "mirrored"
 
-    # we failed to retrieve or upload the artifact (OTAs can get unreachable)
+    # we failed to retrieve or upload the artifact (artifacts can get unreachable)
     MIRRORING_FAILED = "mirroring_failed"
 
     # we stored the extracted dyld_shared_cache (optimization, not implemented yet)
     DSC_EXTRACTED = "dsc_extracted"
 
-    # there was no dyld_shared_cache in the OTA, because it was a partial update
+    # there was no dyld_shared_cache in the artifact (for instance: because it was a partial update)
     DSC_EXTRACTION_FAILED = "dsc_extraction_failed"
 
     # the symx goal: symbols are stored for symbolicator to grab
@@ -85,13 +85,13 @@ class OtaArtifact:
 
     # currently the run_id of the GHA Workflow so we can look it up
     last_run: int = github_run_id()
-    processing_state: OtaProcessingState = OtaProcessingState.INDEXED
+    processing_state: ArtifactProcessingState = ArtifactProcessingState.INDEXED
 
     def is_indexed(self) -> bool:
-        return self.processing_state == OtaProcessingState.INDEXED
+        return self.processing_state == ArtifactProcessingState.INDEXED
 
     def is_mirrored(self) -> bool:
-        return self.processing_state == OtaProcessingState.MIRRORED
+        return self.processing_state == ArtifactProcessingState.MIRRORED
 
     def update_last_run(self) -> None:
         self.last_run = github_run_id()
@@ -265,7 +265,7 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
                     and their_item.build != our_v.build
                 ):
                     ours[their_key].processing_state = (
-                        OtaProcessingState.INDEXED_DUPLICATE
+                        ArtifactProcessingState.INDEXED_DUPLICATE
                     )
 
 
@@ -642,7 +642,7 @@ class OtaExtract:
                     # means there is no OTA at the specified OTA location, although this was defined as MIRRORED
                     # let's set this back to INDEXED, so the mirror workflow tries to download this again.
                     ota.download_path = None
-                    ota.processing_state = OtaProcessingState.INDEXED
+                    ota.processing_state = ArtifactProcessingState.INDEXED
                     ota.update_last_run()
                     self.storage.update_meta_item(key, ota)
                     continue
@@ -656,7 +656,9 @@ class OtaExtract:
                     # other exceptions should just stop the symbol-extraction process.
                     sentry_sdk.capture_exception(e)
                     # also need to mark failing cases, because otherwise they will fail again
-                    ota.processing_state = OtaProcessingState.SYMBOL_EXTRACTION_FAILED
+                    ota.processing_state = (
+                        ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
+                    )
                     ota.update_last_run()
                     self.storage.update_meta_item(key, ota)
 

@@ -15,7 +15,7 @@ from ._ota import (
     OtaMetaData,
     merge_meta_data,
     ARTIFACTS_META_JSON,
-    OtaProcessingState,
+    ArtifactProcessingState,
     OtaStorage,
     check_hash,
 )
@@ -142,7 +142,7 @@ class GoogleStorage(OtaStorage):
             logger.info("Upload finished. Updating OTA meta-data.")
 
         ota_meta.download_path = mirror_filename
-        ota_meta.processing_state = OtaProcessingState.MIRRORED
+        ota_meta.processing_state = ArtifactProcessingState.MIRRORED
         ota_meta.update_last_run()
         self.update_meta_item(ota_meta_key, ota_meta)
 
@@ -214,6 +214,6 @@ class GoogleStorage(OtaStorage):
                 blob.upload_from_filename(str(local_file), num_retries=10)
                 logger.debug(f"File {local_file} uploaded to {dest_blob_name}.")
 
-        ota_meta.processing_state = OtaProcessingState.SYMBOLS_EXTRACTED
+        ota_meta.processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
         ota_meta.update_last_run()
         self.update_meta_item(ota_key, ota_meta)
