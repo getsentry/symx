@@ -1,0 +1,53 @@
+name: Sync IPSW meta-db
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "45 4 * * *"
+
+concurrency: ipsw_meta_sync
+
+jobs:
+  ipsw-meta-sync:
+    name: Sync IPSW meta
+    runs-on: "ubuntu-22.04"
+    permissions:
+      contents: "read"
+      id-token: "write"
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v3
+
+      - name: Auth
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: projects/868781662168/locations/global/workloadIdentityPools/prod-github/providers/github-oidc-pool
+          service_account: symx-downloader@sac-prod-sa.iam.gserviceaccount.com
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          version: ">= 363.0.0"
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ./ 
+
+      - name: Install Apple Inc. Root
+        run: |
+          wget https://www.apple.com/appleca/AppleIncRootCertificate.cer
+          openssl x509 -inform DER -in AppleIncRootCertificate.cer -out AppleIncRootCertificate.crt
+          sudo cp AppleIncRootCertificate.crt /usr/local/share/ca-certificates
+          sudo update-ca-certificates
+
+      - name: symx IPSW meta-sync
+        run: symx -v ipsw meta-sync -s gs://symbol-collector-dev
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
