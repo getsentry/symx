@@ -189,8 +189,7 @@ class AppleDbIpswImport:
         self.api_request_count += 1
         if response.status_code != 200:
             logger.error(
-                f"Failed GET-request to {url}: {response.status_code},"
-                f" {response.text}"
+                f"Failed GET-request to {url}: {response.status_code}, {response.text}"
             )
             return None
 
