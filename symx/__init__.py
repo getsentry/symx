@@ -9,6 +9,7 @@ from rich import print
 
 from ._common import github_run_id
 from ._gcs import GoogleStorage
+from ._ipsw.runners import import_meta_from_appledb
 from ._maintenance import migrate
 from ._ota import OtaMirror, OtaExtract
 
@@ -18,6 +19,9 @@ app = typer.Typer()
 
 ota_app = typer.Typer()
 app.add_typer(ota_app, name="ota")
+
+ipsw_app = typer.Typer()
+app.add_typer(ipsw_app, name="ipsw")
 
 
 @app.callback()
@@ -111,3 +115,16 @@ def migrate_storage(
     storage_backend = _init_storage(storage)
     if storage_backend:
         migrate(storage_backend)
+
+
+@ipsw_app.command()
+def meta_sync(
+    storage: str = typer.Option(..., "--storage", "-s", help="Storage")
+) -> None:
+    """
+    Synchronize meta-data with appledb.
+    :return:
+    """
+    storage_backend = _init_storage(storage)
+    if storage_backend:
+        import_meta_from_appledb(storage_backend)
