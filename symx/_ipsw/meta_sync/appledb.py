@@ -3,11 +3,11 @@ import logging
 import random
 from dataclasses import dataclass
 from datetime import date
-from enum import StrEnum
+from pathlib import Path
 from urllib.parse import urlparse
-from symx._common import ArtifactProcessingState
 
 import requests
+import sentry_sdk
 from pydantic import (
     BaseModel,
     computed_field,
@@ -18,29 +18,19 @@ from pydantic import (
 )
 from pydantic_core.core_schema import FieldValidationInfo
 
+from symx._ipsw.common import (
+    IpswReleaseStatus,
+    IpswPlatform,
+    IpswArtifactHashes,
+    IpswArtifact,
+    IpswArtifactDb,
+    IpswSource,
+    ARTIFACTS_META_JSON,
+)
+
+IMPORT_STATE_JSON = "appledb_import_state.json"
+
 logger = logging.getLogger(__name__)
-
-
-class IpswReleaseStatus(StrEnum):
-    RELEASE = "rel"
-    RELEASE_CANDIDATE = "rc"
-    BETA = "beta"
-
-
-class IpswPlatform(StrEnum):
-    AUDIOOS = "audioOS"
-    BRIDGEOS = "bridgeOS"
-    IOS = "iOS"
-    IPADOS = "iPadOS"
-    IPODOS = "iPodOS"
-    MACOS = "macOS"
-    TVOS = "tvOS"
-    WATCHOS = "watchOS"
-
-
-class IpswArtifactHashes(BaseModel):
-    sha1: str | None = None
-    sha2: str | None = Field(None, validation_alias="sha2-256")
 
 
 class AppleDbSourceLink(BaseModel):
@@ -72,28 +62,6 @@ class AppleDbSource(BaseModel):
         return None
 
 
-class IpswSource(BaseModel):
-    devices: list[str]
-    link: HttpUrl
-    hashes: IpswArtifactHashes | None = None
-    size: int | None = None
-
-
-class IpswArtifact(BaseModel):
-    platform: IpswPlatform
-    version: str
-    build: str
-    released: date | None = None
-    release_status: IpswReleaseStatus
-    sources: list[IpswSource]
-    processing_state: ArtifactProcessingState = ArtifactProcessingState.INDEXED
-
-    @computed_field  # type: ignore[misc]
-    @property
-    def key(self) -> str:
-        return f"{self.platform}_{self.version}_{self.build}"
-
-
 class AppleDbArtifact(BaseModel):
     rc: bool | None = None
     beta: bool | None = None
@@ -123,8 +91,7 @@ def ipsw_filename_from_url(url: str) -> str:
     return path.split("/")[-1][:-5]
 
 
-AppleDBRepoURL = "https://github.com/littlebyteorg/appledb"
-ApiContentsURL = "https://api.github.com/repos/littlebyteorg/appledb/contents/"
+API_CONTENTS_URL = "https://api.github.com/repos/littlebyteorg/appledb/contents/"
 
 
 def random_user_agent() -> str:
@@ -157,14 +124,6 @@ def random_user_agent() -> str:
     return random.choice(user_agents)
 
 
-class IpswArtifactDb(BaseModel):
-    version: int = 0
-    artifacts: dict[str, IpswArtifact] = {}
-
-    def contains(self, key: str) -> bool:
-        return key in self.artifacts
-
-
 @dataclass
 class AppleDbIspwImportState:
     platform: str | None = None
@@ -172,8 +131,9 @@ class AppleDbIspwImportState:
     file_hash: str | None = None
 
 
-class AppleDbIspwImport:
-    def __init__(self) -> None:
+class AppleDbIpswImport:
+    def __init__(self, processing_dir: Path) -> None:
+        self._processing_dir = processing_dir
         self._load_appledb_indexed()
         self._load_meta_db()
         self.request_count = 0
@@ -183,24 +143,26 @@ class AppleDbIspwImport:
         try:
             for platform in IpswPlatform:
                 self._process_platform(platform)
+        except Exception as e:
+            sentry_sdk.capture_exception(e)
         finally:
-            print(f"Meta-DB:\n\n{self.meta_db.model_dump_json(indent=4)}")
-            print(f"Number of github API requests = {self.request_count}")
+            logger.info(f"Meta-DB:\n\n{self.meta_db.model_dump_json(indent=4)}")
+            logger.info(f"Number of github API requests = {self.request_count}")
 
             self._store_appledb_indexed()
             self._store_ipsw_meta()
 
     def _store_ipsw_meta(self) -> None:
-        with open("ipsw_meta.json", "w") as fp:
+        with open(self._processing_dir / ARTIFACTS_META_JSON, "w") as fp:
             fp.write(self.meta_db.model_dump_json())
 
     def _store_appledb_indexed(self) -> None:
-        with open("appledb_import_state.json", "w") as fp:
+        with open(self._processing_dir / IMPORT_STATE_JSON, "w") as fp:
             json.dump(self.apple_db_import_state, fp)
 
     def _load_meta_db(self) -> None:
         try:
-            fp = open("ipsw_meta.json")
+            fp = open(self._processing_dir / ARTIFACTS_META_JSON)
         except IOError:
             self.meta_db = IpswArtifactDb()
         else:
@@ -209,7 +171,7 @@ class AppleDbIspwImport:
 
     def _load_appledb_indexed(self) -> None:
         try:
-            fp = open("appledb_import_state.json")
+            fp = open(self._processing_dir / IMPORT_STATE_JSON)
         except IOError:
             self.apple_db_import_state: dict[str, list[str]] = {}
         else:
@@ -218,7 +180,7 @@ class AppleDbIspwImport:
 
     def _process_platform(self, platform: str) -> None:
         self.state.platform = platform
-        platform_url = f"{ApiContentsURL}osFiles/{platform}"
+        platform_url = f"{API_CONTENTS_URL}osFiles/{platform}"
         headers = {
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
@@ -234,7 +196,7 @@ class AppleDbIspwImport:
                 folder_url = f"{platform_url}/{folder_name}"
                 self._process_folder(folder_url)
         else:
-            print(
+            logger.error(
                 f"Failed to download {platform} folders: {response.status_code},"
                 f" {response.text}"
             )
@@ -253,7 +215,7 @@ class AppleDbIspwImport:
                 self.state.file_hash = file["sha"]
                 self._process_file(file["download_url"])
         else:
-            print(
+            logger.error(
                 f"Failed to download {folder_url} contents: {response.status_code},"
                 f" {response.text}"
             )
@@ -271,8 +233,7 @@ class AppleDbIspwImport:
             try:
                 src_artifact = AppleDbArtifact.model_validate_json(response.content)
             except ValidationError as e:
-                # this should probably just send to sentry
-                logger.error(e)
+                sentry_sdk.capture_exception(e)
                 self.update_import_state_log()
                 return
 
@@ -293,7 +254,7 @@ class AppleDbIspwImport:
                 artifact = IpswArtifact(**src_dump)
                 if self.meta_db.contains(artifact.key):
                     # this only checks if we already have that id, but it doesn't ask whether they
-                    # differ... this should be easy to check with pydantic, but it might help to print
+                    # differ... this should be easy to check with pydantic, but it might help to log
                     # the diff with something like deepdiff
                     logger.warning(
                         f"{artifact.key} already added\n\told ="
@@ -305,7 +266,7 @@ class AppleDbIspwImport:
 
                 self.update_import_state_log()
         else:
-            print(
+            logger.error(
                 f"Failed to download {download_url} contents:"
                 f" {response.status_code}, {response.text}"
             )
@@ -333,11 +294,3 @@ class AppleDbIspwImport:
             self.apple_db_import_state[self.state.folder_hash].append(
                 self.state.file_hash
             )
-
-
-def main() -> None:
-    AppleDbIspwImport().run()
-
-
-if __name__ == "__main__":
-    main()
