@@ -136,7 +136,8 @@ class AppleDbIpswImport:
         self._processing_dir = processing_dir
         self._load_appledb_indexed()
         self._load_meta_db()
-        self.request_count = 0
+        self.api_request_count = 0
+        self.file_request_count = 0
         self.state = AppleDbIspwImportState()
 
     def run(self) -> None:
@@ -146,8 +147,8 @@ class AppleDbIpswImport:
         except Exception as e:
             sentry_sdk.capture_exception(e)
         finally:
-            logger.info(f"Meta-DB:\n\n{self.meta_db.model_dump_json(indent=4)}")
-            logger.info(f"Number of github API requests = {self.request_count}")
+            logger.info(f"Number of github API requests = {self.api_request_count}")
+            logger.info(f"Number of github file requests = {self.file_request_count}")
 
             self._store_appledb_indexed()
             self._store_ipsw_meta()
@@ -178,50 +179,52 @@ class AppleDbIpswImport:
             with fp:
                 self.apple_db_import_state = json.load(fp)
 
+    def _github_api_request(self, url: str) -> bytes | None:
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": random_user_agent(),
+        }
+        response = requests.get(url, headers)
+        self.api_request_count += 1
+        if response.status_code != 200:
+            logger.error(
+                f"Failed GET-request to {url}: {response.status_code},"
+                f" {response.text}"
+            )
+            return None
+
+        return response.content
+
     def _process_platform(self, platform: str) -> None:
         self.state.platform = platform
+
         platform_url = f"{API_CONTENTS_URL}osFiles/{platform}"
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": random_user_agent(),
-        }
-        response = requests.get(platform_url, headers)
-        self.request_count += 1
-        if response.status_code == 200:
-            folders = json.loads(response.content)
-            for folder in folders:
-                folder_name = folder["name"]
-                self.state.folder_hash = folder["sha"]
-                folder_url = f"{platform_url}/{folder_name}"
-                self._process_folder(folder_url)
-        else:
-            logger.error(
-                f"Failed to download {platform} folders: {response.status_code},"
-                f" {response.text}"
-            )
+        response = self._github_api_request(platform_url)
+        if not response:
+            return
+
+        folders = json.loads(response)
+
+        for folder in folders:
+            folder_name = folder["name"]
+            self.state.folder_hash = folder["sha"]
+            folder_url = f"{platform_url}/{folder_name}"
+            self._process_folder(folder_url)
 
     def _process_folder(self, folder_url: str) -> None:
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": random_user_agent(),
-        }
-        response = requests.get(folder_url, headers)
-        self.request_count += 1
-        if response.status_code == 200:
-            files = json.loads(response.content)
-            for file in files:
-                self.state.file_hash = file["sha"]
-                self._process_file(file["download_url"])
-        else:
-            logger.error(
-                f"Failed to download {folder_url} contents: {response.status_code},"
-                f" {response.text}"
-            )
+        response = self._github_api_request(folder_url)
+        if not response:
+            return
+
+        files = json.loads(response)
+        for file in files:
+            self.state.file_hash = file["sha"]
+            self._process_file(file["download_url"])
 
     def _process_file(self, download_url: str) -> None:
         if self.file_in_import_state_log():
+            logger.info(f"{download_url} already processed continue with next")
             return
 
         headers = {
@@ -229,47 +232,49 @@ class AppleDbIpswImport:
             "User-Agent": random_user_agent(),
         }
         response = requests.get(download_url, headers)
-        if response.status_code == 200:
-            try:
-                src_artifact = AppleDbArtifact.model_validate_json(response.content)
-            except ValidationError as e:
-                sentry_sdk.capture_exception(e)
-                self.update_import_state_log()
-                return
-
-            if len(src_artifact.sources) > 0:
-                ipsw_sources: list[IpswSource] = []
-                for source in src_artifact.sources:
-                    if source.link and source.type == "ipsw":
-                        ipsw_sources.append(
-                            IpswSource(**source.model_dump(exclude={"type", "links"}))
-                        )
-                if len(ipsw_sources) == 0:
-                    self.update_import_state_log()
-                    return
-
-                src_dump = src_artifact.model_dump(exclude={"rc", "beta", "sources"})
-                src_dump["platform"] = self.state.platform
-                src_dump["sources"] = ipsw_sources
-                artifact = IpswArtifact(**src_dump)
-                if self.meta_db.contains(artifact.key):
-                    # this only checks if we already have that id, but it doesn't ask whether they
-                    # differ... this should be easy to check with pydantic, but it might help to log
-                    # the diff with something like deepdiff
-                    logger.warning(
-                        f"{artifact.key} already added\n\told ="
-                        f" {self.meta_db.artifacts[artifact.key]}\n\tnew ="
-                        f" {artifact}"
-                    )
-                else:
-                    self.meta_db.artifacts[artifact.key] = artifact
-
-                self.update_import_state_log()
-        else:
+        self.file_request_count += 1
+        if response.status_code != 200:
             logger.error(
                 f"Failed to download {download_url} contents:"
                 f" {response.status_code}, {response.text}"
             )
+            return
+
+        try:
+            src_artifact = AppleDbArtifact.model_validate_json(response.content)
+        except ValidationError as e:
+            sentry_sdk.capture_exception(e)
+            self.update_import_state_log()
+            return
+
+        if len(src_artifact.sources) > 0:
+            ipsw_sources: list[IpswSource] = []
+            for source in src_artifact.sources:
+                if source.link and source.type == "ipsw":
+                    ipsw_sources.append(
+                        IpswSource(**source.model_dump(exclude={"type", "links"}))
+                    )
+            if len(ipsw_sources) == 0:
+                self.update_import_state_log()
+                return
+
+            src_dump = src_artifact.model_dump(exclude={"rc", "beta", "sources"})
+            src_dump["platform"] = self.state.platform
+            src_dump["sources"] = ipsw_sources
+            artifact = IpswArtifact(**src_dump)
+            if self.meta_db.contains(artifact.key):
+                # this only checks if we already have that id, but it doesn't ask whether they
+                # differ... this should be easy to check with pydantic, but it might help to log
+                # the diff with something like deepdiff
+                logger.warning(
+                    f"{artifact.key} already added\n\told ="
+                    f" {self.meta_db.artifacts[artifact.key]}\n\tnew ="
+                    f" {artifact}"
+                )
+            else:
+                self.meta_db.artifacts[artifact.key] = artifact
+
+            self.update_import_state_log()
 
     def file_in_import_state_log(self) -> bool:
         return (
