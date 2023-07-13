@@ -273,11 +273,11 @@ class AppleDbIpswImport:
                 # the diff with something like deepdiff
                 logger.error(
                     f"{artifact.key} already added\n\told ="
-                    f" {self.meta_db.artifacts[artifact.key]}\n\tnew ="
+                    f" {self.meta_db.get(artifact.key)}\n\tnew ="
                     f" {artifact}"
                 )
             else:
-                self.meta_db.artifacts[artifact.key] = artifact
+                self.meta_db.insert(artifact.key, artifact)
                 self.update_import_state_log()
 
     def file_in_import_state_log(self) -> bool:

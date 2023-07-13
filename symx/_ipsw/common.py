@@ -63,3 +63,9 @@ class IpswArtifactDb(BaseModel):
 
     def contains(self, key: str) -> bool:
         return key in self.artifacts
+
+    def get(self, key: str) -> IpswArtifact | None:
+        return self.artifacts.get(key)
+
+    def insert(self, key: str, artifact: IpswArtifact) -> None:
+        self.artifacts[key] = artifact
