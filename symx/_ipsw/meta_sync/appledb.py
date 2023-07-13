@@ -271,15 +271,14 @@ class AppleDbIpswImport:
                 # this only checks if we already have that id, but it doesn't ask whether they
                 # differ... this should be easy to check with pydantic, but it might help to log
                 # the diff with something like deepdiff
-                logger.warning(
+                logger.error(
                     f"{artifact.key} already added\n\told ="
                     f" {self.meta_db.artifacts[artifact.key]}\n\tnew ="
                     f" {artifact}"
                 )
             else:
                 self.meta_db.artifacts[artifact.key] = artifact
-
-            self.update_import_state_log()
+                self.update_import_state_log()
 
     def file_in_import_state_log(self) -> bool:
         return (
