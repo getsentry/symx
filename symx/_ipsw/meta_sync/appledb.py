@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import random
 from dataclasses import dataclass
 from datetime import date
@@ -31,6 +32,8 @@ from symx._ipsw.common import (
 IMPORT_STATE_JSON = "appledb_import_state.json"
 
 logger = logging.getLogger(__name__)
+
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", None)
 
 
 class AppleDbSourceLink(BaseModel):
@@ -185,6 +188,9 @@ class AppleDbIpswImport:
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": random_user_agent(),
         }
+        if GITHUB_TOKEN:
+            headers["Authorization"] = f"token {GITHUB_TOKEN}"
+
         response = requests.get(url, headers)
         self.api_request_count += 1
         if response.status_code != 200:
