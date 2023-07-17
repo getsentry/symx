@@ -195,7 +195,8 @@ class AppleDbIpswImport:
         self.api_request_count += 1
         if response.status_code != 200:
             logger.error(
-                f"Failed github API GET-request: {response.status_code}, {response.text}"
+                f"Failed github API GET-request: {response.status_code},"
+                f" {response.text}"
             )
             return None
 
@@ -248,7 +249,7 @@ class AppleDbIpswImport:
         self.file_request_count += 1
         if response.status_code != 200:
             logger.error(
-                f"Failed to download file contents:"
+                "Failed to download file contents:"
                 f" {response.status_code}, {response.text}"
             )
             return
