@@ -134,6 +134,11 @@ class AppleDbIspwImportState:
     file_hash: str | None = None
 
 
+class GithubAPIResponse(BaseModel):
+    message: str
+    documentation_url: HttpUrl
+
+
 class AppleDbIpswImport:
     def __init__(self, processing_dir: Path) -> None:
         self._processing_dir = processing_dir
@@ -194,10 +199,18 @@ class AppleDbIpswImport:
         response = requests.get(url, headers)
         self.api_request_count += 1
         if response.status_code != 200:
-            logger.error(
-                f"Failed github API GET-request: {response.status_code},"
-                f" {response.text}"
-            )
+            github_response = GithubAPIResponse.model_validate_json(response.text)
+            # we are not interested in rate-limit error notifications only log a warning
+            if (
+                response.status_code == 403
+                and "API rate limit exceeded" in github_response.message
+            ):
+                logger.warning(github_response.message)
+            else:
+                logger.error(
+                    f"Failed github API GET-request: {response.status_code},"
+                    f" {github_response}"
+                )
             return None
 
         return response.content
