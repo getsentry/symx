@@ -203,6 +203,7 @@ class AppleDbIpswImport:
 
     def _process_platform(self, platform: str) -> None:
         self.state.platform = platform
+        sentry_sdk.set_tag("ipsw.import.appledb.platform", platform)
 
         platform_url = f"{API_CONTENTS_URL}osFiles/{platform}"
         response = self._github_api_request(platform_url)
@@ -214,6 +215,10 @@ class AppleDbIpswImport:
         for folder in folders:
             folder_name = folder["name"]
             self.state.folder_hash = folder["sha"]
+            sentry_sdk.set_tag(
+                "ipsw.import.appledb.folder_hash", self.state.folder_hash
+            )
+            sentry_sdk.set_tag("ipsw.import.appledb.folder_name", folder_name)
             folder_url = f"{platform_url}/{folder_name}"
             self._process_folder(folder_url)
 
@@ -225,7 +230,10 @@ class AppleDbIpswImport:
         files = json.loads(response)
         for file in files:
             self.state.file_hash = file["sha"]
-            self._process_file(file["download_url"])
+            download_url = file["download_url"]
+            sentry_sdk.set_tag("ipsw.import.appledb.download_url", download_url)
+            sentry_sdk.set_tag("ipsw.import.appledb.file_hash", self.state.file_hash)
+            self._process_file(download_url)
 
     def _process_file(self, download_url: str) -> None:
         if self.file_in_import_state_log():
@@ -278,7 +286,8 @@ class AppleDbIpswImport:
                 )
             else:
                 self.meta_db.insert(artifact.key, artifact)
-                self.update_import_state_log()
+
+            self.update_import_state_log()
 
     def file_in_import_state_log(self) -> bool:
         return (
