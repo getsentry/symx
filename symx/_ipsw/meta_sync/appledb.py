@@ -138,7 +138,11 @@ class AppleDbIspwImportState:
 def _folder_sort_key(item: dict[str, Any]) -> int:
     folder_name: str = item["name"]
     x_idx = folder_name.find("x")
-    sort_key = int(folder_name[0:x_idx])
+    try:
+        sort_key = int(folder_name[0:x_idx])
+    except ValueError:
+        sort_key = -1
+
     return sort_key
 
 
