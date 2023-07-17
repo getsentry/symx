@@ -24,7 +24,6 @@ class IpswPlatform(StrEnum):
     BRIDGEOS = "bridgeOS"
     IOS = "iOS"
     IPADOS = "iPadOS"
-    IPODOS = "iPodOS"
     MACOS = "macOS"
     TVOS = "tvOS"
     WATCHOS = "watchOS"
