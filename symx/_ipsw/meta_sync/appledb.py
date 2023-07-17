@@ -163,8 +163,12 @@ class AppleDbIpswImport:
 
     def run(self) -> None:
         try:
-            # there is no particular reason to iterate by any order through the platforms so let's shuffle (#rate-limit)
             platforms = list(IpswPlatform)
+
+            # ignore IPod IPSWs when syncing
+            platforms.remove(IpswPlatform.IPODOS)
+
+            # there is no particular reason to iterate by any order through the platforms so let's shuffle (#rate-limit)
             random.shuffle(platforms)
             for platform in platforms:
                 self._process_platform(platform)
