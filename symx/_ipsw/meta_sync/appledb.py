@@ -5,6 +5,7 @@ import random
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import requests
@@ -134,6 +135,18 @@ class AppleDbIspwImportState:
     file_hash: str | None = None
 
 
+def _folder_sort_key(item: dict[str, Any]) -> int:
+    folder_name: str = item["name"]
+    x_idx = folder_name.find("x")
+    sort_key = int(folder_name[0:x_idx])
+    return sort_key
+
+
+def _file_sort_key(item: dict[str, Any]) -> str:
+    file_name: str = item["name"]
+    return file_name
+
+
 class GithubAPIResponse(BaseModel):
     message: str
     documentation_url: HttpUrl
@@ -150,7 +163,10 @@ class AppleDbIpswImport:
 
     def run(self) -> None:
         try:
-            for platform in IpswPlatform:
+            # there is no particular reason to iterate by any order through the platforms so let's shuffle (#rate-limit)
+            platforms = list(IpswPlatform)
+            random.shuffle(platforms)
+            for platform in platforms:
                 self._process_platform(platform)
         except Exception as e:
             sentry_sdk.capture_exception(e)
@@ -224,9 +240,10 @@ class AppleDbIpswImport:
         if not response:
             return
 
-        folders = json.loads(response)
+        folders: list[dict[str, Any]] = json.loads(response)
 
-        for folder in folders:
+        # iterate folders starting with the latest releases
+        for folder in sorted(folders, key=_folder_sort_key, reverse=True):
             folder_name = folder["name"]
             self.state.folder_hash = folder["sha"]
             sentry_sdk.set_tag(
@@ -242,7 +259,7 @@ class AppleDbIpswImport:
             return
 
         files = json.loads(response)
-        for file in files:
+        for file in sorted(files, key=_file_sort_key, reverse=True):
             self.state.file_hash = file["sha"]
             download_url = file["download_url"]
             sentry_sdk.set_tag("ipsw.import.appledb.download_url", download_url)
