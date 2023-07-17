@@ -122,7 +122,11 @@ def parse_download_meta_output(
     beta: bool,
 ) -> None:
     if result.returncode != 0:
-        logger.error(f"Download meta failed: {result.stderr!r}")
+        ipsw_stderr = result.stderr.decode("utf-8")
+        # We regularly get 403 errors on the apple endpoint. These seem to be intermittent
+        # availability issues and do not warrant error notification noise.
+        if "api returned status: 403 Forbidden" in ipsw_stderr:
+            logger.error(f"Download meta failed: {ipsw_stderr}")
     else:
         platform_meta = json.loads(result.stdout)
         for meta_item in platform_meta:
