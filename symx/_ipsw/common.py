@@ -26,6 +26,7 @@ class IpswPlatform(StrEnum):
     IPADOS = "iPadOS"
     MACOS = "macOS"
     TVOS = "tvOS"
+    VISIONOS = "visionOS"
     WATCHOS = "watchOS"
 
 
