@@ -41,9 +41,14 @@ jobs:
           brew install blacktop/tap/ipsw
           curl -L https://github.com/getsentry/symbolicator/releases/download/23.6.2/symsorter-Darwin-universal > symsorter
           chmod +x symsorter
+          pwd
+          ls -la
 
       - name: symx OTA Extract
-        run: /Users/runner/.local/bin/poetry run symx -v ota extract -t 330 -s gs://symbol-collector-dev
+        run: |
+          pwd
+          ls -la
+          /Users/runner/.local/bin/poetry run symx -v ota extract -t 330 -s gs://symbol-collector-dev
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
