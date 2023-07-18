@@ -242,24 +242,32 @@ class AppleDbIpswImport:
     def _process_platform(self, platform: str) -> None:
         self.state.platform = platform
         sentry_sdk.set_tag("ipsw.import.appledb.platform", platform)
-
         platform_url = f"{API_CONTENTS_URL}osFiles/{platform}"
         response = self._github_api_request(platform_url)
         if not response:
             return
 
-        folders: list[dict[str, Any]] = json.loads(response)
+        platform_items: list[dict[str, Any]] = json.loads(response)
 
-        # iterate folders starting with the latest releases
-        for folder in sorted(folders, key=_folder_sort_key, reverse=True):
-            folder_name = folder["name"]
-            self.state.folder_hash = folder["sha"]
-            sentry_sdk.set_tag(
-                "ipsw.import.appledb.folder_hash", self.state.folder_hash
-            )
-            sentry_sdk.set_tag("ipsw.import.appledb.folder_name", folder_name)
-            folder_url = f"{platform_url}/{folder_name}"
-            self._process_folder(folder_url)
+        # iterate platform_items starting with the latest releases
+        for item in sorted(platform_items, key=_folder_sort_key, reverse=True):
+            if item["type"] == "dir":
+                folder_name = item["name"]
+                self.state.folder_hash = item["sha"]
+                sentry_sdk.set_tag(
+                    "ipsw.import.appledb.folder_hash", self.state.folder_hash
+                )
+                sentry_sdk.set_tag("ipsw.import.appledb.folder_name", folder_name)
+                folder_url = f"{platform_url}/{folder_name}"
+                self._process_folder(folder_url)
+            elif item["type"] == "file":
+                self.state.file_hash = item["sha"]
+                download_url = item["download_url"]
+                sentry_sdk.set_tag("ipsw.import.appledb.download_url", download_url)
+                sentry_sdk.set_tag(
+                    "ipsw.import.appledb.file_hash", self.state.file_hash
+                )
+                self._process_file(download_url)
 
     def _process_folder(self, folder_url: str) -> None:
         response = self._github_api_request(folder_url)
