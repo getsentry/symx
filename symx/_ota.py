@@ -373,8 +373,8 @@ def validate_shell_deps() -> None:
         logger.info(f"Using symsorter {symsorter_version}")
         sentry_sdk.set_tag("symsorter.version", symsorter_version)
     else:
-        logger.info(result.stdout.decode("utf-8"))
-        logger.error(result.stderr.decode("utf-8"))
+        symsorter_stderr = result.stderr.decode("utf-8")
+        logger.error(f"symsorter failed: {symsorter_stderr}")
         sys.exit(1)
 
 
