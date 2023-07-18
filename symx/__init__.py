@@ -1,26 +1,22 @@
 import datetime
 import logging
 import os
-from urllib.parse import urlparse
 
 import sentry_sdk
 import typer
-from rich import print
 
 from ._common import github_run_id
-from ._gcs import GoogleStorage
-from ._ipsw.runners import import_meta_from_appledb
+from ._gcs import init_storage
+from ._ipsw.app import ipsw_app
 from ._maintenance import migrate
 from ._ota import OtaMirror, OtaExtract
 
 SENTRY_DSN = os.environ.get("SENTRY_DSN", None)
 
 app = typer.Typer()
-
 ota_app = typer.Typer()
+# TODO: move all ota stuffs into its own submodule
 app.add_typer(ota_app, name="ota")
-
-ipsw_app = typer.Typer()
 app.add_typer(ipsw_app, name="ipsw")
 
 
@@ -41,25 +37,6 @@ def main(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
         )
 
 
-def _init_storage(storage: str) -> GoogleStorage | None:
-    uri = urlparse(storage)
-    if uri.scheme != "gs":
-        print(
-            '[bold red]Unsupported "--storage" URI-scheme used:[/bold red] currently'
-            ' symx supports "gs://" only'
-        )
-        return None
-
-    if not uri.hostname:
-        print(
-            "[bold red]You must supply at least a bucket-name for the GCS storage[/bold"
-            " red]"
-        )
-        return None
-
-    return GoogleStorage(project=uri.username, bucket=uri.hostname)
-
-
 @ota_app.command()
 def mirror(
     storage: str = typer.Option(
@@ -75,7 +52,7 @@ def mirror(
     """
     Mirror OTA images to storage
     """
-    storage_backend = _init_storage(storage)
+    storage_backend = init_storage(storage)
     if storage_backend:
         ota = OtaMirror(storage=storage_backend)
         ota.mirror(datetime.timedelta(minutes=timeout))
@@ -96,7 +73,7 @@ def extract(
     """
     Extract dyld_shared_cache and symbols from OTA images to storage
     """
-    storage_backend = _init_storage(storage)
+    storage_backend = init_storage(storage)
     if storage_backend:
         ota = OtaExtract(storage=storage_backend)
         ota.extract(datetime.timedelta(minutes=timeout))
@@ -112,19 +89,6 @@ def migrate_storage(
     just the entry point for a GHA.
     :param storage: URI to a supported storage backend
     """
-    storage_backend = _init_storage(storage)
+    storage_backend = init_storage(storage)
     if storage_backend:
         migrate(storage_backend)
-
-
-@ipsw_app.command()
-def meta_sync(
-    storage: str = typer.Option(..., "--storage", "-s", help="Storage")
-) -> None:
-    """
-    Synchronize meta-data with appledb.
-    :return:
-    """
-    storage_backend = _init_storage(storage)
-    if storage_backend:
-        import_meta_from_appledb(storage_backend)

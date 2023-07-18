@@ -6,6 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 
+from urllib.parse import urlparse
 from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Client, Bucket  # type: ignore[import]
 
@@ -216,3 +217,22 @@ class GoogleStorage(OtaStorage):
         ota_meta.processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
         ota_meta.update_last_run()
         self.update_meta_item(ota_key, ota_meta)
+
+
+def init_storage(storage: str) -> GoogleStorage | None:
+    uri = urlparse(storage)
+    if uri.scheme != "gs":
+        print(
+            '[bold red]Unsupported "--storage" URI-scheme used:[/bold red] currently'
+            ' symx supports "gs://" only'
+        )
+        return None
+
+    if not uri.hostname:
+        print(
+            "[bold red]You must supply at least a bucket-name for the GCS storage[/bold"
+            " red]"
+        )
+        return None
+
+    return GoogleStorage(project=uri.username, bucket=uri.hostname)

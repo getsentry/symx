@@ -332,7 +332,7 @@ class AppleDbIpswImport:
                     f" {artifact}"
                 )
             else:
-                self.meta_db.insert(artifact.key, artifact)
+                self.meta_db.upsert(artifact.key, artifact)
 
             self.update_import_state_log()
 
