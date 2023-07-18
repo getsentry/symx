@@ -48,6 +48,7 @@ jobs:
 
       - name: symx OTA Extract
         run: |
+          export PATH="/Users/runner/.local/bin:$PATH"
           poetry install
           poetry run symx -v ota extract -t 330 -s gs://symbol-collector-dev
         env:
