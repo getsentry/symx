@@ -289,6 +289,9 @@ class AppleDbIpswImport:
             self._process_file(download_url)
 
     def _process_file(self, download_url: str) -> None:
+        logger.info(
+            f"About to process {download_url} (file-hash: {self.state.file_hash}) in {self.state.platform} folder {self.state.folder_hash}"
+        )
         if self.file_in_import_state_log():
             logger.info(f"{download_url} already processed continue with next")
             return
