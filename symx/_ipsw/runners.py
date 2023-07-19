@@ -3,12 +3,20 @@ import logging
 import tempfile
 from pathlib import Path
 
+import sentry_sdk
 from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Bucket  # type: ignore[import]
 
-from symx._gcs import GoogleStorage
-from symx._ipsw.common import ARTIFACTS_META_JSON, IpswArtifactDb, IpswArtifact
+from symx._common import ArtifactProcessingState
+from symx._gcs import GoogleStorage, _compare_md5_hash
+from symx._ipsw.common import (
+    ARTIFACTS_META_JSON,
+    IpswArtifactDb,
+    IpswArtifact,
+    IpswSource,
+)
 from symx._ipsw.meta_sync.appledb import AppleDbIpswImport, IMPORT_STATE_JSON
+from symx._ipsw.mirror import download_ipsw_from_apple
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +52,56 @@ class IpswGcsStorage:
             if_generation_match=import_state_blob.generation,
         )
 
-    def update_meta_item(
-        self, meta_key: str, ipsw_meta: IpswArtifact
-    ) -> IpswArtifactDb:
+    def upload_ipsw(
+        self, artifact: IpswArtifact, downloaded_files: list[tuple[Path, IpswSource]]
+    ) -> IpswArtifact:
+        sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
+        for ipsw_file, source in downloaded_files:
+            sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
+            source_idx = artifact.sources.index(source)
+            if not ipsw_file.is_file():
+                raise RuntimeError("Path to upload must be a file")
+
+            logger.info(f"Start uploading {ipsw_file.name} to {self.bucket.name}")
+
+            mirror_filename = f"mirror/ipsw/{artifact.platform}/{artifact.version}/{artifact.build}/{source.file_name}"
+            blob = self.bucket.blob(mirror_filename)
+            if blob.exists():
+                # if the existing remote file has the same MD5 hash as the file we are about to upload, we can go on
+                # without uploading and only update meta, since that means some meta is still set to INDEXED instead
+                # of MIRRORED. On the other hand, if the hashes differ, then we have a problem and should be getting out
+                if not _compare_md5_hash(ipsw_file, blob):
+                    logger.error(
+                        "Trying to upload IPSW that already exists in mirror with a"
+                        " different MD5"
+                    )
+                    artifact.sources[source_idx].processing_state = (
+                        ArtifactProcessingState.MIRRORING_FAILED
+                    )
+                    continue
+            else:
+                # this file will be split into considerable chunks: set timeout to something high
+                blob.upload_from_filename(str(ipsw_file), timeout=3600)
+                logger.info("Upload finished. Updating OTA meta-data.")
+
+            artifact.sources[source_idx].download_path = mirror_filename
+            artifact.sources[source_idx].processing_state = (
+                ArtifactProcessingState.MIRRORED
+            )
+
+        # not sure about this, but I guess it is okay make the artifact available to the extractor
+        # if we mirrored some of its sources successfully
+        if any(
+            source.processing_state == ArtifactProcessingState.MIRRORED
+            for source in artifact.sources
+        ):
+            artifact.processing_state = ArtifactProcessingState.MIRRORED
+
+        artifact.update_last_run()
+
+        return artifact
+
+    def update_meta_item(self, ipsw_meta: IpswArtifact) -> IpswArtifactDb:
         retry = 5
         while retry > 0:
             blob = self.load_artifacts_meta()
@@ -64,7 +119,7 @@ class IpswGcsStorage:
             else:
                 ours, generation_match_precondition = IpswArtifactDb(), 0
 
-            ours.upsert(meta_key, ipsw_meta)
+            ours.upsert(ipsw_meta.key, ipsw_meta)
             try:
                 blob.upload_from_string(
                     ours.model_dump_json(),
@@ -99,10 +154,6 @@ def ipsw_meta_sort_key(artifact: IpswArtifact) -> datetime.date:
 
 
 def mirror(storage: GoogleStorage) -> None:
-    mirror_size = 0
-    artifacts_with_source_without_size = 0
-    artifact_sources = 0
-
     with tempfile.TemporaryDirectory() as processing_dir:
         processing_dir_path = Path(processing_dir)
 
@@ -112,37 +163,32 @@ def mirror(storage: GoogleStorage) -> None:
             logger.error("Cannot mirror without IPSW meta-data on GCS")
             return
 
-        try:
-            fp = open(ipsw_storage.local_artifacts_meta)
-        except IOError:
-            logger.error("Failed to load IPSW meta-data")
-        else:
-            with fp:
-                ipsw_meta = IpswArtifactDb.model_validate_json(fp.read())
-                filtered_artifacts = [
-                    artifact
-                    for artifact in ipsw_meta.artifacts.values()
-                    if artifact.released is not None
-                    and artifact.released.year >= datetime.date.today().year - 1
-                ]
-                logger.info(f"Number of filtered artifacts = {len(filtered_artifacts)}")
-                for artifact in sorted(
-                    filtered_artifacts, key=ipsw_meta_sort_key, reverse=True
-                ):
-                    for source in artifact.sources:
-                        logger.info(
-                            f"\t/mirror/ipsw/{artifact.platform}/{artifact.version}/{artifact.build}/{source.file_name}"
-                        )
-                        artifact_sources += 1
-                        if source.size:
-                            mirror_size += source.size
-                        else:
-                            logger.warning(
-                                f"f{artifact} has source {source} without size"
-                            )
-                            artifacts_with_source_without_size += 1
-    logger.info(f"artifact-sources = {artifact_sources}")
-    logger.info(f"mirror-size = {mirror_size // 1024 // 1024 // 1024}GiB")
-    logger.info(
-        f"artifact-sources w/o size property = {artifacts_with_source_without_size}"
-    )
+        ipsw_meta = _load_local_ipsw_meta(ipsw_storage)
+        if ipsw_meta is None:
+            return
+
+        filtered_artifacts = [
+            artifact
+            for artifact in ipsw_meta.artifacts.values()
+            if artifact.released is not None
+            and artifact.released.year >= datetime.date.today().year - 1
+        ]
+        logger.info(f"Number of filtered artifacts = {len(filtered_artifacts)}")
+        for artifact in sorted(
+            filtered_artifacts, key=ipsw_meta_sort_key, reverse=True
+        ):
+            downloaded_files = download_ipsw_from_apple(artifact, processing_dir_path)
+            updated_artifact = ipsw_storage.upload_ipsw(artifact, downloaded_files)
+            ipsw_storage.update_meta_item(updated_artifact)
+
+
+def _load_local_ipsw_meta(ipsw_storage: IpswGcsStorage) -> IpswArtifactDb | None:
+    try:
+        fp = open(ipsw_storage.local_artifacts_meta)
+    except IOError:
+        logger.error("Failed to load IPSW meta-data")
+    else:
+        with fp:
+            return IpswArtifactDb.model_validate_json(fp.read())
+
+    return None

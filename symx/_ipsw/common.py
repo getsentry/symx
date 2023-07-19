@@ -1,3 +1,4 @@
+import datetime
 import logging
 import os
 from datetime import date
@@ -6,7 +7,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field, computed_field
 from pydantic import HttpUrl
 
-from symx._common import ArtifactProcessingState
+from symx._common import ArtifactProcessingState, github_run_id
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +63,17 @@ class IpswArtifact(BaseModel):
     release_status: IpswReleaseStatus
     sources: list[IpswSource]
     processing_state: ArtifactProcessingState = ArtifactProcessingState.INDEXED
+    last_run: int = github_run_id()
+    last_modified: datetime.datetime = datetime.datetime.today()
 
     @computed_field  # type: ignore[misc]
     @property
     def key(self) -> str:
         return f"{self.platform}_{self.version}_{self.build}"
+
+    def update_last_run(self) -> None:
+        self.last_run = github_run_id()
+        self.last_modified = datetime.datetime.today()
 
 
 class IpswArtifactDb(BaseModel):
