@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import date
 from enum import StrEnum
 
@@ -41,6 +42,14 @@ class IpswSource(BaseModel):
     link: HttpUrl
     hashes: IpswArtifactHashes | None = None
     size: int | None = None
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def file_name(self) -> str:
+        if self.link.path is None:
+            raise ValueError(f"The link in the source has no path: {self.link}")
+
+        return os.path.basename(self.link.path)
 
 
 class IpswArtifact(BaseModel):

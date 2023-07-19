@@ -1,6 +1,5 @@
 import datetime
 import logging
-import os
 import tempfile
 from pathlib import Path
 
@@ -131,12 +130,8 @@ def mirror(storage: GoogleStorage) -> None:
                     filtered_artifacts, key=ipsw_meta_sort_key, reverse=True
                 ):
                     for source in artifact.sources:
-                        if source.link.path:
-                            file_name = os.path.basename(source.link.path)
-                        else:
-                            file_name = "not_found.txt"
                         logger.info(
-                            f"\t/mirror/ipsw/{artifact.platform}/{artifact.version}/{artifact.build}/{file_name}"
+                            f"\t/mirror/ipsw/{artifact.platform}/{artifact.version}/{artifact.build}/{source.file_name}"
                         )
                         artifact_sources += 1
                         if source.size:
