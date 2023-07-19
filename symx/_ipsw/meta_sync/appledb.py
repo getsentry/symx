@@ -329,38 +329,43 @@ class AppleDbIpswImport:
             self.update_import_state_log()
             return
 
-        if len(src_artifact.sources) > 0:
-            ipsw_sources: list[IpswSource] = []
-            for source in src_artifact.sources:
-                if source.link and source.type == "ipsw":
-                    ipsw_sources.append(
-                        IpswSource(**source.model_dump(exclude={"type", "links"}))
-                    )
-            if len(ipsw_sources) == 0:
-                self.update_import_state_log()
-                self.artifact_wo_sources_count += 1
-                logger.warning(
-                    "IPSW artifact has no usable sources and won't be imported"
-                )
-                return
-
-            src_dump = src_artifact.model_dump(exclude={"rc", "beta", "sources"})
-            src_dump["platform"] = self.state.platform
-            src_dump["sources"] = ipsw_sources
-            artifact = IpswArtifact(**src_dump)
-            if self.meta_db.contains(artifact.key):
-                # this only checks if we already have that id, but it doesn't ask whether they
-                # differ... this should be easy to check with pydantic, but it might help to log
-                # the diff with something like deepdiff
-                logger.warning(
-                    f"{artifact.key} already added\n\told ="
-                    f" {self.meta_db.get(artifact.key)}\n\tnew ="
-                    f" {artifact}"
-                )
-            else:
-                self.meta_db.upsert(artifact.key, artifact)
-
+        # either the artifact has no sources at all...
+        if len(src_artifact.sources) == 0:
             self.update_import_state_log()
+            self.artifact_wo_sources_count += 1
+            logger.warning("IPSW artifact has no sources and won't be imported")
+            return
+
+        ipsw_sources: list[IpswSource] = []
+        for source in src_artifact.sources:
+            if source.link and source.type == "ipsw":
+                ipsw_sources.append(
+                    IpswSource(**source.model_dump(exclude={"type", "links"}))
+                )
+        # ...or it has no usable sources (e.g. URLs that are no longer active, non-IPSW source, etc.)
+        if len(ipsw_sources) == 0:
+            self.update_import_state_log()
+            self.artifact_wo_sources_count += 1
+            logger.warning("IPSW artifact has no usable sources and won't be imported")
+            return
+
+        src_dump = src_artifact.model_dump(exclude={"rc", "beta", "sources"})
+        src_dump["platform"] = self.state.platform
+        src_dump["sources"] = ipsw_sources
+        artifact = IpswArtifact(**src_dump)
+        if self.meta_db.contains(artifact.key):
+            # this only checks if we already have that id, but it doesn't ask whether they
+            # differ... this should be easy to check with pydantic, but it might help to log
+            # the diff with something like deepdiff
+            logger.warning(
+                f"{artifact.key} already added\n\told ="
+                f" {self.meta_db.get(artifact.key)}\n\tnew ="
+                f" {artifact}"
+            )
+        else:
+            self.meta_db.upsert(artifact.key, artifact)
+
+        self.update_import_state_log()
 
     def file_in_import_state_log(self) -> bool:
         return (
