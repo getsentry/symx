@@ -42,6 +42,8 @@ class IpswSource(BaseModel):
     link: HttpUrl
     hashes: IpswArtifactHashes | None = None
     size: int | None = None
+    processing_state: ArtifactProcessingState = ArtifactProcessingState.INDEXED
+    mirror_path: str | None = None
 
     @computed_field  # type: ignore[misc]
     @property
