@@ -74,8 +74,14 @@ class AppleDbArtifact(BaseModel):
     released: date | None = None
     sources: list[AppleDbSource] = []
 
+    @field_validator("released", mode="before")
+    def empty_string_is_none(cls, v: str) -> str | None:
+        if v == "":
+            return None
+        return v
+
     @field_validator("version")
-    def version_spaces_to_underscore(cls, v: str, _: FieldValidationInfo) -> str:
+    def version_spaces_to_underscore(cls, v: str) -> str:
         return v.replace(" ", "_")
 
     @computed_field  # type: ignore[misc]
