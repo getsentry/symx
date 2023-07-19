@@ -17,7 +17,7 @@ from ._ota import (
     merge_meta_data,
     ARTIFACTS_META_JSON,
     OtaStorage,
-    check_hash,
+    check_ota_hash,
 )
 
 logger = logging.getLogger(__name__)
@@ -156,7 +156,7 @@ class GoogleStorage(OtaStorage):
             return None
 
         blob.download_to_filename(str(local_ota_path))
-        if not check_hash(ota, local_ota_path):
+        if not check_ota_hash(ota, local_ota_path):
             logger.error("The SHA1 mismatch between storage and meta-data for OTA")
             return None
 

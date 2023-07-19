@@ -1,16 +1,23 @@
 import argparse
 import dataclasses
+import hashlib
 import json
+import logging
 import os
 import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from enum import StrEnum
+from math import floor
 from pathlib import Path
 from typing import Any
 
+import requests
 import sentry_sdk
+
+
+logger = logging.getLogger(__name__)
 
 HASH_BLOCK_SIZE = 2**16
 
@@ -156,3 +163,39 @@ def ipsw_device_list() -> list[Device]:
 
 def github_run_id() -> int:
     return int(os.getenv("GITHUB_RUN_ID", 0))
+
+
+def check_sha1(hash_sum: str, filepath: Path) -> bool:
+    sha1sum = hashlib.sha1()
+    with open(filepath, "rb") as f:
+        block = f.read(HASH_BLOCK_SIZE)
+        while len(block) != 0:
+            sha1sum.update(block)
+            block = f.read(HASH_BLOCK_SIZE)
+
+    return sha1sum.hexdigest() == hash_sum
+
+
+def download_url_to_file(url: str, filepath: Path) -> None:
+    res = requests.get(url, stream=True)
+    content_length = res.headers.get("content-length")
+    if not content_length:
+        raise RuntimeError("URL endpoint does not respond with a content-length header")
+
+    total = int(content_length)
+    total_mib = total / MiB
+    logger.debug(f"Filesize: {floor(total_mib)} MiB")
+
+    with open(filepath, "wb") as f:
+        actual = 0
+        last_print = 0.0
+        for chunk in res.iter_content(chunk_size=8192):
+            f.write(chunk)
+            actual = actual + len(chunk)
+
+            actual_mib = actual / MiB
+            if actual_mib - last_print > 100:
+                logger.debug(f"{floor(actual_mib)} MiB")
+                last_print = actual_mib
+
+    logger.debug(f"{floor(actual_mib)} MiB")

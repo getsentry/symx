@@ -1,6 +1,5 @@
 import datetime
 import glob
-import hashlib
 import json
 import logging
 import os
@@ -11,20 +10,18 @@ import tempfile
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from math import floor
 from pathlib import Path
 from typing import Iterator
 
-import requests
 import sentry_sdk
 
 from symx._common import (
     Arch,
     ipsw_version,
-    MiB,
-    HASH_BLOCK_SIZE,
     github_run_id,
     ArtifactProcessingState,
+    check_sha1,
+    download_url_to_file,
 )
 
 logger = logging.getLogger(__name__)
@@ -131,7 +128,8 @@ def parse_download_meta_output(
         platform_meta = json.loads(result.stdout)
         for meta_item in platform_meta:
             url = meta_item["url"]
-            zip_id = url[url.rfind("/") + 1 : -4]
+            zip_id_start_idx = url.rfind("/") + 1
+            zip_id = url[zip_id_start_idx:-4]
             if len(zip_id) != 40:
                 logger.error(
                     f"Parsing download meta: unexpected url-format in {meta_item}"
@@ -245,50 +243,22 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
                     )
 
 
-def check_hash(ota_meta: OtaArtifact, filepath: Path) -> bool:
+def check_ota_hash(ota_meta: OtaArtifact, filepath: Path) -> bool:
     if ota_meta.hash_algorithm != "SHA-1":
         raise RuntimeError(f"Unexpected hash-algo: {ota_meta.hash_algorithm}")
 
-    sha1sum = hashlib.sha1()
-    with open(filepath, "rb") as f:
-        block = f.read(HASH_BLOCK_SIZE)
-        while len(block) != 0:
-            sha1sum.update(block)
-            block = f.read(HASH_BLOCK_SIZE)
-
-    return sha1sum.hexdigest() == ota_meta.hash
+    return check_sha1(ota_meta.hash, filepath)
 
 
 def download_ota_from_apple(ota_meta: OtaArtifact, download_dir: Path) -> Path:
     logger.info(f"Downloading {ota_meta}")
 
-    res = requests.get(ota_meta.url, stream=True)
-    content_length = res.headers.get("content-length")
-    if not content_length:
-        raise RuntimeError("OTA Url does not respond with a content-length header")
-
-    total = int(content_length)
-    total_mib = total / MiB
-    logger.debug(f"OTA Filesize: {floor(total_mib)} MiB")
-
     filepath = (
         download_dir
         / f"{ota_meta.platform}_{ota_meta.version}_{ota_meta.build}_{ota_meta.id}.zip"
     )
-    with open(filepath, "wb") as f:
-        actual = 0
-        last_print = 0.0
-        for chunk in res.iter_content(chunk_size=8192):
-            f.write(chunk)
-            actual = actual + len(chunk)
-
-            actual_mib = actual / MiB
-            if actual_mib - last_print > 100:
-                logger.debug(f"{floor(actual_mib)} MiB")
-                last_print = actual_mib
-
-    logger.debug(f"{floor(actual_mib)} MiB")
-    if check_hash(ota_meta, filepath):
+    download_url_to_file(ota_meta.url, filepath)
+    if check_ota_hash(ota_meta, filepath):
         logger.info(f"Downloading {ota_meta} completed")
         return filepath
 
