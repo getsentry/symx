@@ -326,6 +326,9 @@ class AppleDbIpswImport:
                     )
             if len(ipsw_sources) == 0:
                 self.update_import_state_log()
+                logger.warning(
+                    "IPSW artifact has no usable sources and won't be imported"
+                )
                 return
 
             src_dump = src_artifact.model_dump(exclude={"rc", "beta", "sources"})
