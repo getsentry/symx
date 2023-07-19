@@ -375,18 +375,16 @@ class AppleDbIpswImport:
         )
 
     def update_import_state_log(self) -> None:
-        assert self.state.folder_hash is not None
         assert self.state.file_hash is not None
-        if self.state.folder_hash in self.apple_db_import_state:
-            if (
-                self.state.file_hash
-                not in self.apple_db_import_state[self.state.folder_hash]
-            ):
-                self.apple_db_import_state[self.state.folder_hash].append(
-                    self.state.file_hash
-                )
+        folder_hash = (
+            self.state.folder_hash
+            if self.state.folder_hash is not None
+            else self.state.file_hash
+        )
+
+        if folder_hash in self.apple_db_import_state:
+            if self.state.file_hash not in self.apple_db_import_state[folder_hash]:
+                self.apple_db_import_state[folder_hash].append(self.state.file_hash)
         else:
-            self.apple_db_import_state[self.state.folder_hash] = []
-            self.apple_db_import_state[self.state.folder_hash].append(
-                self.state.file_hash
-            )
+            self.apple_db_import_state[folder_hash] = []
+            self.apple_db_import_state[folder_hash].append(self.state.file_hash)
