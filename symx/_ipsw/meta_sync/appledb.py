@@ -169,6 +169,9 @@ class AppleDbIpswImport:
         self._load_meta_db()
         self.api_request_count = 0
         self.file_request_count = 0
+        self.processed_file_count = 0
+        self.already_imported_count = 0
+        self.artifact_wo_sources_count = 0
         self.state = AppleDbIspwImportState()
 
     def run(self) -> None:
@@ -187,6 +190,13 @@ class AppleDbIpswImport:
         finally:
             logger.info(f"Number of github API requests = {self.api_request_count}")
             logger.info(f"Number of github file requests = {self.file_request_count}")
+            logger.info(f"Number of processed files = {self.processed_file_count}")
+            logger.info(
+                f"Number of already imported files = {self.already_imported_count}"
+            )
+            logger.info(
+                f"Number of artifacts w/o sources = {self.artifact_wo_sources_count}"
+            )
 
             self._store_appledb_indexed()
             self._store_ipsw_meta()
@@ -293,7 +303,9 @@ class AppleDbIpswImport:
             f"About to process {download_url} (file-hash: {self.state.file_hash}) in"
             f" {self.state.platform} folder {self.state.folder_hash}"
         )
+        self.processed_file_count += 1
         if self.file_in_import_state_log():
+            self.already_imported_count += 1
             logger.info(f"{download_url} already processed continue with next")
             return
 
@@ -326,6 +338,7 @@ class AppleDbIpswImport:
                     )
             if len(ipsw_sources) == 0:
                 self.update_import_state_log()
+                self.artifact_wo_sources_count += 1
                 logger.warning(
                     "IPSW artifact has no usable sources and won't be imported"
                 )
@@ -339,7 +352,7 @@ class AppleDbIpswImport:
                 # this only checks if we already have that id, but it doesn't ask whether they
                 # differ... this should be easy to check with pydantic, but it might help to log
                 # the diff with something like deepdiff
-                logger.error(
+                logger.warning(
                     f"{artifact.key} already added\n\told ="
                     f" {self.meta_db.get(artifact.key)}\n\tnew ="
                     f" {artifact}"
