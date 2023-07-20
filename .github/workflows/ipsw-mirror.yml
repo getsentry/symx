@@ -1,8 +1,8 @@
 name: Mirror IPSW artifacts
 on:
   workflow_dispatch:
-  # schedule:
-  #   - cron: "45 4 * * *"
+  schedule:
+    - cron: "15 */6 * * *"
 
 concurrency: ipsw_mirror
 

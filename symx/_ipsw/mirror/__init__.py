@@ -21,6 +21,13 @@ def download_ipsw_from_apple(
     download_paths: list[tuple[Path, IpswSource]] = []
     for source in ipsw_meta.sources:
         sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
+        if source.processing_state not in {
+            ArtifactProcessingState.INDEXED,
+            ArtifactProcessingState.MIRRORING_FAILED,
+        }:
+            logger.info(f"Bypassing {source.link} because it was already mirrored")
+            continue
+
         filepath = download_dir / source.file_name
         download_url_to_file(str(source.link), filepath)
         _verify_download(download_paths, filepath, source)

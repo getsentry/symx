@@ -45,6 +45,8 @@ class IpswSource(BaseModel):
     size: int | None = None
     processing_state: ArtifactProcessingState = ArtifactProcessingState.INDEXED
     mirror_path: str | None = None
+    last_run: int = github_run_id()
+    last_modified: datetime.datetime = datetime.datetime.today()
 
     @computed_field  # type: ignore[misc]
     @property
@@ -54,6 +56,10 @@ class IpswSource(BaseModel):
 
         return os.path.basename(self.link.path)
 
+    def update_last_run(self) -> None:
+        self.last_run = github_run_id()
+        self.last_modified = datetime.datetime.today()
+
 
 class IpswArtifact(BaseModel):
     platform: IpswPlatform
@@ -62,18 +68,11 @@ class IpswArtifact(BaseModel):
     released: date | None = None
     release_status: IpswReleaseStatus
     sources: list[IpswSource]
-    processing_state: ArtifactProcessingState = ArtifactProcessingState.INDEXED
-    last_run: int = github_run_id()
-    last_modified: datetime.datetime = datetime.datetime.today()
 
     @computed_field  # type: ignore[misc]
     @property
     def key(self) -> str:
         return f"{self.platform}_{self.version}_{self.build}"
-
-    def update_last_run(self) -> None:
-        self.last_run = github_run_id()
-        self.last_modified = datetime.datetime.today()
 
 
 class IpswArtifactDb(BaseModel):

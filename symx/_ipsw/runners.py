@@ -1,6 +1,7 @@
 import datetime
 import logging
 import tempfile
+import time
 from pathlib import Path
 
 import sentry_sdk
@@ -82,22 +83,13 @@ class IpswGcsStorage:
             else:
                 # this file will be split into considerable chunks: set timeout to something high
                 blob.upload_from_filename(str(ipsw_file), timeout=3600)
-                logger.info("Upload finished. Updating OTA meta-data.")
+                logger.info("Upload finished. Updating IPSW meta-data.")
 
-            artifact.sources[source_idx].download_path = mirror_filename
+            artifact.sources[source_idx].mirror_path = mirror_filename
             artifact.sources[source_idx].processing_state = (
                 ArtifactProcessingState.MIRRORED
             )
-
-        # not sure about this, but I guess it is okay make the artifact available to the extractor
-        # if we mirrored some of its sources successfully
-        if any(
-            source.processing_state == ArtifactProcessingState.MIRRORED
-            for source in artifact.sources
-        ):
-            artifact.processing_state = ArtifactProcessingState.MIRRORED
-
-        artifact.update_last_run()
+            artifact.sources[source_idx].update_last_run()
 
         return artifact
 
@@ -146,14 +138,14 @@ def import_meta_from_appledb(storage: GoogleStorage) -> None:
         ipsw_storage.store_import_state(import_state_blob)
 
 
-def ipsw_meta_sort_key(artifact: IpswArtifact) -> datetime.date:
+def _ipsw_artifact_sort_by_released(artifact: IpswArtifact) -> datetime.date:
     if artifact.released:
         return artifact.released
     else:
         return datetime.date(datetime.MINYEAR, 1, 1)
 
 
-def mirror(storage: GoogleStorage) -> None:
+def mirror(storage: GoogleStorage, timeout: datetime.timedelta) -> None:
     with tempfile.TemporaryDirectory() as processing_dir:
         processing_dir_path = Path(processing_dir)
 
@@ -167,16 +159,31 @@ def mirror(storage: GoogleStorage) -> None:
         if ipsw_meta is None:
             return
 
+        # we want all artifacts...
+        # - that have a release date that reaches back 1 year and
+        # - where some of its sources are still indexed
         filtered_artifacts = [
             artifact
             for artifact in ipsw_meta.artifacts.values()
             if artifact.released is not None
             and artifact.released.year >= datetime.date.today().year - 1
+            and any(
+                source.processing_state == ArtifactProcessingState.INDEXED
+                for source in artifact.sources
+            )
         ]
         logger.info(f"Number of filtered artifacts = {len(filtered_artifacts)}")
-        for artifact in sorted(
-            filtered_artifacts, key=ipsw_meta_sort_key, reverse=True
-        ):
+        sorted_by_age_descending = sorted(
+            filtered_artifacts, key=_ipsw_artifact_sort_by_released, reverse=True
+        )
+
+        start = time.time()
+        for artifact in sorted_by_age_descending:
+            if int(time.time() - start) > timeout.seconds:
+                logger.warning(
+                    f"Exiting IPSW mirror due to elapsed timeout of {timeout}"
+                )
+                return
             downloaded_files = download_ipsw_from_apple(artifact, processing_dir_path)
             updated_artifact = ipsw_storage.upload_ipsw(artifact, downloaded_files)
             ipsw_storage.update_meta_item(updated_artifact)
