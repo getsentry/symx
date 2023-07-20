@@ -8,7 +8,7 @@ import sentry_sdk
 from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Bucket  # type: ignore[import]
 
-from symx._common import ArtifactProcessingState
+from symx._common import ArtifactProcessingState, download_url_to_file
 from symx._gcs import GoogleStorage, _compare_md5_hash
 from symx._ipsw.common import (
     ARTIFACTS_META_JSON,
@@ -17,7 +17,7 @@ from symx._ipsw.common import (
     IpswSource,
 )
 from symx._ipsw.meta_sync.appledb import AppleDbIpswImport, IMPORT_STATE_JSON
-from symx._ipsw.mirror import download_ipsw_from_apple
+from symx._ipsw.mirror import verify_download
 
 logger = logging.getLogger(__name__)
 
@@ -53,43 +53,64 @@ class IpswGcsStorage:
             if_generation_match=import_state_blob.generation,
         )
 
-    def upload_ipsw(
-        self, artifact: IpswArtifact, downloaded_files: list[tuple[Path, IpswSource]]
-    ) -> IpswArtifact:
+    def mirror_ipsw_from_apple(
+        self, artifact: IpswArtifact, download_dir: Path
+    ) -> None:
+        logger.info(f"Downloading {artifact}")
         sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
-        for ipsw_file, source in downloaded_files:
+        for source in artifact.sources:
             sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
-            source_idx = artifact.sources.index(source)
-            if not ipsw_file.is_file():
-                raise RuntimeError("Path to upload must be a file")
+            if source.processing_state not in {
+                ArtifactProcessingState.INDEXED,
+                ArtifactProcessingState.MIRRORING_FAILED,
+            }:
+                logger.info(f"Bypassing {source.link} because it was already mirrored")
+                continue
 
-            logger.info(f"Start uploading {ipsw_file.name} to {self.bucket.name}")
+            filepath = download_dir / source.file_name
+            download_url_to_file(str(source.link), filepath)
+            if not verify_download(filepath, source):
+                continue
 
-            mirror_filename = f"mirror/ipsw/{artifact.platform}/{artifact.version}/{artifact.build}/{source.file_name}"
-            blob = self.bucket.blob(mirror_filename)
-            if blob.exists():
-                # if the existing remote file has the same MD5 hash as the file we are about to upload, we can go on
-                # without uploading and only update meta, since that means some meta is still set to INDEXED instead
-                # of MIRRORED. On the other hand, if the hashes differ, then we have a problem and should be getting out
-                if not _compare_md5_hash(ipsw_file, blob):
-                    logger.error(
-                        "Trying to upload IPSW that already exists in mirror with a"
-                        " different MD5"
-                    )
-                    artifact.sources[source_idx].processing_state = (
-                        ArtifactProcessingState.MIRRORING_FAILED
-                    )
-                    continue
-            else:
-                # this file will be split into considerable chunks: set timeout to something high
-                blob.upload_from_filename(str(ipsw_file), timeout=3600)
-                logger.info("Upload finished. Updating IPSW meta-data.")
+            updated_artifact = self.upload_ipsw(artifact, (filepath, source))
+            self.update_meta_item(updated_artifact)
+            filepath.unlink()
 
-            artifact.sources[source_idx].mirror_path = mirror_filename
-            artifact.sources[source_idx].processing_state = (
-                ArtifactProcessingState.MIRRORED
-            )
-            artifact.sources[source_idx].update_last_run()
+    def upload_ipsw(
+        self, artifact: IpswArtifact, downloaded_source: tuple[Path, IpswSource]
+    ) -> IpswArtifact:
+        ipsw_file, source = downloaded_source
+        sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
+        sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
+        source_idx = artifact.sources.index(source)
+        if not ipsw_file.is_file():
+            raise RuntimeError("Path to upload must be a file")
+
+        logger.info(f"Start uploading {ipsw_file.name} to {self.bucket.name}")
+
+        mirror_filename = f"mirror/ipsw/{artifact.platform}/{artifact.version}/{artifact.build}/{source.file_name}"
+        blob = self.bucket.blob(mirror_filename)
+        if blob.exists():
+            # if the existing remote file has the same MD5 hash as the file we are about to upload, we can go on
+            # without uploading and only update meta, since that means some meta is still set to INDEXED instead
+            # of MIRRORED. On the other hand, if the hashes differ, then we have a problem and should be getting out
+            if not _compare_md5_hash(ipsw_file, blob):
+                logger.error(
+                    "Trying to upload IPSW that already exists in mirror with a"
+                    " different MD5"
+                )
+                artifact.sources[source_idx].processing_state = (
+                    ArtifactProcessingState.MIRRORING_FAILED
+                )
+                return artifact
+        else:
+            # this file will be split into considerable chunks: set timeout to something high
+            blob.upload_from_filename(str(ipsw_file), timeout=3600)
+            logger.info("Upload finished. Updating IPSW meta-data.")
+
+        artifact.sources[source_idx].mirror_path = mirror_filename
+        artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
+        artifact.sources[source_idx].update_last_run()
 
         return artifact
 
@@ -184,9 +205,7 @@ def mirror(storage: GoogleStorage, timeout: datetime.timedelta) -> None:
                     f"Exiting IPSW mirror due to elapsed timeout of {timeout}"
                 )
                 return
-            downloaded_files = download_ipsw_from_apple(artifact, processing_dir_path)
-            updated_artifact = ipsw_storage.upload_ipsw(artifact, downloaded_files)
-            ipsw_storage.update_meta_item(updated_artifact)
+            ipsw_storage.mirror_ipsw_from_apple(artifact, processing_dir_path)
 
 
 def _load_local_ipsw_meta(ipsw_storage: IpswGcsStorage) -> IpswArtifactDb | None:
