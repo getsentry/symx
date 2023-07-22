@@ -65,7 +65,9 @@ def mirror(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
         if int(time.time() - start) > timeout.seconds:
             logger.warning(f"Exiting IPSW mirror due to elapsed timeout of {timeout}")
             return
-        ipsw_storage.mirror_ipsw_from_apple(artifact, ipsw_storage.local_dir)
+        ipsw_storage.mirror_ipsw_from_apple(
+            artifact, ipsw_storage.local_dir, start, timeout
+        )
 
 
 def _load_local_ipsw_meta(ipsw_storage: IpswGcsStorage) -> IpswArtifactDb | None:

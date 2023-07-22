@@ -1,4 +1,6 @@
+import datetime
 import logging
+import time
 from pathlib import Path
 
 import sentry_sdk
@@ -56,11 +58,18 @@ class IpswGcsStorage:
         )
 
     def mirror_ipsw_from_apple(
-        self, artifact: IpswArtifact, download_dir: Path
+        self,
+        artifact: IpswArtifact,
+        download_dir: Path,
+        start: float,
+        timeout: datetime.timedelta,
     ) -> None:
         logger.info(f"Downloading {artifact}")
         sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
         for source in artifact.sources:
+            if int(time.time() - start) > timeout.seconds:
+                return
+
             sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
             if source.processing_state not in {
                 ArtifactProcessingState.INDEXED,
