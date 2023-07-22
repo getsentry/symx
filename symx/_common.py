@@ -181,11 +181,11 @@ def download_url_to_file(url: str, filepath: Path) -> None:
     res = requests.get(url, stream=True)
     content_length = res.headers.get("content-length")
     if not content_length:
-        raise RuntimeError("URL endpoint does not respond with a content-length header")
-
-    total = int(content_length)
-    total_mib = total / MiB
-    logger.debug(f"Filesize: {floor(total_mib)} MiB")
+        logger.warning("URL endpoint does not respond with a content-length header")
+    else:
+        total = int(content_length)
+        total_mib = total / MiB
+        logger.debug(f"Filesize: {floor(total_mib)} MiB")
 
     with open(filepath, "wb") as f:
         actual = 0
@@ -202,7 +202,7 @@ def download_url_to_file(url: str, filepath: Path) -> None:
     logger.debug(f"{floor(actual_mib)} MiB")
 
 
-def _compare_md5_hash(local_file: Path, remote_blob: Blob) -> bool:
+def compare_md5_hash(local_file: Path, remote_blob: Blob) -> bool:
     """
     Reads the remote md5 meta from the blob and compares it with the md5 of the local file.
     :param local_file: a Path to the local file

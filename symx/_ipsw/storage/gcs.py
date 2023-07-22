@@ -8,7 +8,7 @@ from google.cloud.storage import Blob, Bucket, Client  # type: ignore[import]
 from symx._common import (
     ArtifactProcessingState,
     download_url_to_file,
-    _compare_md5_hash,
+    compare_md5_hash,
 )
 from symx._ipsw.common import (
     ARTIFACTS_META_JSON,
@@ -96,7 +96,7 @@ class IpswGcsStorage:
             # if the existing remote file has the same MD5 hash as the file we are about to upload, we can go on
             # without uploading and only update meta, since that means some meta is still set to INDEXED instead
             # of MIRRORED. On the other hand, if the hashes differ, then we have a problem and should be getting out
-            if not _compare_md5_hash(ipsw_file, blob):
+            if not compare_md5_hash(ipsw_file, blob):
                 logger.error(
                     "Trying to upload IPSW that already exists in mirror with a"
                     " different MD5"

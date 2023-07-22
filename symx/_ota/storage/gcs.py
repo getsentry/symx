@@ -11,7 +11,7 @@ from google.cloud.storage import Blob, Client, Bucket  # type: ignore[import]
 from symx._common import (
     DataClassJSONEncoder,
     ArtifactProcessingState,
-    _compare_md5_hash,
+    compare_md5_hash,
 )
 from symx._ota import (
     OtaArtifact,
@@ -95,7 +95,7 @@ class OtaGcsStorage(OtaStorage):
             # if the existing remote file has the same MD5 hash as the file we are about to upload, we can go on without
             # uploading and only update meta, since that means some meta is still set to INDEXED instead of MIRRORED.
             # On the other hand, if the hashes differ, then we have a problem and should be getting out
-            if not _compare_md5_hash(ota_file, blob):
+            if not compare_md5_hash(ota_file, blob):
                 return
         else:
             # this file will be split into considerable chunks: set timeout to something high
