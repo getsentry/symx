@@ -3,7 +3,7 @@ import logging
 
 import sentry_sdk
 
-from symx._gcs import GoogleStorage
+from symx._ota.storage.gcs import OtaGcsStorage
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,7 @@ bundle_id_map = {
 }
 
 
-def migrate(storage: GoogleStorage) -> None:
+def migrate(storage: OtaGcsStorage) -> None:
     bucket = storage.bucket
     for platform, bundles in bundle_id_map.items():
         for old_bundle_id, ota_key in bundles.items():

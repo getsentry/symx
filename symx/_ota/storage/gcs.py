@@ -1,5 +1,3 @@
-import base64
-import hashlib
 import json
 import logging
 import os
@@ -10,8 +8,12 @@ from urllib.parse import urlparse
 from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Client, Bucket  # type: ignore[import]
 
-from ._common import DataClassJSONEncoder, HASH_BLOCK_SIZE, ArtifactProcessingState
-from ._ota import (
+from symx._common import (
+    DataClassJSONEncoder,
+    ArtifactProcessingState,
+    _compare_md5_hash,
+)
+from symx._ota import (
     OtaArtifact,
     OtaMetaData,
     merge_meta_data,
@@ -39,48 +41,7 @@ def download_and_hydrate_meta(blob: Blob) -> tuple[OtaMetaData, int]:
     return result, generation
 
 
-def _fs_md5_hash(file_path: Path) -> str:
-    """
-    GCS only stores the MD5 hash of each uploaded file, so we can't use SHA1 to compare (as we do with the meta-data
-    since that is what we get from Apple to compare). Since it is still nice to quickly compare remote files without
-    download we also have a local md5-hasher here.
-    :param file_path:
-    :return:
-    """
-    hash_md5 = hashlib.md5()
-    with open(file_path, "rb") as f:
-        block = f.read(HASH_BLOCK_SIZE)
-        while len(block) != 0:
-            hash_md5.update(block)
-            block = f.read(HASH_BLOCK_SIZE)
-
-    return base64.b64encode(hash_md5.digest()).decode()
-
-
-def _compare_md5_hash(local_file: Path, remote_blob: Blob) -> bool:
-    """
-    Reads the remote md5 meta from the blob and compares it with the md5 of the local file.
-    :param local_file: a Path to the local file
-    :param remote_blob: a loaded (!) GCS bucket blob
-    :return: True if the hashes are equal, otherwise False
-    """
-    remote_blob.reload()
-    remote_hash = remote_blob.md5_hash
-    local_hash = _fs_md5_hash(local_file)
-    if remote_hash == local_hash:
-        logger.info(
-            f'"{remote_blob.name}" was already uploaded with matching MD5 hash.'
-        )
-        return True
-    else:
-        logger.error(
-            f'"{remote_blob.name}" was already uploaded but MD5 hash differs from the'
-            f" one uploaded (remote = {remote_hash}, local = {local_hash}). "
-        )
-        return False
-
-
-class GoogleStorage(OtaStorage):
+class OtaGcsStorage(OtaStorage):
     def __init__(self, project: str | None, bucket: str) -> None:
         self.project = project
         self.client: Client = Client(project=self.project)
@@ -219,7 +180,7 @@ class GoogleStorage(OtaStorage):
         self.update_meta_item(ota_key, ota_meta)
 
 
-def init_storage(storage: str) -> GoogleStorage | None:
+def init_storage(storage: str) -> OtaGcsStorage | None:
     uri = urlparse(storage)
     if uri.scheme != "gs":
         print(
@@ -235,4 +196,4 @@ def init_storage(storage: str) -> GoogleStorage | None:
         )
         return None
 
-    return GoogleStorage(project=uri.username, bucket=uri.hostname)
+    return OtaGcsStorage(project=uri.username, bucket=uri.hostname)

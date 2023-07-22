@@ -1,4 +1,5 @@
 import argparse
+import base64
 import dataclasses
 import hashlib
 import json
@@ -15,7 +16,7 @@ from typing import Any
 
 import requests
 import sentry_sdk
-
+from google.cloud.storage import Blob  # type: ignore[import]
 
 logger = logging.getLogger(__name__)
 
@@ -199,3 +200,44 @@ def download_url_to_file(url: str, filepath: Path) -> None:
                 last_print = actual_mib
 
     logger.debug(f"{floor(actual_mib)} MiB")
+
+
+def _compare_md5_hash(local_file: Path, remote_blob: Blob) -> bool:
+    """
+    Reads the remote md5 meta from the blob and compares it with the md5 of the local file.
+    :param local_file: a Path to the local file
+    :param remote_blob: a loaded (!) GCS bucket blob
+    :return: True if the hashes are equal, otherwise False
+    """
+    remote_blob.reload()
+    remote_hash = remote_blob.md5_hash
+    local_hash = _fs_md5_hash(local_file)
+    if remote_hash == local_hash:
+        logger.info(
+            f'"{remote_blob.name}" was already uploaded with matching MD5 hash.'
+        )
+        return True
+    else:
+        logger.error(
+            f'"{remote_blob.name}" was already uploaded but MD5 hash differs from the'
+            f" one uploaded (remote = {remote_hash}, local = {local_hash}). "
+        )
+        return False
+
+
+def _fs_md5_hash(file_path: Path) -> str:
+    """
+    GCS only stores the MD5 hash of each uploaded file, so we can't use SHA1 to compare (as we do with the meta-data
+    since that is what we get from Apple to compare). Since it is still nice to quickly compare remote files without
+    download we also have a local md5-hasher here.
+    :param file_path:
+    :return:
+    """
+    hash_md5 = hashlib.md5()
+    with open(file_path, "rb") as f:
+        block = f.read(HASH_BLOCK_SIZE)
+        while len(block) != 0:
+            hash_md5.update(block)
+            block = f.read(HASH_BLOCK_SIZE)
+
+    return base64.b64encode(hash_md5.digest()).decode()
