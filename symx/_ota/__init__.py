@@ -238,9 +238,9 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
                     and their_item.version == our_v.version
                     and their_item.build != our_v.build
                 ):
-                    ours[
-                        their_key
-                    ].processing_state = ArtifactProcessingState.INDEXED_DUPLICATE
+                    ours[their_key].processing_state = (
+                        ArtifactProcessingState.INDEXED_DUPLICATE
+                    )
 
 
 def check_ota_hash(ota_meta: OtaArtifact, filepath: Path) -> bool:
