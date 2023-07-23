@@ -122,7 +122,7 @@ def parse_download_meta_output(
         ipsw_stderr = result.stderr.decode("utf-8")
         # We regularly get 403 errors on the apple endpoint. These seem to be intermittent
         # availability issues and do not warrant error notification noise.
-        if "api returned status: 403 Forbidden" in ipsw_stderr:
+        if "api returned status: 403 Forbidden" not in ipsw_stderr:
             logger.error(f"Download meta failed: {ipsw_stderr}")
     else:
         platform_meta = json.loads(result.stdout)
@@ -238,9 +238,9 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
                     and their_item.version == our_v.version
                     and their_item.build != our_v.build
                 ):
-                    ours[their_key].processing_state = (
-                        ArtifactProcessingState.INDEXED_DUPLICATE
-                    )
+                    ours[
+                        their_key
+                    ].processing_state = ArtifactProcessingState.INDEXED_DUPLICATE
 
 
 def check_ota_hash(ota_meta: OtaArtifact, filepath: Path) -> bool:
