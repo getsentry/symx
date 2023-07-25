@@ -129,9 +129,9 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
                 symbol_binaries_dir = extractor.run()
                 ipsw_storage.upload_symbols(artifact, source_idx, symbol_binaries_dir)
                 shutil.rmtree(symbol_binaries_dir)
-                artifact.sources[
-                    source_idx
-                ].processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
+                artifact.sources[source_idx].processing_state = (
+                    ArtifactProcessingState.SYMBOLS_EXTRACTED
+                )
             except Exception as e:
                 sentry_sdk.capture_exception(e)
             finally:
