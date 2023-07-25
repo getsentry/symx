@@ -25,14 +25,13 @@ def import_meta_from_appledb(ipsw_storage: IpswGcsStorage) -> None:
 def mirror(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
     start = time.time()
     for artifact in ipsw_storage.indexed_iter():
-        if int(time.time() - start) > timeout.seconds:
-            logger.warning(f"Exiting IPSW mirror due to elapsed timeout of {timeout}")
-            return
-
         logger.info(f"Downloading {artifact}")
         sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
         for source in artifact.sources:
             if int(time.time() - start) > timeout.seconds:
+                logger.warning(
+                    f"Exiting IPSW mirror due to elapsed timeout of {timeout}"
+                )
                 return
 
             sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
