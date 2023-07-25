@@ -34,7 +34,7 @@ def mirror(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
     for artifact in ipsw_storage.indexed_iter():
         logger.info(f"Downloading {artifact}")
         sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
-        for source in artifact.sources:
+        for source_idx, source in enumerate(artifact.sources):
             if int(time.time() - start) > timeout.seconds:
                 logger.warning(
                     f"Exiting IPSW mirror due to elapsed timeout of {timeout}"
@@ -51,10 +51,17 @@ def mirror(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
             filepath = ipsw_storage.local_dir / source.file_name
             download_url_to_file(str(source.link), filepath)
             if not verify_download(filepath, source):
-                continue
+                artifact.sources[source_idx].processing_state = (
+                    ArtifactProcessingState.MIRRORING_FAILED
+                )
+                artifact.sources[source_idx].update_last_run()
+                ipsw_storage.update_meta_item(artifact)
+            else:
+                updated_artifact = ipsw_storage.upload_ipsw(
+                    artifact, (filepath, source)
+                )
+                ipsw_storage.update_meta_item(updated_artifact)
 
-            updated_artifact = ipsw_storage.upload_ipsw(artifact, (filepath, source))
-            ipsw_storage.update_meta_item(updated_artifact)
             filepath.unlink()
 
 

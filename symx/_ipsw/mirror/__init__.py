@@ -1,10 +1,7 @@
 import logging
 from pathlib import Path
 
-from symx._common import (
-    check_sha1,
-    ArtifactProcessingState,
-)
+from symx._common import check_sha1
 from symx._ipsw.common import IpswSource
 
 logger = logging.getLogger(__name__)
@@ -17,7 +14,6 @@ def verify_download(filepath: Path, source: IpswSource) -> bool:
             logger.info(f"Downloading {filepath.name} completed and SHA-1 verified")
             return True
         else:
-            source.processing_state = ArtifactProcessingState.MIRRORING_FAILED
             logger.error("Could not verify downloaded IPSW with its meta-data hash.")
             return False
     elif source.size:
@@ -30,7 +26,6 @@ def verify_download(filepath: Path, source: IpswSource) -> bool:
             )
             return True
         else:
-            source.processing_state = ArtifactProcessingState.MIRRORING_FAILED
             logger.error(
                 f"The size of the downloaded IPSW (= {actual_size}bytes) is"
                 f" different from the one its meta-data (= {source.size}bytes)."
