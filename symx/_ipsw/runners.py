@@ -43,7 +43,7 @@ def mirror(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
         return
 
     # we want all artifacts...
-    # - that have a release date that reaches back 1 year and
+    # - that have a release date within this and the previous year and
     # - where some of its sources are still indexed
     filtered_artifacts = [
         artifact

@@ -13,6 +13,7 @@ from enum import StrEnum
 from math import floor
 from pathlib import Path
 from typing import Any
+from urllib.parse import ParseResult, urlparse
 
 import requests
 import sentry_sdk
@@ -241,3 +242,21 @@ def _fs_md5_hash(file_path: Path) -> str:
             block = f.read(HASH_BLOCK_SIZE)
 
     return base64.b64encode(hash_md5.digest()).decode()
+
+
+def parse_gcs_url(storage: str) -> ParseResult | None:
+    uri = urlparse(storage)
+    if uri.scheme != "gs":
+        print(
+            '[bold red]Unsupported "--storage" URI-scheme used:[/bold red] currently'
+            ' symx supports "gs://" only'
+        )
+        return None
+
+    if not uri.hostname:
+        print(
+            "[bold red]You must supply at least a bucket-name for the GCS storage[/bold"
+            " red]"
+        )
+        return None
+    return uri

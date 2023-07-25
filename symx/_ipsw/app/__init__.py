@@ -1,10 +1,10 @@
 import datetime
 import tempfile
 from pathlib import Path
-from urllib.parse import urlparse
 
 import typer
 
+from symx._common import parse_gcs_url
 from symx._ipsw.runners import import_meta_from_appledb, mirror as mirror_runner
 from symx._ipsw.storage.gcs import IpswGcsStorage
 
@@ -12,21 +12,9 @@ ipsw_app = typer.Typer()
 
 
 def init_storage(local_dir: Path, storage: str) -> IpswGcsStorage | None:
-    uri = urlparse(storage)
-    if uri.scheme != "gs":
-        print(
-            '[bold red]Unsupported "--storage" URI-scheme used:[/bold red] currently'
-            ' symx supports "gs://" only'
-        )
+    uri = parse_gcs_url(storage)
+    if uri is None or uri.hostname is None:
         return None
-
-    if not uri.hostname:
-        print(
-            "[bold red]You must supply at least a bucket-name for the GCS storage[/bold"
-            " red]"
-        )
-        return None
-
     return IpswGcsStorage(local_dir, project=uri.username, bucket=uri.hostname)
 
 
@@ -36,7 +24,6 @@ def meta_sync(
 ) -> None:
     """
     Synchronize meta-data with appledb.
-    :return:
     """
     with tempfile.TemporaryDirectory() as processing_dir:
         storage_backend = init_storage(Path(processing_dir), storage)
@@ -55,8 +42,7 @@ def mirror(
     ),
 ) -> None:
     """
-    Synchronize meta-data with appledb.
-    :return:
+    Mirror all indexed artifacts.
     """
     with tempfile.TemporaryDirectory() as processing_dir:
         storage_backend = init_storage(Path(processing_dir), storage)
