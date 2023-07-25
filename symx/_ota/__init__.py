@@ -5,7 +5,6 @@ import logging
 import os
 import re
 import subprocess
-import sys
 import tempfile
 import time
 from abc import ABC, abstractmethod
@@ -17,11 +16,11 @@ import sentry_sdk
 
 from symx._common import (
     Arch,
-    ipsw_version,
     github_run_id,
     ArtifactProcessingState,
     check_sha1,
     download_url_to_file,
+    validate_shell_deps,
 )
 
 logger = logging.getLogger(__name__)
@@ -321,31 +320,6 @@ class MountInfo:
     dev: str
     id: str
     point: Path
-
-
-def validate_shell_deps() -> None:
-    version = ipsw_version()
-    if version:
-        logger.info(f"Using ipsw {version}")
-        sentry_sdk.set_tag("ipsw.version", version)
-    else:
-        logger.error("ipsw not installed")
-        sys.exit(1)
-
-    result = subprocess.run(["./symsorter", "--version"], capture_output=True)
-    if result.returncode == 0:
-        symsorter_version_parts = result.stdout.decode("utf-8").splitlines()
-        if len(symsorter_version_parts) < 1:
-            logger.error("Cannot parse symsorter version")
-            sys.exit(1)
-
-        symsorter_version = symsorter_version_parts[0].split(" ").pop()
-        logger.info(f"Using symsorter {symsorter_version}")
-        sentry_sdk.set_tag("symsorter.version", symsorter_version)
-    else:
-        symsorter_stderr = result.stderr.decode("utf-8")
-        logger.error(f"symsorter failed: {symsorter_stderr}")
-        sys.exit(1)
 
 
 def patch_cryptex_dmg(artifact: Path, output_dir: Path) -> dict[str, Path]:

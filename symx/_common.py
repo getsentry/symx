@@ -291,3 +291,28 @@ def upload_symbol_binaries(
 
             blob.upload_from_filename(str(local_file), num_retries=10)
             logger.debug(f"File {local_file} uploaded to {dest_blob_name}.")
+
+
+def validate_shell_deps() -> None:
+    version = ipsw_version()
+    if version:
+        logger.info(f"Using ipsw {version}")
+        sentry_sdk.set_tag("ipsw.version", version)
+    else:
+        logger.error("ipsw not installed")
+        sys.exit(1)
+
+    result = subprocess.run(["./symsorter", "--version"], capture_output=True)
+    if result.returncode == 0:
+        symsorter_version_parts = result.stdout.decode("utf-8").splitlines()
+        if len(symsorter_version_parts) < 1:
+            logger.error("Cannot parse symsorter version")
+            sys.exit(1)
+
+        symsorter_version = symsorter_version_parts[0].split(" ").pop()
+        logger.info(f"Using symsorter {symsorter_version}")
+        sentry_sdk.set_tag("symsorter.version", symsorter_version)
+    else:
+        symsorter_stderr = result.stderr.decode("utf-8")
+        logger.error(f"symsorter failed: {symsorter_stderr}")
+        sys.exit(1)
