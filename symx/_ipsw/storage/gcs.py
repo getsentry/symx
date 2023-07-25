@@ -1,7 +1,7 @@
 import datetime
 import logging
-import time
 from pathlib import Path
+from typing import Tuple, Iterator
 
 import sentry_sdk
 from google.cloud.exceptions import PreconditionFailed
@@ -9,7 +9,6 @@ from google.cloud.storage import Blob, Bucket, Client  # type: ignore[import]
 
 from symx._common import (
     ArtifactProcessingState,
-    download_url_to_file,
     compare_md5_hash,
 )
 from symx._ipsw.common import (
@@ -19,9 +18,15 @@ from symx._ipsw.common import (
     IpswSource,
 )
 from symx._ipsw.meta_sync.appledb import IMPORT_STATE_JSON
-from symx._ipsw.mirror import verify_download
 
 logger = logging.getLogger(__name__)
+
+
+def _ipsw_artifact_sort_by_released(artifact: IpswArtifact) -> datetime.date:
+    if artifact.released:
+        return artifact.released
+    else:
+        return datetime.date(datetime.MINYEAR, 1, 1)
 
 
 class IpswGcsStorage:
@@ -56,36 +61,6 @@ class IpswGcsStorage:
             self.local_import_state,
             if_generation_match=import_state_blob.generation,
         )
-
-    def mirror_ipsw_from_apple(
-        self,
-        artifact: IpswArtifact,
-        download_dir: Path,
-        start: float,
-        timeout: datetime.timedelta,
-    ) -> None:
-        logger.info(f"Downloading {artifact}")
-        sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
-        for source in artifact.sources:
-            if int(time.time() - start) > timeout.seconds:
-                return
-
-            sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
-            if source.processing_state not in {
-                ArtifactProcessingState.INDEXED,
-                ArtifactProcessingState.MIRRORING_FAILED,
-            }:
-                logger.info(f"Bypassing {source.link} because it was already mirrored")
-                continue
-
-            filepath = download_dir / source.file_name
-            download_url_to_file(str(source.link), filepath)
-            if not verify_download(filepath, source):
-                continue
-
-            updated_artifact = self.upload_ipsw(artifact, (filepath, source))
-            self.update_meta_item(updated_artifact)
-            filepath.unlink()
 
     def upload_ipsw(
         self, artifact: IpswArtifact, downloaded_source: tuple[Path, IpswSource]
@@ -128,29 +103,89 @@ class IpswGcsStorage:
     def update_meta_item(self, ipsw_meta: IpswArtifact) -> IpswArtifactDb:
         retry = 5
         while retry > 0:
-            blob = self.load_artifacts_meta()
-            if blob.exists():
-                try:
-                    fp = open(self.local_artifacts_meta)
-                except IOError:
-                    ours, generation_match_precondition = IpswArtifactDb(), 0
-                else:
-                    with fp:
-                        ours, generation_match_precondition = (
-                            IpswArtifactDb.model_validate_json(fp.read()),
-                            blob.generation,
-                        )
-            else:
-                ours, generation_match_precondition = IpswArtifactDb(), 0
-
-            ours.upsert(ipsw_meta.key, ipsw_meta)
+            blob, meta_db, generation = self.refresh_artifacts_db()
+            meta_db.upsert(ipsw_meta.key, ipsw_meta)
             try:
                 blob.upload_from_string(
-                    ours.model_dump_json(),
-                    if_generation_match=generation_match_precondition,
+                    meta_db.model_dump_json(),
+                    if_generation_match=generation,
                 )
-                return ours
+                return meta_db
             except PreconditionFailed:
                 retry = retry - 1
 
         raise RuntimeError("Failed to update meta-data item")
+
+    def refresh_artifacts_db(self) -> Tuple[Blob, IpswArtifactDb, int]:
+        blob = self.load_artifacts_meta()
+        if blob.exists():
+            try:
+                fp = open(self.local_artifacts_meta)
+            except IOError:
+                meta_db, generation = IpswArtifactDb(), 0
+            else:
+                with fp:
+                    meta_db, generation = (
+                        IpswArtifactDb.model_validate_json(fp.read()),
+                        blob.generation,
+                    )
+        else:
+            meta_db, generation = IpswArtifactDb(), 0
+        return blob, meta_db, generation
+
+    def mirror_iter(self) -> Iterator[IpswArtifact]:
+        """
+        A generator that reloads the meta-data on every iteration, so we fetch updated mirrored artifacts. This allows
+        us to modify the meta-data in the loop that iterates over the output.
+        :return: The next current mirrored IpswArtifact to be processed.
+        """
+        while True:
+            meta_blob, meta_db, generation = self.refresh_artifacts_db()
+            if len(meta_db.artifacts) == 0:
+                logger.error("No artifacts in IPSW meta-data.")
+                return
+
+            filtered_artifacts = [
+                artifact
+                for artifact in meta_db.artifacts.values()
+                if any(
+                    source.processing_state == ArtifactProcessingState.MIRRORED
+                    for source in artifact.sources
+                )
+            ]
+            sorted_by_age_descending = sorted(
+                filtered_artifacts, key=_ipsw_artifact_sort_by_released, reverse=True
+            )
+
+            yield sorted_by_age_descending[0]
+
+    def indexed_iter(self) -> Iterator[IpswArtifact]:
+        """
+        A generator that reloads the meta-data on every iteration, so we fetch updated indexed artifacts. This allows
+        us to modify the meta-data in the loop that iterates over the output.
+        :return: The next current indexed IpswArtifact to be processed.
+        """
+        while True:
+            meta_blob, meta_db, generation = self.refresh_artifacts_db()
+            if len(meta_db.artifacts) == 0:
+                logger.error("No artifacts in IPSW meta-data.")
+                return
+            # we want all artifacts...
+            # - that have a release date within this and the previous year and
+            # - where some of its sources are still indexed
+            filtered_artifacts = [
+                artifact
+                for artifact in meta_db.artifacts.values()
+                if artifact.released is not None
+                and artifact.released.year >= datetime.date.today().year - 1
+                and any(
+                    source.processing_state == ArtifactProcessingState.INDEXED
+                    for source in artifact.sources
+                )
+            ]
+            logger.info(f"Number of filtered artifacts = {len(filtered_artifacts)}")
+            sorted_by_age_descending = sorted(
+                filtered_artifacts, key=_ipsw_artifact_sort_by_released, reverse=True
+            )
+
+            yield sorted_by_age_descending[0]
