@@ -69,39 +69,115 @@ class IpswExtractError(Exception):
     pass
 
 
+def _log_directory_contents(directory: Path) -> None:
+    if not directory.is_dir():
+        return
+    dir_contents = "\n".join(str(item) for item in directory.iterdir())
+    logger.debug(f"Contents of {directory}: \n\n{dir_contents}")
+
+
 class IpswExtractor:
-    def __init__(self, ipsw_path: Path):
+    def __init__(
+        self, prefix: str, bundle_id: str, processing_dir: Path, ipsw_path: Path
+    ):
+        self.prefix = prefix
+        self.bundle_id = bundle_id
+        if not processing_dir.is_dir():
+            raise ValueError(
+                f"IPSW path is expected to be a directory: {processing_dir}"
+            )
+        self.processing_dir = processing_dir
+        _log_directory_contents(self.processing_dir)
+
         if not ipsw_path.is_file():
             raise ValueError(f"IPSW path is expected to be a file: {ipsw_path}")
+
         self.ipsw_path = ipsw_path
 
-    def _ipsw_extract(self) -> Path:
+    def _ipsw_extract(self) -> Path | None:
         result = subprocess.run(
-            ["ipsw", "extract", self.ipsw_path, "-d"],
+            ["ipsw", "extract", self.ipsw_path, "-d", "-o", self.processing_dir],
+            capture_output=True,
+        )
+        if result.returncode == 1:
+            error_msg = result.stderr.decode("utf-8")
+            raise IpswExtractError(f"ipsw extract failed with {error_msg}")
+
+        # we have very limited space on the GHA runners, so get rid of the source artifact ASAP
+        self.ipsw_path.unlink()
+
+        _log_directory_contents(self.processing_dir)
+        for item in self.processing_dir.iterdir():
+            if item.is_dir():
+                return item
+
+        return None
+
+    def run(self) -> Path:
+        extract_dir = self._ipsw_extract()
+        if extract_dir is None:
+            raise IpswExtractError(
+                "Couldn't find IPSW dyld_shared_cache extraction directory"
+            )
+        _log_directory_contents(extract_dir)
+        split_dir = self._ipsw_split(extract_dir)
+        _log_directory_contents(split_dir)
+        symbols_dir = self._symsort(split_dir)
+        _log_directory_contents(symbols_dir)
+
+        return symbols_dir
+
+    def _ipsw_split(self, extract_dir: Path) -> Path:
+        dsc_root_file = None
+        for item in extract_dir.iterdir():
+            if (
+                item.is_file() and not item.suffix
+            ):  # check if it is a file and has no extension
+                dsc_root_file = item
+                break
+
+        if dsc_root_file is None:
+            raise IpswExtractError(
+                f"Failed to find dyld_shared_cache root-file in {extract_dir}"
+            )
+        split_dir = self.processing_dir / "split_out"
+        result = subprocess.run(
+            ["ipsw", "split", dsc_root_file, split_dir],
             capture_output=True,
         )
         if result.returncode == 1:
             raise IpswExtractError(f"ipsw extract failed with {result}")
 
-        # we have very limited space on the GHA runners, so get rid of the source artifact ASAP
-        self.ipsw_path.unlink()
-        return Path()
+        # we have very limited space on the GHA runners, so get rid of processed input data
+        shutil.rmtree(extract_dir)
 
-    def run(self) -> Path:
-        extract_dir = self._ipsw_extract()
-        # ipsw split extract_dir split_dir
-        split_dir = self._ipsw_split(extract_dir)
-
-        # ./symsorter -zz -o symsort_output --prefix macos --bundle-id 13.0.1_22A00_arm64e symsorter_input
-        symsort_dir = self._symsort(split_dir)
-
-        return symsort_dir
-
-    def _ipsw_split(self, extract_dir: Path) -> Path:
-        return Path()
+        return split_dir
 
     def _symsort(self, split_dir: Path) -> Path:
-        return Path()
+        output_dir = self.processing_dir / "symbols"
+        logger.info(f"\t\t\tSymsorting {split_dir} to {output_dir}")
+
+        result = subprocess.run(
+            [
+                "./symsorter",
+                "-zz",
+                "-o",
+                output_dir,
+                "--prefix",
+                self.prefix,
+                "--bundle-id",
+                self.bundle_id,
+                split_dir,
+            ],
+            capture_output=True,
+        )
+        if result.returncode == 1:
+            raise IpswExtractError(f"Symsorter failed with {result}")
+
+        # we have very limited space on the GHA runners, so get rid of processed input data
+        shutil.rmtree(split_dir)
+
+        return output_dir
 
 
 def extract(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
@@ -131,10 +207,17 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
             if local_path is None:
                 continue
 
+            bundle_clean_file_name = source.file_name[:-5].replace(",", "_")
+            bundle_id = f"ipsw_{bundle_clean_file_name}"
+            prefix = str(artifact.platform)
             try:
-                extractor = IpswExtractor(local_path)
+                extractor = IpswExtractor(
+                    prefix, bundle_id, ipsw_storage.local_dir, local_path
+                )
                 symbol_binaries_dir = extractor.run()
-                ipsw_storage.upload_symbols(artifact, source_idx, symbol_binaries_dir)
+                ipsw_storage.upload_symbols(
+                    artifact, source_idx, symbol_binaries_dir, bundle_id
+                )
                 shutil.rmtree(symbol_binaries_dir)
                 artifact.sources[source_idx].processing_state = (
                     ArtifactProcessingState.SYMBOLS_EXTRACTED

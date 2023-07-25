@@ -208,9 +208,8 @@ class IpswGcsStorage:
         return local_ipsw_path
 
     def upload_symbols(
-        self, artifact: IpswArtifact, source_idx: int, binary_dir: Path
+        self, artifact: IpswArtifact, source_idx: int, binary_dir: Path, bundle_id: str
     ) -> None:
-        bundle_id = f"ipsw_{artifact.key}"
         upload_symbol_binaries(self.bucket, artifact.platform, bundle_id, binary_dir)
         artifact.sources[source_idx].processing_state = (
             ArtifactProcessingState.SYMBOLS_EXTRACTED
