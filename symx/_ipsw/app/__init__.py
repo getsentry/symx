@@ -8,7 +8,7 @@ from symx._common import parse_gcs_url
 from symx._ipsw.runners import (
     import_meta_from_appledb,
     mirror as mirror_runner,
-    extract_runner,
+    extract as extract_runner,
 )
 from symx._ipsw.storage.gcs import IpswGcsStorage
 

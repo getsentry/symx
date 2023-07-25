@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import tempfile
 from pathlib import Path
 
@@ -12,6 +11,7 @@ from symx._common import (
     ArtifactProcessingState,
     compare_md5_hash,
     parse_gcs_url,
+    upload_symbol_binaries,
 )
 from symx._ota import (
     OtaArtifact,
@@ -148,33 +148,7 @@ class OtaGcsStorage(OtaStorage):
     def upload_symbols(
         self, input_dir: Path, ota_key: str, ota_meta: OtaArtifact, bundle_id: str
     ) -> None:
-        dest_blob_prefix = Path("symbols")
-        bundle_index_path = dest_blob_prefix / ota_meta.platform / "bundles" / bundle_id
-        blob = self.bucket.blob(str(bundle_index_path))
-        if blob.exists():
-            logger.warning(
-                f"We already have a `bundle_id` {bundle_id} for {ota_meta.platform} in"
-                " the symbol store. "
-            )
-
-        for root, dirs, files in os.walk(input_dir):
-            for file in files:
-                local_file = Path(root) / file
-                dest_blob_name = (
-                    dest_blob_prefix / Path(root).relative_to(input_dir) / file
-                )
-                blob = self.bucket.blob(str(dest_blob_name))
-
-                if blob.exists():
-                    # If the blob exists we can continue with the next file because there should be no duplicate
-                    # which contains a mismatching symbol table. this is a big assumption, and we should probably
-                    # cross-check the symbols between the debug-id-equal binaries of each artifact. but this if is
-                    # not that place.
-                    continue
-
-                blob.upload_from_filename(str(local_file), num_retries=10)
-                logger.debug(f"File {local_file} uploaded to {dest_blob_name}.")
-
+        upload_symbol_binaries(self.bucket, ota_meta.platform, bundle_id, input_dir)
         ota_meta.processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
         ota_meta.update_last_run()
         self.update_meta_item(ota_key, ota_meta)

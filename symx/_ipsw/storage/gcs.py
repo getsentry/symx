@@ -10,6 +10,7 @@ from google.cloud.storage import Blob, Bucket, Client  # type: ignore[import]
 from symx._common import (
     ArtifactProcessingState,
     compare_md5_hash,
+    upload_symbol_binaries,
 )
 from symx._ipsw.common import (
     ARTIFACTS_META_JSON,
@@ -18,6 +19,7 @@ from symx._ipsw.common import (
     IpswSource,
 )
 from symx._ipsw.meta_sync.appledb import IMPORT_STATE_JSON
+from symx._ipsw.mirror import verify_download
 
 logger = logging.getLogger(__name__)
 
@@ -189,3 +191,29 @@ class IpswGcsStorage:
             )
 
             yield sorted_by_age_descending[0]
+
+    def download_ipsw(self, ipsw_source: IpswSource) -> Path | None:
+        blob = self.bucket.blob(ipsw_source.mirror_path)
+        local_ipsw_path = self.local_dir / ipsw_source.file_name
+        if not blob.exists():
+            logger.error(
+                "The IPSW-source references a mirror-path that is no longer accessible"
+            )
+            return None
+
+        blob.download_to_filename(str(local_ipsw_path))
+        if not verify_download(local_ipsw_path, ipsw_source):
+            return None
+
+        return local_ipsw_path
+
+    def upload_symbols(
+        self, artifact: IpswArtifact, source_idx: int, binary_dir: Path
+    ) -> None:
+        bundle_id = f"ipsw_{artifact.key}"
+        upload_symbol_binaries(self.bucket, artifact.platform, bundle_id, binary_dir)
+        artifact.sources[source_idx].processing_state = (
+            ArtifactProcessingState.SYMBOLS_EXTRACTED
+        )
+        artifact.sources[source_idx].update_last_run()
+        self.update_meta_item(artifact)

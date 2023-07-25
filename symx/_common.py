@@ -17,7 +17,7 @@ from urllib.parse import ParseResult, urlparse
 
 import requests
 import sentry_sdk
-from google.cloud.storage import Blob  # type: ignore[import]
+from google.cloud.storage import Blob, Bucket  # type: ignore[import]
 
 logger = logging.getLogger(__name__)
 
@@ -260,3 +260,34 @@ def parse_gcs_url(storage: str) -> ParseResult | None:
         )
         return None
     return uri
+
+
+def upload_symbol_binaries(
+    bucket: Bucket, platform: str, bundle_id: str, binary_dir: Path
+) -> None:
+    dest_blob_prefix = Path("symbols")
+    bundle_index_path = dest_blob_prefix / platform / "bundles" / bundle_id
+    blob = bucket.blob(str(bundle_index_path))
+    if blob.exists():
+        logger.warning(
+            f"We already have a `bundle_id` {bundle_id} for {platform} in"
+            " the symbol store. "
+        )
+
+    for root, dirs, files in os.walk(binary_dir):
+        for file in files:
+            local_file = Path(root) / file
+            dest_blob_name = (
+                dest_blob_prefix / Path(root).relative_to(binary_dir) / file
+            )
+            blob = bucket.blob(str(dest_blob_name))
+
+            if blob.exists():
+                # If the blob exists we can continue with the next file because there should be no duplicate
+                # which contains a mismatching symbol table. this is a big assumption, and we should probably
+                # cross-check the symbols between the debug-id-equal binaries of each artifact. but this if is
+                # not that place.
+                continue
+
+            blob.upload_from_filename(str(local_file), num_retries=10)
+            logger.debug(f"File {local_file} uploaded to {dest_blob_name}.")
