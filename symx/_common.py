@@ -175,7 +175,9 @@ def check_sha1(hash_sum: str, filepath: Path) -> bool:
             sha1sum.update(block)
             block = f.read(HASH_BLOCK_SIZE)
 
-    return sha1sum.hexdigest() == hash_sum
+    sha1sum_result = sha1sum.hexdigest()
+    logger.debug(f"Calculated sha1 = {sha1sum_result}, expected sha1 = {hash_sum}")
+    return sha1sum_result == hash_sum
 
 
 def download_url_to_file(url: str, filepath: Path) -> None:
