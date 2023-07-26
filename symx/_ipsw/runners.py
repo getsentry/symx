@@ -225,7 +225,7 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
             except Exception as e:
                 sentry_sdk.capture_exception(e)
                 logger.warning(
-                    "fSymbol extraction failed, updating meta-data and continuing with"
+                    "Symbol extraction failed, updating meta-data and continuing with"
                     " the next one"
                 )
                 artifact.sources[source_idx].processing_state = (
