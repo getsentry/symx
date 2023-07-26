@@ -87,9 +87,9 @@ class IpswGcsStorage:
                     "Trying to upload IPSW that already exists in mirror with a"
                     " different MD5"
                 )
-                artifact.sources[
-                    source_idx
-                ].processing_state = ArtifactProcessingState.MIRRORING_FAILED
+                artifact.sources[source_idx].processing_state = (
+                    ArtifactProcessingState.MIRRORING_FAILED
+                )
                 return artifact
         else:
             # this file will be split into considerable chunks: set timeout to something high
@@ -212,8 +212,8 @@ class IpswGcsStorage:
         self, artifact: IpswArtifact, source_idx: int, binary_dir: Path, bundle_id: str
     ) -> None:
         upload_symbol_binaries(self.bucket, artifact.platform, bundle_id, binary_dir)
-        artifact.sources[
-            source_idx
-        ].processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
+        artifact.sources[source_idx].processing_state = (
+            ArtifactProcessingState.SYMBOLS_EXTRACTED
+        )
         artifact.sources[source_idx].update_last_run()
         self.update_meta_item(artifact)

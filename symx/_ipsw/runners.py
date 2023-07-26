@@ -51,9 +51,9 @@ def mirror(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
             filepath = ipsw_storage.local_dir / source.file_name
             download_url_to_file(str(source.link), filepath)
             if not verify_download(filepath, source):
-                artifact.sources[
-                    source_idx
-                ].processing_state = ArtifactProcessingState.MIRRORING_FAILED
+                artifact.sources[source_idx].processing_state = (
+                    ArtifactProcessingState.MIRRORING_FAILED
+                )
                 artifact.sources[source_idx].update_last_run()
                 ipsw_storage.update_meta_item(artifact)
             else:
@@ -219,9 +219,9 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
                     artifact, source_idx, symbol_binaries_dir, bundle_id
                 )
                 shutil.rmtree(symbol_binaries_dir)
-                artifact.sources[
-                    source_idx
-                ].processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
+                artifact.sources[source_idx].processing_state = (
+                    ArtifactProcessingState.SYMBOLS_EXTRACTED
+                )
             except Exception as e:
                 sentry_sdk.capture_exception(e)
             finally:
