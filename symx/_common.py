@@ -267,6 +267,7 @@ def parse_gcs_url(storage: str) -> ParseResult | None:
 def upload_symbol_binaries(
     bucket: Bucket, platform: str, bundle_id: str, binary_dir: Path
 ) -> None:
+    logger.info(f"Uploading symbol binaries for {platform} and {bundle_id}")
     dest_blob_prefix = Path("symbols")
     bundle_index_path = dest_blob_prefix / platform / "bundles" / bundle_id
     blob = bucket.blob(str(bundle_index_path))

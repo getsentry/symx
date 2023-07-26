@@ -51,9 +51,9 @@ def mirror(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
             filepath = ipsw_storage.local_dir / source.file_name
             download_url_to_file(str(source.link), filepath)
             if not verify_download(filepath, source):
-                artifact.sources[source_idx].processing_state = (
-                    ArtifactProcessingState.MIRRORING_FAILED
-                )
+                artifact.sources[
+                    source_idx
+                ].processing_state = ArtifactProcessingState.MIRRORING_FAILED
                 artifact.sources[source_idx].update_last_run()
                 ipsw_storage.update_meta_item(artifact)
             else:
@@ -146,7 +146,7 @@ class IpswExtractor:
             capture_output=True,
         )
         if result.returncode == 1:
-            raise IpswExtractError(f"ipsw extract failed with {result}")
+            raise IpswExtractError(f"ipsw split failed with {result}")
 
         # we have very limited space on the GHA runners, so get rid of processed input data
         shutil.rmtree(extract_dir)
@@ -184,7 +184,7 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
     validate_shell_deps()
     start = time.time()
     for artifact in ipsw_storage.mirror_iter():
-        logger.info(f"Downloading {artifact} from mirror")
+        logger.info(f"Processing {artifact.key} for extraction")
         sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
         for source_idx, source in enumerate(artifact.sources):
             if int(time.time() - start) > timeout.seconds:
@@ -219,9 +219,9 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
                     artifact, source_idx, symbol_binaries_dir, bundle_id
                 )
                 shutil.rmtree(symbol_binaries_dir)
-                artifact.sources[source_idx].processing_state = (
-                    ArtifactProcessingState.SYMBOLS_EXTRACTED
-                )
+                artifact.sources[
+                    source_idx
+                ].processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
             except Exception as e:
                 sentry_sdk.capture_exception(e)
             finally:
