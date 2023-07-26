@@ -1,8 +1,8 @@
 name: Extract IPSW symbols
 on:
   workflow_dispatch:
-  schedule:
-   - cron: "55 */6 * * *"
+  # schedule:
+  #  - cron: "55 */6 * * *"
 
 concurrency: ipsw_extract
 
