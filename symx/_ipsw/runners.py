@@ -142,11 +142,11 @@ class IpswExtractor:
             )
         split_dir = self.processing_dir / "split_out"
         result = subprocess.run(
-            ["ipsw", "split", dsc_root_file, split_dir],
+            ["ipsw", "dyld", "split", dsc_root_file, split_dir],
             capture_output=True,
         )
         if result.returncode == 1:
-            raise IpswExtractError(f"ipsw split failed with {result}")
+            raise IpswExtractError(f"ipsw dyld split failed with {result}")
 
         # we have very limited space on the GHA runners, so get rid of processed input data
         shutil.rmtree(extract_dir)
