@@ -290,6 +290,10 @@ def upload_symbol_binaries(
                 # which contains a mismatching symbol table. this is a big assumption, and we should probably
                 # cross-check the symbols between the debug-id-equal binaries of each artifact. but this if is
                 # not that place.
+                logger.info(
+                    f"{local_file} exists in symbol-store at {dest_blob_name}. Continue"
+                    " with next."
+                )
                 continue
 
             blob.upload_from_filename(str(local_file), num_retries=10)
