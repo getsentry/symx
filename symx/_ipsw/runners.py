@@ -12,6 +12,7 @@ from symx._common import (
     download_url_to_file,
     validate_shell_deps,
 )
+from symx._ipsw.common import IpswPlatform
 from symx._ipsw.meta_sync.appledb import AppleDbIpswImport
 from symx._ipsw.mirror import verify_download
 from symx._ipsw.storage.gcs import IpswGcsStorage
@@ -180,6 +181,17 @@ class IpswExtractor:
         return output_dir
 
 
+def _map_platform_to_prefix(ipsw_platform: IpswPlatform) -> str:
+    # IPSWs differentiate between iPadOS and iOS while OTA doesn't, so we put them in the same prefix
+    if ipsw_platform == IpswPlatform.IPADOS:
+        prefix_platform = IpswPlatform.IOS
+    else:
+        prefix_platform = ipsw_platform
+
+    # the symbols store prefixes are all lower-case
+    return str(prefix_platform).lower()
+
+
 def extract(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
     validate_shell_deps()
     start = time.time()
@@ -209,14 +221,14 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
 
             bundle_clean_file_name = source.file_name[:-5].replace(",", "_")
             bundle_id = f"ipsw_{bundle_clean_file_name}"
-            prefix = str(artifact.platform)
+            prefix = _map_platform_to_prefix(artifact.platform)
             try:
                 extractor = IpswExtractor(
                     prefix, bundle_id, ipsw_storage.local_dir, local_path
                 )
                 symbol_binaries_dir = extractor.run()
                 ipsw_storage.upload_symbols(
-                    artifact, source_idx, symbol_binaries_dir, bundle_id
+                    prefix, bundle_id, artifact, source_idx, symbol_binaries_dir
                 )
                 shutil.rmtree(symbol_binaries_dir)
                 artifact.sources[source_idx].processing_state = (
