@@ -105,12 +105,12 @@ class IpswExtractor:
             ["ipsw", "extract", self.ipsw_path, "-d", "-o", self.processing_dir],
             capture_output=True,
         )
+        # we have very limited space on the GHA runners, so get rid of the source artifact ASAP
+        self.ipsw_path.unlink()
+
         if result.returncode == 1:
             error_msg = result.stderr.decode("utf-8")
             raise IpswExtractError(f"ipsw extract failed with {error_msg}")
-
-        # we have very limited space on the GHA runners, so get rid of the source artifact ASAP
-        self.ipsw_path.unlink()
 
         _log_directory_contents(self.processing_dir)
         for item in self.processing_dir.iterdir():
@@ -151,11 +151,11 @@ class IpswExtractor:
             ["ipsw", "dyld", "split", dsc_root_file, split_dir],
             capture_output=True,
         )
-        if result.returncode == 1:
-            raise IpswExtractError(f"ipsw dyld split failed with {result}")
-
         # we have very limited space on the GHA runners, so get rid of processed input data
         shutil.rmtree(extract_dir)
+
+        if result.returncode == 1:
+            raise IpswExtractError(f"ipsw dyld split failed with {result}")
 
         return split_dir
 
@@ -177,11 +177,12 @@ class IpswExtractor:
             ],
             capture_output=True,
         )
-        if result.returncode == 1:
-            raise IpswExtractError(f"Symsorter failed with {result}")
 
         # we have very limited space on the GHA runners, so get rid of processed input data
         shutil.rmtree(split_dir)
+
+        if result.returncode == 1:
+            raise IpswExtractError(f"Symsorter failed with {result}")
 
         return output_dir
 
