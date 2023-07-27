@@ -86,4 +86,6 @@ class IpswArtifactDb(BaseModel):
         return self.artifacts.get(key)
 
     def upsert(self, key: str, artifact: IpswArtifact) -> None:
+        # TODO: the upsert overwrites the whole artifact, this isn't really needed in most cases.
+        #  We could extend the interface to limit the properties that should be touched.
         self.artifacts[key] = artifact

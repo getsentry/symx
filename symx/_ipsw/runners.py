@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
+from typing import Iterable, Sequence
 
 import sentry_sdk
 
@@ -12,10 +13,14 @@ from symx._common import (
     download_url_to_file,
     validate_shell_deps,
 )
-from symx._ipsw.common import IpswPlatform
+from symx._ipsw.common import IpswPlatform, IpswArtifact, IpswSource
 from symx._ipsw.meta_sync.appledb import AppleDbIpswImport
 from symx._ipsw.mirror import verify_download
-from symx._ipsw.storage.gcs import IpswGcsStorage
+from symx._ipsw.storage.gcs import (
+    IpswGcsStorage,
+    mirror_filter,
+    extract_filter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +37,7 @@ def import_meta_from_appledb(ipsw_storage: IpswGcsStorage) -> None:
 
 def mirror(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
     start = time.time()
-    for artifact in ipsw_storage.indexed_iter():
+    for artifact in ipsw_storage.artifact_iter(mirror_filter):
         logger.info(f"Downloading {artifact}")
         sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
         for source_idx, source in enumerate(artifact.sources):
@@ -195,7 +200,7 @@ def _map_platform_to_prefix(ipsw_platform: IpswPlatform) -> str:
 def extract(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
     validate_shell_deps()
     start = time.time()
-    for artifact in ipsw_storage.mirror_iter():
+    for artifact in ipsw_storage.artifact_iter(extract_filter):
         logger.info(f"Processing {artifact.key} for extraction")
         sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
         for source_idx, source in enumerate(artifact.sources):
@@ -246,3 +251,35 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
             finally:
                 artifact.sources[source_idx].update_last_run()
                 ipsw_storage.update_meta_item(artifact)
+
+
+def _source_post_mirror_condition(source: IpswSource) -> bool:
+    return (
+        source.processing_state == ArtifactProcessingState.MIRRORED
+        or source.processing_state == ArtifactProcessingState.INDEXED
+        or source.processing_state == ArtifactProcessingState.MIRRORING_FAILED
+    )
+
+
+def _post_mirrored_filter(
+    artifacts: Iterable[IpswArtifact],
+) -> Sequence[IpswArtifact]:
+    return [
+        artifact
+        for artifact in artifacts
+        if any(not _source_post_mirror_condition(source) for source in artifact.sources)
+    ]
+
+
+def migrate(ipsw_storage: IpswGcsStorage) -> None:
+    for artifact in ipsw_storage.artifact_iter(_post_mirrored_filter):
+        for source_idx, source in enumerate(artifact.sources):
+            if _source_post_mirror_condition(source):
+                continue
+
+            assert source.mirror_path is not None
+            artifact.sources[source_idx].processing_state = (
+                ArtifactProcessingState.MIRRORED
+            )
+            artifact.sources[source_idx].update_last_run()
+        ipsw_storage.update_meta_item(artifact)

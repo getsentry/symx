@@ -1,7 +1,7 @@
 import datetime
 import logging
 from pathlib import Path
-from typing import Tuple, Iterator
+from typing import Tuple, Iterator, Iterable, Callable, Sequence
 
 import sentry_sdk
 from google.cloud.exceptions import PreconditionFailed
@@ -29,6 +29,38 @@ def _ipsw_artifact_sort_by_released(artifact: IpswArtifact) -> datetime.date:
         return artifact.released
     else:
         return datetime.date(datetime.MINYEAR, 1, 1)
+
+
+def extract_filter(
+    artifacts: Iterable[IpswArtifact],
+) -> Sequence[IpswArtifact]:
+    # we can extract from any source that has been mirrored
+    return [
+        artifact
+        for artifact in artifacts
+        if any(
+            source.processing_state == ArtifactProcessingState.MIRRORED
+            for source in artifact.sources
+        )
+    ]
+
+
+def mirror_filter(
+    artifacts: Iterable[IpswArtifact],
+) -> Sequence[IpswArtifact]:
+    # to mirror, we want all artifacts...
+    # - that have a release date within this and the previous year and
+    # - where some of its sources are still indexed
+    return [
+        artifact
+        for artifact in artifacts
+        if artifact.released is not None
+        and artifact.released.year >= datetime.date.today().year - 1
+        and any(
+            source.processing_state == ArtifactProcessingState.INDEXED
+            for source in artifact.sources
+        )
+    ]
 
 
 class IpswGcsStorage:
@@ -135,11 +167,20 @@ class IpswGcsStorage:
             meta_db, generation = IpswArtifactDb(), 0
         return blob, meta_db, generation
 
-    def mirror_iter(self) -> Iterator[IpswArtifact]:
+    def artifact_iter(
+        self, filter_fun: Callable[[Iterable[IpswArtifact]], Sequence[IpswArtifact]]
+    ) -> Iterator[IpswArtifact]:
         """
-        A generator that reloads the meta-data on every iteration, so we fetch updated mirrored artifacts. This allows
-        us to modify the meta-data in the loop that iterates over the output.
-        :return: The next current mirrored IpswArtifact to be processed.
+        This iterator refreshes the database with each yield. So if you do not change the (remote) data during the loop
+        it will return the same item every time. Specifically the iter is meant to enable processing that results in a
+        state-change of the artifacts sources.
+
+        If you don't do that, don't use it. There is nothing wrong with iterating an offline-version of the meta-data if
+        the processing is offline and doesn't need to interact with other (live) workflows.
+
+        Using this iter is the opposite and allows us to work with the latest data and update meta-data to the latest
+        state within the context of concurrent long-running workflows.
+        :param filter_fun: a callable that expects some artifacts and returns a filtered list based on some condition
         """
         while True:
             meta_blob, meta_db, generation = self.refresh_artifacts_db()
@@ -147,48 +188,14 @@ class IpswGcsStorage:
                 logger.error("No artifacts in IPSW meta-data.")
                 return
 
-            filtered_artifacts = [
-                artifact
-                for artifact in meta_db.artifacts.values()
-                if any(
-                    source.processing_state == ArtifactProcessingState.MIRRORED
-                    for source in artifact.sources
-                )
-            ]
-            sorted_by_age_descending = sorted(
-                filtered_artifacts, key=_ipsw_artifact_sort_by_released, reverse=True
-            )
-
-            yield sorted_by_age_descending[0]
-
-    def indexed_iter(self) -> Iterator[IpswArtifact]:
-        """
-        A generator that reloads the meta-data on every iteration, so we fetch updated indexed artifacts. This allows
-        us to modify the meta-data in the loop that iterates over the output.
-        :return: The next current indexed IpswArtifact to be processed.
-        """
-        while True:
-            meta_blob, meta_db, generation = self.refresh_artifacts_db()
-            if len(meta_db.artifacts) == 0:
-                logger.error("No artifacts in IPSW meta-data.")
-                return
-            # we want all artifacts...
-            # - that have a release date within this and the previous year and
-            # - where some of its sources are still indexed
-            filtered_artifacts = [
-                artifact
-                for artifact in meta_db.artifacts.values()
-                if artifact.released is not None
-                and artifact.released.year >= datetime.date.today().year - 1
-                and any(
-                    source.processing_state == ArtifactProcessingState.INDEXED
-                    for source in artifact.sources
-                )
-            ]
+            filtered_artifacts = filter_fun(meta_db.artifacts.values())
             logger.info(f"Number of filtered artifacts = {len(filtered_artifacts)}")
             sorted_by_age_descending = sorted(
                 filtered_artifacts, key=_ipsw_artifact_sort_by_released, reverse=True
             )
+
+            if len(sorted_by_age_descending) == 0:
+                break
 
             yield sorted_by_age_descending[0]
 

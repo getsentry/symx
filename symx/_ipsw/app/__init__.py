@@ -9,6 +9,7 @@ from symx._ipsw.runners import (
     import_meta_from_appledb,
     mirror as mirror_runner,
     extract as extract_runner,
+    migrate as migrate_runner,
 )
 from symx._ipsw.storage.gcs import IpswGcsStorage
 
@@ -71,3 +72,16 @@ def extract(
         storage_backend = init_storage(Path(processing_dir), storage)
         if storage_backend:
             extract_runner(storage_backend, datetime.timedelta(minutes=timeout))
+
+
+@ipsw_app.command()
+def migrate(
+    storage: str = typer.Option(..., "--storage", "-s", help="Storage"),
+) -> None:
+    """
+    Migrate/Maintain storage
+    """
+    with tempfile.TemporaryDirectory() as processing_dir:
+        storage_backend = init_storage(Path(processing_dir), storage)
+        if storage_backend:
+            migrate_runner(storage_backend)
