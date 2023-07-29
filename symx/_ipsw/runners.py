@@ -252,6 +252,7 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
             finally:
                 artifact.sources[source_idx].update_last_run()
                 ipsw_storage.update_meta_item(artifact)
+                ipsw_storage.clean_local_dir()
 
 
 def _source_post_mirror_condition(source: IpswSource) -> bool:

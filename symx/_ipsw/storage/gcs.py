@@ -1,5 +1,6 @@
 import datetime
 import logging
+import shutil
 from pathlib import Path
 from typing import Tuple, Iterator, Iterable, Callable, Sequence
 
@@ -229,3 +230,24 @@ class IpswGcsStorage:
         )
         artifact.sources[source_idx].update_last_run()
         self.update_meta_item(artifact)
+
+    def clean_local_dir(self) -> None:
+        for item in self.local_dir.iterdir():
+            if item.is_dir():
+                try:
+                    shutil.rmtree(item)
+                    logger.info(
+                        f"Removed directory {item} as part of local storage cleanup"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Error occurred while removing directory: {item}, Error: {e}"
+                    )
+            elif item.is_file() and item.suffix == ".ipsw":
+                try:
+                    item.unlink()
+                    logger.info(f"Removed {item} as part of local storage cleanup")
+                except Exception as e:
+                    logger.error(
+                        f"Error occurred while removing directory: {item}, Error: {e}"
+                    )
