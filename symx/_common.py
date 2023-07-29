@@ -277,9 +277,14 @@ def upload_symbol_binaries(
             " the symbol store. "
         )
 
+    duplicate_count = 0
+    new_count = 0
+    data_size = 0
+
     for root, dirs, files in os.walk(binary_dir):
         for file in files:
             local_file = Path(root) / file
+            data_size += local_file.stat().st_size
             dest_blob_name = (
                 dest_blob_prefix / Path(root).relative_to(binary_dir) / file
             )
@@ -294,10 +299,16 @@ def upload_symbol_binaries(
                     f"{local_file} exists in symbol-store at {dest_blob_name}. Continue"
                     " with next."
                 )
+                duplicate_count += 1
                 continue
 
             blob.upload_from_filename(str(local_file), num_retries=10)
+            new_count += 1
             logger.debug(f"File {local_file} uploaded to {dest_blob_name}.")
+
+    logger.info(f"New files uploaded = {new_count}")
+    logger.info(f"Ignored duplicates = {duplicate_count}")
+    logger.info(f"Uploaded size in bytes = {data_size}")
 
 
 def validate_shell_deps() -> None:
