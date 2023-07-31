@@ -126,7 +126,7 @@ class IpswGcsStorage:
                 return artifact
         else:
             # this file will be split into considerable chunks: set timeout to something high
-            blob.upload_from_filename(str(ipsw_file), timeout=3600)
+            blob.upload_from_filename(str(ipsw_file), timeout=3600, num_retries=10)
             logger.info("Upload finished. Updating IPSW meta-data.")
 
         artifact.sources[source_idx].mirror_path = mirror_filename

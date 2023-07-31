@@ -280,6 +280,7 @@ def upload_symbol_binaries(
     duplicate_count = 0
     new_count = 0
     data_size = 0
+    new_binary_count = 0
 
     for root, dirs, files in os.walk(binary_dir):
         for file in files:
@@ -304,9 +305,12 @@ def upload_symbol_binaries(
 
             blob.upload_from_filename(str(local_file), num_retries=10)
             new_count += 1
+            if local_file.name == "executable":
+                new_binary_count += 1
             logger.debug(f"File {local_file} uploaded to {dest_blob_name}.")
 
     logger.info(f"New files uploaded = {new_count}")
+    logger.info(f"New binaries uploaded = {new_binary_count}")
     logger.info(f"Ignored duplicates = {duplicate_count}")
     logger.info(f"Uploaded size in bytes = {data_size}")
 
