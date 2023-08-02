@@ -173,6 +173,7 @@ class AppleDbIpswImport:
         self.already_imported_count = 0
         self.artifact_wo_sources_count = 0
         self.state = AppleDbIspwImportState()
+        self.new_artifacts: list[IpswArtifact] = []
 
     def run(self) -> None:
         try:
@@ -199,7 +200,6 @@ class AppleDbIpswImport:
             )
 
             self._store_appledb_indexed()
-            self._store_ipsw_meta()
 
     def _store_ipsw_meta(self) -> None:
         with open(self._processing_dir / ARTIFACTS_META_JSON, "w") as fp:
@@ -363,7 +363,7 @@ class AppleDbIpswImport:
                 f" {artifact}"
             )
         else:
-            self.meta_db.upsert(artifact.key, artifact)
+            self.new_artifacts.append(artifact)
 
         self.update_import_state_log()
 

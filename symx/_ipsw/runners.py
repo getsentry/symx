@@ -26,12 +26,21 @@ logger = logging.getLogger(__name__)
 
 
 def import_meta_from_appledb(ipsw_storage: IpswGcsStorage) -> None:
-    artifacts_meta_blob = ipsw_storage.load_artifacts_meta()
+    ipsw_storage.load_artifacts_meta()
     import_state_blob = ipsw_storage.load_import_state()
 
-    AppleDbIpswImport(ipsw_storage.local_dir).run()
+    importer = AppleDbIpswImport(ipsw_storage.local_dir)
+    importer.run()
 
-    ipsw_storage.store_artifacts_meta(artifacts_meta_blob)
+    # the meta store could be updated concurrently by both mirror- and extract-workflows, this means we cannot just
+    # write the blob with a generation check, because it will fail in that case without chance for recovery or retry.
+    # But since importing is an add-only operation, we can simply collect all artifacts that would be added and then add
+    # them individually via update_meta_item() which will always refresh on retry if there was a concurrent update.
+    for artifact in importer.new_artifacts:
+        ipsw_storage.update_meta_item(artifact)
+
+    # The import state is only updated by the import-workflow, which will never use multiple concurrent runners, so we
+    # can use the generation check as a trivial no-retry no-recovery optimistic lock which just fails.
     ipsw_storage.store_import_state(import_state_blob)
 
 
