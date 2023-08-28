@@ -51,7 +51,9 @@ class AppleDbSource(BaseModel):
     size: int | None = None
 
     @field_validator("size")
-    def size_should_never_be_negative(cls, v: int, _: FieldValidationInfo) -> int:
+    def size_must_be_a_positive_int(cls, v: int, _: FieldValidationInfo) -> int:
+        if v is None:
+            raise ValueError("We expect size to be not None")
         if v < 0:
             raise ValueError("We expect size to be a non-negative integer")
         return v
@@ -141,7 +143,7 @@ class AppleDbIspwImportState:
     file_hash: str | None = None
 
 
-def _folder_sort_key(item: dict[str, Any]) -> int:
+def _folder_sort_key(item: dict[str, str]) -> int:
     folder_name: str = item["name"]
     x_idx = folder_name.find("x")
     try:
@@ -152,7 +154,7 @@ def _folder_sort_key(item: dict[str, Any]) -> int:
     return sort_key
 
 
-def _file_sort_key(item: dict[str, Any]) -> str:
+def _file_sort_key(item: dict[str, str]) -> str:
     file_name: str = item["name"]
     return file_name
 
