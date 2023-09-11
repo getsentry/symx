@@ -39,8 +39,12 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", None)
 
 class AppleDbSourceLink(BaseModel):
     url: HttpUrl
-    preferred: bool
     active: bool
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def preferred(self) -> bool:
+        return self.url.scheme == "https"
 
 
 class AppleDbSource(BaseModel):
@@ -137,7 +141,7 @@ def random_user_agent() -> str:
 
 
 @dataclass
-class AppleDbIspwImportState:
+class AppleDbIpswImportState:
     platform: str | None = None
     folder_hash: str | None = None
     file_hash: str | None = None
@@ -174,7 +178,7 @@ class AppleDbIpswImport:
         self.processed_file_count = 0
         self.already_imported_count = 0
         self.artifact_wo_sources_count = 0
-        self.state = AppleDbIspwImportState()
+        self.state = AppleDbIpswImportState()
         self.new_artifacts: list[IpswArtifact] = []
 
     def run(self) -> None:
