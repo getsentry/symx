@@ -338,3 +338,19 @@ def validate_shell_deps() -> None:
         symsorter_stderr = result.stderr.decode("utf-8")
         logger.error(f"symsorter failed: {symsorter_stderr}")
         sys.exit(1)
+
+
+def try_download_to_filename(
+    blob: Blob, local_file_path: Path, num_retries: int = 5
+) -> bool:
+    while num_retries > 0:
+        try:
+            blob.download_to_filename(str(local_file_path))
+        except Exception as e:
+            if num_retries > 0:
+                num_retries = num_retries - 1
+            else:
+                sentry_sdk.capture_exception(e)
+                return False
+
+    return True

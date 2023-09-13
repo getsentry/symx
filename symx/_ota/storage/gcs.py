@@ -12,6 +12,7 @@ from symx._common import (
     compare_md5_hash,
     parse_gcs_url,
     upload_symbol_binaries,
+    try_download_to_filename,
 )
 from symx._ota import (
     OtaArtifact,
@@ -116,7 +117,9 @@ class OtaGcsStorage(OtaStorage):
             )
             return None
 
-        blob.download_to_filename(str(local_ota_path))
+        if not try_download_to_filename(blob, local_ota_path):
+            return None
+
         if not check_ota_hash(ota, local_ota_path):
             logger.error("The SHA1 mismatch between storage and meta-data for OTA")
             return None

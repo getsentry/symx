@@ -12,6 +12,7 @@ from symx._common import (
     ArtifactProcessingState,
     compare_md5_hash,
     upload_symbol_binaries,
+    try_download_to_filename,
 )
 from symx._ipsw.common import (
     ARTIFACTS_META_JSON,
@@ -210,8 +211,10 @@ class IpswGcsStorage:
             )
             return None
 
-        blob.download_to_filename(str(local_ipsw_path))
-        if not verify_download(local_ipsw_path, ipsw_source):
+        if not (
+            try_download_to_filename(blob, local_ipsw_path)
+            and verify_download(local_ipsw_path, ipsw_source)
+        ):
             return None
 
         return local_ipsw_path
