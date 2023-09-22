@@ -25,7 +25,7 @@ jobs:
 
     - name: 'Render meta-data'
       run: |
-        gcloud storage cp gs://symbol-collector-dev/ota_image_meta.json .
+        gcloud storage cp gs://sentryio-symx-symbols-0/ota_image_meta.json .
         cat ota_image_meta.json | jq
 
     - uses: actions/upload-artifact@v3

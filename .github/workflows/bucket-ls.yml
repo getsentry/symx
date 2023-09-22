@@ -6,7 +6,7 @@ on:
       gs_cli_parameters:
         description: 'gcloud storage ls parameters'
         required: true
-        default: '-r -a -L gs://symbol-collector-dev'
+        default: '-r -a -L gs://sentryio-symx-symbols-0'
 jobs:
   list-bucket-contents:
     name: 'List bucket contents'

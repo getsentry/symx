@@ -48,7 +48,7 @@ jobs:
           sudo update-ca-certificates
 
       - name: symx OTA Mirror
-        run: symx -v ota mirror -s gs://symbol-collector-dev
+        run: symx -v ota mirror -s gs://sentryio-symx-symbols-0
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

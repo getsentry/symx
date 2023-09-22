@@ -6,7 +6,7 @@ on:
       gs_cli_parameters:
         description: 'gcloud storage rm parameters'
         required: true
-        default: 'gs://symbol-collector-dev//var/**'
+        default: 'gs://sentryio-symx-symbols-0//var/**'
 jobs:
   list-bucket-contents:
     name: 'Remove bucket contents'
