@@ -6,7 +6,9 @@ on:
       gs_cli_parameters:
         description: 'gcloud storage ls parameters'
         required: true
-        default: '-r -a -L gs://symbol-collector-dev'
+        default: '-r -a -L gs://sentryio-symx-symbols-0'
+ 
+        
 jobs:
   list-bucket-contents:
     name: 'List bucket contents'
@@ -28,4 +30,4 @@ jobs:
         version: '>= 363.0.0'
 
     - name: 'List bucket contents'
-      run: 'gcloud storage ls ${{ github.event.inputs.gs_cli_parameters }}'
+      run: 'gcloud storage ls ${{ github.event.inputs.gs_cli_parameters }} '

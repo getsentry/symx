@@ -51,7 +51,7 @@ jobs:
       - name: symx IPSW mirror
         run: |
           export PATH="/home/runner/.local/bin:$PATH"
-          poetry run symx -v ipsw mirror -t 315 -s gs://symbol-collector-dev
+          poetry run symx -v ipsw mirror -t 315 -s ${{ vars.SYMX_STORE }}
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
