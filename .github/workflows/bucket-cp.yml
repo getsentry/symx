@@ -28,7 +28,7 @@ jobs:
         version: '>= 363.0.0'
 
     - name: 'Copy bucket contents'
-      run: 'gcloud storage cp gs://sentryio-symx-symbols-0/${{ github.event.inputs.gs_cli_parameters }} bucket.file'
+      run: 'gcloud storage cp ${{ vars.SYMX_STORE }}/${{ github.event.inputs.gs_cli_parameters }} bucket.file'
 
     - uses: actions/upload-artifact@v3
       with:

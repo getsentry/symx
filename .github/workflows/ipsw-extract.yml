@@ -49,7 +49,7 @@ jobs:
       - name: symx ipsw Extract
         run: |
           export PATH="/Users/runner/.local/bin:$PATH"
-          poetry run symx -v ipsw extract -t 315 -s gs://sentryio-symx-symbols-0
+          poetry run symx -v ipsw extract -t 315 -s ${{ vars.SYMX_STORE }}
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -44,7 +44,7 @@ jobs:
           sudo update-ca-certificates
 
       - name: symx IPSW migrate-storage
-        run: symx -v ipsw migrate -s gs://sentryio-symx-symbols-0
+        run: symx -v ipsw migrate -s ${{ vars.SYMX_STORE }}
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
