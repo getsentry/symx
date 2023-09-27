@@ -18,7 +18,6 @@ from pydantic import (
     ValidationError,
     HttpUrl,
 )
-from pydantic_core.core_schema import FieldValidationInfo
 
 from symx._ipsw.common import (
     IpswReleaseStatus,
@@ -55,7 +54,7 @@ class AppleDbSource(BaseModel):
     size: int | None = None
 
     @field_validator("size")
-    def size_must_be_a_positive_int(cls, v: int, _: FieldValidationInfo) -> int:
+    def size_must_be_a_positive_int(cls, v: int) -> int:
         if v is None:
             raise ValueError("We expect size to be not None")
         if v < 0:
