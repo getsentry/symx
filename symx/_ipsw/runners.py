@@ -232,6 +232,13 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
 
             local_path = ipsw_storage.download_ipsw(source)
             if local_path is None:
+                # we haven't been able to download the artifact from the mirror
+                artifact.sources[source_idx].processing_state = (
+                    ArtifactProcessingState.MIRROR_CORRUPT
+                )
+                artifact.sources[source_idx].update_last_run()
+                ipsw_storage.update_meta_item(artifact)
+                ipsw_storage.clean_local_dir()
                 continue
 
             bundle_clean_file_name = source.file_name[:-5].replace(",", "_")

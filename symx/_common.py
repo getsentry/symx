@@ -48,6 +48,9 @@ class ArtifactProcessingState(StrEnum):
     # we failed to retrieve or upload the artifact (artifacts can get unreachable)
     MIRRORING_FAILED = "mirroring_failed"
 
+    # we have meta-data that points to the mirror, but the file at the path is missing or can't be validated
+    MIRROR_CORRUPT = "mirror_corrupt"
+
     # we stored the extracted dyld_shared_cache (optimization, not implemented yet)
     DSC_EXTRACTED = "dsc_extracted"
 
