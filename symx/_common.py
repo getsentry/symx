@@ -346,6 +346,7 @@ def try_download_to_filename(
     while num_retries > 0:
         try:
             blob.download_to_filename(str(local_file_path))
+            break
         except Exception as e:
             if num_retries > 0:
                 num_retries = num_retries - 1
