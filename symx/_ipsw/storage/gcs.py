@@ -6,7 +6,7 @@ from typing import Tuple, Iterator, Iterable, Callable, Sequence
 
 import sentry_sdk
 from google.cloud.exceptions import PreconditionFailed
-from google.cloud.storage import Blob, Bucket, Client  # type: ignore[import]
+from google.cloud.storage import Blob, Bucket, Client  # type: ignore[import-untyped]
 
 from symx._common import (
     ArtifactProcessingState,

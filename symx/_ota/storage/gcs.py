@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 
 from google.cloud.exceptions import PreconditionFailed
-from google.cloud.storage import Blob, Client, Bucket  # type: ignore[import]
+from google.cloud.storage import Blob, Client, Bucket  # type: ignore[import-untyped]
 
 from symx._common import (
     DataClassJSONEncoder,

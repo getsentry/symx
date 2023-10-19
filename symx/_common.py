@@ -17,7 +17,7 @@ from urllib.parse import ParseResult, urlparse
 
 import requests
 import sentry_sdk
-from google.cloud.storage import Blob, Bucket  # type: ignore[import]
+from google.cloud.storage import Blob, Bucket  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
 
