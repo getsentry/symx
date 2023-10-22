@@ -290,14 +290,32 @@ def _post_mirrored_filter(
 
 
 def migrate(ipsw_storage: IpswGcsStorage) -> None:
-    for artifact in ipsw_storage.artifact_iter(_post_mirrored_filter):
+    for artifact in ipsw_storage.artifact_iter(extract_filter):
+        logger.info(f"Processing {artifact.key}")
+        sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
+
         for source_idx, source in enumerate(artifact.sources):
-            if _source_post_mirror_condition(source):
+            sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
+
+            if source.processing_state not in {
+                ArtifactProcessingState.MIRRORED,
+            }:
+                logger.info(
+                    f"Bypassing {source.link} because it isn't ready to extract or"
+                    " already extracted"
+                )
                 continue
 
-            assert source.mirror_path is not None
+            # this is the first MIRRORED source, and it seems to make the runner stuck for days so set it to corrupt
+            logger.info(
+                f"Setting {source.file_name} as corrupt because it blocks our extract"
+                " workflow from progressing"
+            )
             artifact.sources[source_idx].processing_state = (
-                ArtifactProcessingState.MIRRORED
+                ArtifactProcessingState.MIRROR_CORRUPT
             )
             artifact.sources[source_idx].update_last_run()
-        ipsw_storage.update_meta_item(artifact)
+            ipsw_storage.update_meta_item(artifact)
+            ipsw_storage.clean_local_dir()
+            # we only want to process this one artifact so exit right away
+            return
