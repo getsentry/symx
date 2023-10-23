@@ -110,20 +110,45 @@ class IpswExtractor:
         self.ipsw_path = ipsw_path
 
     def _ipsw_extract(self) -> Path | None:
-        result = subprocess.run(
-            ["ipsw", "extract", self.ipsw_path, "-d", "-o", self.processing_dir],
-            capture_output=True,
-        )
-        # we have very limited space on the GHA runners, so get rid of the source artifact ASAP
-        self.ipsw_path.unlink()
+        command: list[str] = [
+            "ipsw",
+            "extract",
+            str(self.ipsw_path),
+            "-d",
+            "-o",
+            str(self.processing_dir),
+        ]
 
-        if result.returncode == 1:
-            error_msg = result.stderr.decode("utf-8")
-            raise IpswExtractError(f"ipsw extract failed with {error_msg}")
+        # Start the process using Popen
+        with subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        ) as process:
+            try:
+                # IPSW extraction is typically finished in a couple of minutes. Everything beyond 20 minutes is probably
+                # stuck because the dmg mounter asks for a password or something similar.
+                stdout, stderr = process.communicate(timeout=(60 * 20))
+            except subprocess.TimeoutExpired:
+                # the timeout above doesn't kill the process, so make sure it is gone
+                process.kill()
+                # consume and log remaining output from stdout and stderr
+                stdout, _ = process.communicate()
+                ipsw_output = stdout.decode("utf-8")
+                logger.debug(f"ipsw output: {ipsw_output}")
+                raise TimeoutError("IPSW extraction timed out and was terminated.")
+            finally:
+                # we have very limited space on the GHA runners, so get rid of the source artifact ASAP
+                self.ipsw_path.unlink()
+
+            if process.returncode != 0:
+                error_msg = stderr.decode("utf-8")
+                raise IpswExtractError(f"ipsw extract failed with {error_msg}")
 
         _log_directory_contents(self.processing_dir)
         for item in self.processing_dir.iterdir():
             if item.is_dir():
+                logger.debug(
+                    f"Found {item} in processing directory after IPSW extraction"
+                )
                 return item
 
         return None
