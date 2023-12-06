@@ -1,6 +1,5 @@
 import logging
 
-from symx._common import ArtifactProcessingState
 from symx._ota.storage.gcs import OtaGcsStorage
 
 logger = logging.getLogger(__name__)
@@ -82,9 +81,4 @@ def migrate(storage: OtaGcsStorage) -> None:
     for key, ota in ota_meta.items():
         if key in otas_to_reset:
             print(f"{key}: {ota}")
-            assert (
-                ota.processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
-            )
-            ota.processing_state = ArtifactProcessingState.MIRRORED
-            ota.update_last_run()
-            storage.update_meta_item(key, ota)
+            assert ota.is_mirrored()
