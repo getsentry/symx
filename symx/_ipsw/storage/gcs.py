@@ -136,8 +136,9 @@ class IpswGcsStorage:
 
         return artifact
 
-    def update_meta_item(self, ipsw_meta: IpswArtifact) -> IpswArtifactDb:
-        retry = 5
+    def update_meta_item(
+        self, ipsw_meta: IpswArtifact, retry: int = 5
+    ) -> IpswArtifactDb:
         while retry > 0:
             blob, meta_db, generation = self.refresh_artifacts_db()
             meta_db.upsert(ipsw_meta.key, ipsw_meta)

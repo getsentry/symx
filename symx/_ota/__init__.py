@@ -19,8 +19,8 @@ from symx._common import (
     github_run_id,
     ArtifactProcessingState,
     check_sha1,
-    download_url_to_file,
     validate_shell_deps,
+    try_download_url_to_file,
 )
 
 logger = logging.getLogger(__name__)
@@ -256,7 +256,7 @@ def download_ota_from_apple(ota_meta: OtaArtifact, download_dir: Path) -> Path:
         download_dir
         / f"{ota_meta.platform}_{ota_meta.version}_{ota_meta.build}_{ota_meta.id}.zip"
     )
-    download_url_to_file(ota_meta.url, filepath)
+    try_download_url_to_file(ota_meta.url, filepath)
     if check_ota_hash(ota_meta, filepath):
         logger.info(f"Downloading {ota_meta} completed")
         return filepath

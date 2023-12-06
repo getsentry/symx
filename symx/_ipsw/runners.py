@@ -10,8 +10,8 @@ import sentry_sdk
 
 from symx._common import (
     ArtifactProcessingState,
-    download_url_to_file,
     validate_shell_deps,
+    try_download_url_to_file,
 )
 from symx._ipsw.common import IpswPlatform, IpswArtifact, IpswSource
 from symx._ipsw.meta_sync.appledb import AppleDbIpswImport
@@ -64,7 +64,7 @@ def mirror(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
                 continue
 
             filepath = ipsw_storage.local_dir / source.file_name
-            download_url_to_file(str(source.link), filepath)
+            try_download_url_to_file(str(source.link), filepath)
             if not verify_download(filepath, source):
                 artifact.sources[source_idx].processing_state = (
                     ArtifactProcessingState.MIRRORING_FAILED

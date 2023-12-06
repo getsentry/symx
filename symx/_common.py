@@ -183,6 +183,18 @@ def check_sha1(hash_sum: str, filepath: Path) -> bool:
     return sha1sum_result == hash_sum
 
 
+def try_download_url_to_file(url: str, filepath: Path, num_retries: int = 5) -> None:
+    while num_retries > 0:
+        try:
+            download_url_to_file(url, filepath)
+            break
+        except Exception as e:
+            if num_retries > 0:
+                num_retries = num_retries - 1
+            else:
+                sentry_sdk.capture_exception(e)
+
+
 def download_url_to_file(url: str, filepath: Path) -> None:
     res = requests.get(url, stream=True)
     content_length = res.headers.get("content-length")
