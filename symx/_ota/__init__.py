@@ -504,41 +504,42 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
     )
 
 
+def iter_mirror(storage: OtaStorage) -> Iterator[tuple[str, OtaArtifact]]:
+    """
+    A generator that reloads the meta-data on every iteration, so we fetch updated mirrored artifacts. This allows
+    us to modify the meta-data in the loop that iterates over the output.
+    :return: The next current mirrored OtaArtifact to be processed together with its key.
+    """
+    while True:
+        mirrored_key: str | None = None
+        mirrored_ota: OtaArtifact | None = None
+        ota_meta = storage.load_meta()
+        if ota_meta is None:
+            logger.error("Could not retrieve meta-data from storage.")
+            return
+
+        for key, ota in ota_meta.items():
+            if ota.is_mirrored():
+                logger.debug(f"Found mirrored OTA: {key}")
+                mirrored_key = key
+                mirrored_ota = ota
+                break
+
+        if mirrored_ota is None or mirrored_key is None:
+            # this means we could not find any more mirrored OTAs
+            logger.info("No more mirrored OTAs available exiting iter_mirror().")
+            return
+        else:
+            logger.debug(
+                f"Yielding mirrored OTA for further processing: {mirrored_ota}"
+            )
+            yield mirrored_key, mirrored_ota
+
+
 class OtaExtract:
     def __init__(self, storage: OtaStorage) -> None:
         self.storage = storage
         self.meta: OtaMetaData = {}
-
-    def iter_mirror(self) -> Iterator[tuple[str, OtaArtifact]]:
-        """
-        A generator that reloads the meta-data on every iteration, so we fetch updated mirrored artifacts. This allows
-        us to modify the meta-data in the loop that iterates over the output.
-        :return: The next current mirrored OtaArtifact to be processed together with its key.
-        """
-        while True:
-            mirrored_key: str | None = None
-            mirrored_ota: OtaArtifact | None = None
-            ota_meta = self.storage.load_meta()
-            if ota_meta is None:
-                logger.error("Could not retrieve meta-data from storage.")
-                return
-
-            for key, ota in ota_meta.items():
-                if ota.is_mirrored():
-                    logger.debug(f"Found mirrored OTA: {key}")
-                    mirrored_key = key
-                    mirrored_ota = ota
-                    break
-
-            if mirrored_ota is None or mirrored_key is None:
-                # this means we could not find any more mirrored OTAs
-                logger.info("No more mirrored OTAs available exiting iter_mirror().")
-                return
-            else:
-                logger.debug(
-                    f"Yielding mirrored OTA for further processing: {mirrored_ota}"
-                )
-                yield mirrored_key, mirrored_ota
 
     def extract(self, timeout: datetime.timedelta) -> None:
         validate_shell_deps()
@@ -547,7 +548,7 @@ class OtaExtract:
         start = time.time()
         key: str
         ota: OtaArtifact
-        for key, ota in self.iter_mirror():
+        for key, ota in iter_mirror(self.storage):
             if int(time.time() - start) > timeout.seconds:
                 logger.warning(
                     f"Exiting OTA extract due to elapsed timeout of {timeout}"
