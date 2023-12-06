@@ -182,7 +182,7 @@ class IpswExtractor:
             )
         split_dir = self.processing_dir / "split_out"
         result = subprocess.run(
-            ["ipsw", "dyld", "split", dsc_root_file, split_dir],
+            ["ipsw", "dyld", "split", dsc_root_file, "--output", split_dir],
             capture_output=True,
         )
         # we have very limited space on the GHA runners, so get rid of processed input data
