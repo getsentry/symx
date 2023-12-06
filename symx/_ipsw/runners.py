@@ -314,33 +314,253 @@ def _post_mirrored_filter(
     ]
 
 
+migrate_artifact_keys = [
+    "iPadOS_17.2_RC_21C62",
+    "iOS_17.2_RC_21C62",
+    "iPadOS_17.2_RC_21C62",
+    "iOS_17.2_RC_21C62",
+    "iOS_17.2_RC_21C62",
+    "iOS_16.7.3_RC_20H232",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.1.2_21B101",
+    "iPadOS_17.2_beta_4_21C5054b",
+    "iPadOS_17.1.2_21B101",
+    "iPadOS_17.2_beta_4_21C5054b",
+    "iOS_17.1.2_21B101",
+    "iPadOS_17.2_beta_4_21C5054b",
+    "iPadOS_17.1.2_21B101",
+    "iPadOS_17.1.2_21B101",
+    "iPadOS_17.2_RC_21C62",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.2_RC_21C62",
+    "iOS_17.2_beta_4_21C5054b",
+    "iPadOS_16.7.3_RC_20H232",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.1.2_21B101",
+    "iOS_17.1.2_21B101",
+    "iPadOS_17.1.2_21B101",
+    "iOS_17.1.2_21B101",
+    "iOS_17.1.2_21B101",
+    "iPadOS_17.1.2_21B101",
+    "iOS_17.2_RC_21C62",
+    "iOS_17.2_RC_21C62",
+    "iOS_17.2_RC_21C62",
+    "iOS_17.2_RC_21C62",
+    "iOS_17.2_RC_21C62",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.2_beta_4_21C5054b",
+    "iPadOS_17.1.2_21B101",
+    "iPadOS_17.2_beta_4_21C5054b",
+    "iOS_17.1.2_21B101",
+    "iOS_17.1.2_21B101",
+    "iOS_17.1.2_21B101",
+    "iPadOS_17.2_beta_4_21C5054b",
+    "iPadOS_17.1.2_21B101",
+    "iOS_17.1.2_21B101",
+    "iPadOS_17.2_beta_4_21C5054b",
+    "iOS_17.1.2_21B101",
+    "iOS_17.1.2_21B101",
+    "iPadOS_17.2_beta_4_21C5054b",
+    "iOS_17.1.2_21B101",
+    "iOS_17.1.2_21B101",
+    "iPadOS_17.2_beta_4_21C5054b",
+    "iOS_17.1.2_21B101",
+    "iPadOS_17.2_RC_21C62",
+    "iPadOS_17.2_RC_21C62",
+    "iPadOS_17.2_RC_21C62",
+    "iPadOS_17.2_RC_21C62",
+    "iOS_16.7.3_RC_20H232",
+    "iPadOS_16.7.3_RC_20H232",
+    "iOS_17.2_RC_21C62",
+    "iPadOS_17.2_RC_21C62",
+    "iOS_17.2_RC_21C62",
+    "iOS_16.7.3_RC_20H232",
+    "iPadOS_17.2_RC_21C62",
+    "iOS_17.2_RC_21C62",
+    "iPadOS_17.2_RC_21C62",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.1.2_21B101",
+    "iPadOS_17.1.2_21B101",
+    "iPadOS_17.2_beta_4_21C5054b",
+    "iPadOS_17.1.2_21B101",
+    "iPadOS_17.1.2_21B101",
+    "iPadOS_17.2_beta_4_21C5054b",
+    "iPadOS_17.1.2_21B101",
+    "iOS_17.1.2_21B101",
+    "iOS_17.2_RC_21C62",
+    "iOS_17.2_RC_21C62",
+    "iOS_17.2_RC_21C62",
+    "iOS_17.2_RC_21C62",
+    "iOS_17.2_RC_21C62",
+    "iOS_17.2_RC_21C62",
+    "iOS_17.2_RC_21C62",
+    "iOS_17.2_RC_21C62",
+    "iPadOS_17.2_RC_21C62",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.2_beta_4_21C5054b",
+    "iOS_17.2_beta_4_21C5054b",
+    "iPadOS_17.1.2_21B101",
+    "iOS_17.1.2_21B101",
+    "iPadOS_17.1.2_21B101",
+    "iOS_17.1.2_21B101",
+    "iPadOS_17.2_beta_4_21C5054b",
+    "iPadOS_17.2_beta_4_21C5054b",
+    "iOS_17.1.2_21B101",
+    "iPadOS_17.2_beta_4_21C5054b",
+    "iPadOS_17.1.2_21B101",
+    "iPadOS_17.2_RC_21C62",
+    "iPadOS_17.2_RC_21C62",
+    "iPadOS_16.7.3_RC_20H232",
+]
+
+migrate_source_filenames = [
+    "iPad_Fall_2022_17.2_21C62_Restore.ipsw",
+    "iPhone14,8_17.2_21C62_Restore.ipsw",
+    "iPad14,3,iPad14,4,iPad14,5,iPad14,6_17.2_21C62_Restore.ipsw",
+    "iPhone16,2_17.2_21C62_Restore.ipsw",
+    "iPhone14,3_17.2_21C62_Restore.ipsw",
+    "iPhone10,3,iPhone10,6_16.7.3_20H232_Restore.ipsw",
+    "iPhone15,4_17.2_21C5054b_Restore.ipsw",
+    "iPhone13,4_17.2_21C5054b_Restore.ipsw",
+    "iPhone15,2_17.2_21C5054b_Restore.ipsw",
+    "iPhone13,2,iPhone13,3_17.2_21C5054b_Restore.ipsw",
+    "iPhone14,8_17.1.2_21B101_Restore.ipsw",
+    "iPad_Fall_2022_17.2_21C5054b_Restore.ipsw",
+    "iPad_Fall_2022_17.1.2_21B101_Restore.ipsw",
+    "iPad14,3,iPad14,4,iPad14,5,iPad14,6_17.2_21C5054b_Restore.ipsw",
+    "iPhone14,4_17.1.2_21B101_Restore.ipsw",
+    "iPad_Spring_2022_17.2_21C5054b_Restore.ipsw",
+    "iPad_10.2_2021_17.1.2_21B101_Restore.ipsw",
+    "iPad_Pro_A12X_A12Z_17.1.2_21B101_Restore.ipsw",
+    "iPad_10.2_2020_17.2_21C62_Restore.ipsw",
+    "iPhone14,3_17.2_21C5054b_Restore.ipsw",
+    "iPhone15,3_17.2_21C62_Restore.ipsw",
+    "iPhone13,1_17.2_21C5054b_Restore.ipsw",
+    "iPadPro_9.7_16.7.3_20H232_Restore.ipsw",
+    "iPhone16,1_17.2_21C5054b_Restore.ipsw",
+    "iPhone14,7_17.1.2_21B101_Restore.ipsw",
+    "iPhone16,1_17.1.2_21B101_Restore.ipsw",
+    "iPad_Spring_2019_17.1.2_21B101_Restore.ipsw",
+    "iPhone14,5_17.1.2_21B101_Restore.ipsw",
+    "iPhone15,4_17.1.2_21B101_Restore.ipsw",
+    "iPad_64bit_TouchID_ASTC_17.1.2_21B101_Restore.ipsw",
+    "iPhone13,4_17.2_21C62_Restore.ipsw",
+    "iPhone15,2_17.2_21C62_Restore.ipsw",
+    "iPhone11,8_17.2_21C62_Restore.ipsw",
+    "iPhone16,1_17.2_21C62_Restore.ipsw",
+    "iPhone15,4_17.2_21C62_Restore.ipsw",
+    "iPhone15,3_17.2_21C5054b_Restore.ipsw",
+    "iPhone11,2,iPhone11,4,iPhone11,6_17.2_21C5054b_Restore.ipsw",
+    "iPhone14,8_17.2_21C5054b_Restore.ipsw",
+    "iPhone15,5_17.2_21C5054b_Restore.ipsw",
+    "iPhone14,6_17.2_21C5054b_Restore.ipsw",
+    "iPhone14,5_17.2_21C5054b_Restore.ipsw",
+    "iPhone16,2_17.2_21C5054b_Restore.ipsw",
+    "iPhone12,8_17.2_21C5054b_Restore.ipsw",
+    "iPhone14,2_17.2_21C5054b_Restore.ipsw",
+    "iPhone11,8_17.2_21C5054b_Restore.ipsw",
+    "iPad_Fall_2020_17.1.2_21B101_Restore.ipsw",
+    "iPad_Fall_2020_17.2_21C5054b_Restore.ipsw",
+    "iPhone14,6_17.1.2_21B101_Restore.ipsw",
+    "iPhone13,4_17.1.2_21B101_Restore.ipsw",
+    "iPhone11,2,iPhone11,4,iPhone11,6_17.1.2_21B101_Restore.ipsw",
+    "iPad_Fall_2021_17.2_21C5054b_Restore.ipsw",
+    "iPad_Pro_Spring_2021_17.1.2_21B101_Restore.ipsw",
+    "iPhone16,2_17.1.2_21B101_Restore.ipsw",
+    "iPad_64bit_TouchID_ASTC_17.2_21C5054b_Restore.ipsw",
+    "iPhone12,1_17.1.2_21B101_Restore.ipsw",
+    "iPhone14,2_17.1.2_21B101_Restore.ipsw",
+    "iPad_Pro_HFR_17.2_21C5054b_Restore.ipsw",
+    "iPhone13,2,iPhone13,3_17.1.2_21B101_Restore.ipsw",
+    "iPhone12,3,iPhone12,5_17.1.2_21B101_Restore.ipsw",
+    "iPad_Pro_Spring_2021_17.2_21C5054b_Restore.ipsw",
+    "iPhone13,1_17.1.2_21B101_Restore.ipsw",
+    "iPad_Pro_Spring_2021_17.2_21C62_Restore.ipsw",
+    "iPad_10.2_17.2_21C62_Restore.ipsw",
+    "iPad_64bit_TouchID_ASTC_17.2_21C62_Restore.ipsw",
+    "iPad_Fall_2020_17.2_21C62_Restore.ipsw",
+    "iPhone_4.7_P3_16.7.3_20H232_Restore.ipsw",
+    "iPad_64bit_TouchID_ASTC_16.7.3_20H232_Restore.ipsw",
+    "iPhone13,1_17.2_21C62_Restore.ipsw",
+    "iPad_Spring_2019_17.2_21C62_Restore.ipsw",
+    "iPhone13,2,iPhone13,3_17.2_21C62_Restore.ipsw",
+    "iPhone_5.5_P3_16.7.3_20H232_Restore.ipsw",
+    "iPad_Fall_2021_17.2_21C62_Restore.ipsw",
+    "iPhone15,5_17.2_21C62_Restore.ipsw",
+    "iPad_Pro_A12X_A12Z_17.2_21C62_Restore.ipsw",
+    "iPhone14,7_17.2_21C5054b_Restore.ipsw",
+    "iPhone15,2_17.1.2_21B101_Restore.ipsw",
+    "iPad_Spring_2022_17.1.2_21B101_Restore.ipsw",
+    "iPad_10.2_17.2_21C5054b_Restore.ipsw",
+    "iPad14,3,iPad14,4,iPad14,5,iPad14,6_17.1.2_21B101_Restore.ipsw",
+    "iPad_Pro_HFR_17.1.2_21B101_Restore.ipsw",
+    "iPad_10.2_2020_17.2_21C5054b_Restore.ipsw",
+    "iPad_10.2_2020_17.1.2_21B101_Restore.ipsw",
+    "iPhone12,8_17.1.2_21B101_Restore.ipsw",
+    "iPhone12,8_17.2_21C62_Restore.ipsw",
+    "iPhone11,2,iPhone11,4,iPhone11,6_17.2_21C62_Restore.ipsw",
+    "iPhone14,2_17.2_21C62_Restore.ipsw",
+    "iPhone12,1_17.2_21C62_Restore.ipsw",
+    "iPhone14,4_17.2_21C62_Restore.ipsw",
+    "iPhone12,3,iPhone12,5_17.2_21C62_Restore.ipsw",
+    "iPhone14,7_17.2_21C62_Restore.ipsw",
+    "iPhone14,6_17.2_21C62_Restore.ipsw",
+    "iPad_Pro_HFR_17.2_21C62_Restore.ipsw",
+    "iPhone14,4_17.2_21C5054b_Restore.ipsw",
+    "iPhone12,1_17.2_21C5054b_Restore.ipsw",
+    "iPhone12,3,iPhone12,5_17.2_21C5054b_Restore.ipsw",
+    "iPad_Pro_HFR_17.1.2_21B101_Restore.ipsw",
+    "iPhone15,5_17.1.2_21B101_Restore.ipsw",
+    "iPad_Fall_2021_17.1.2_21B101_Restore.ipsw",
+    "iPhone11,8_17.1.2_21B101_Restore.ipsw",
+    "iPad_Pro_A12X_A12Z_17.2_21C5054b_Restore.ipsw",
+    "iPad_Spring_2019_17.2_21C5054b_Restore.ipsw",
+    "iPhone14,3_17.1.2_21B101_Restore.ipsw",
+    "iPad_10.2_2021_17.2_21C5054b_Restore.ipsw",
+    "iPad_10.2_17.1.2_21B101_Restore.ipsw",
+    "iPad_Spring_2022_17.2_21C62_Restore.ipsw",
+    "iPad_10.2_2021_17.2_21C62_Restore.ipsw",
+    "iPadPro_12.9_16.7.3_20H232_Restore.ipsw",
+]
+
+
 def migrate(ipsw_storage: IpswGcsStorage) -> None:
-    for artifact in ipsw_storage.artifact_iter(extract_filter):
+    _, meta_db, _ = ipsw_storage.refresh_artifacts_db()
+    artifact_key_set = set(migrate_artifact_keys)
+    source_filename_set = set(migrate_source_filenames)
+    assert len(source_filename_set) == len(migrate_source_filenames)
+
+    for artifact in meta_db.artifacts.values():
+        if artifact.key not in artifact_key_set:
+            continue
+
         logger.info(f"Processing {artifact.key}")
         sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
 
         for source_idx, source in enumerate(artifact.sources):
-            sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
-
-            if source.processing_state not in {
-                ArtifactProcessingState.MIRRORED,
-            }:
-                logger.info(
-                    f"Bypassing {source.link} because it isn't ready to extract or"
-                    " already extracted"
-                )
+            if source.file_name not in source_filename_set:
                 continue
+            logger.info(f"\t{source.file_name}")
+            sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
+            assert (
+                source.processing_state
+                == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
+            )
 
-            # this is the first MIRRORED source, and it seems to make the runner stuck for days so set it to corrupt
-            logger.info(
-                f"Setting {source.file_name} as corrupt because it blocks our extract"
-                " workflow from progressing"
-            )
-            artifact.sources[source_idx].processing_state = (
-                ArtifactProcessingState.MIRROR_CORRUPT
-            )
-            artifact.sources[source_idx].update_last_run()
-            ipsw_storage.update_meta_item(artifact)
-            ipsw_storage.clean_local_dir()
-            # we only want to process this one artifact so exit right away
-            return
+            # TODO: execute me after the above successfully ran once
+            # artifact.sources[source_idx].processing_state = (
+            #     ArtifactProcessingState.MIRRORED
+            # )
+            # artifact.sources[source_idx].update_last_run()
+            # ipsw_storage.update_meta_item(artifact)
