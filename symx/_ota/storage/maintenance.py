@@ -85,3 +85,6 @@ def migrate(storage: OtaGcsStorage) -> None:
             assert (
                 ota.processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
             )
+            ota.processing_state = ArtifactProcessingState.MIRRORED
+            ota.update_last_run()
+            storage.update_meta_item(key, ota)
