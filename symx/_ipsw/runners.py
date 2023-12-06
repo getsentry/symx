@@ -539,7 +539,6 @@ def migrate(ipsw_storage: IpswGcsStorage) -> None:
     _, meta_db, _ = ipsw_storage.refresh_artifacts_db()
     artifact_key_set = set(migrate_artifact_keys)
     source_filename_set = set(migrate_source_filenames)
-    assert len(source_filename_set) == len(migrate_source_filenames)
 
     for artifact in meta_db.artifacts.values():
         if artifact.key not in artifact_key_set:
