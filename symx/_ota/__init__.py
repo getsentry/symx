@@ -361,6 +361,7 @@ def split_dsc(search_result: DSCSearchResult) -> Path:
             "dyld",
             "split",
             str(search_result.artifact),
+            "--output",
             str(search_result.split_dir),
         ],
         capture_output=True,
