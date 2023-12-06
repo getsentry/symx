@@ -1,4 +1,4 @@
-name: Migrate storage
+name: Migrate OTA storage
 on:
   workflow_dispatch:
 
