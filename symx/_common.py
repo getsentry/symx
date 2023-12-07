@@ -301,7 +301,6 @@ def upload_symbol_binaries(
     for root, dirs, files in os.walk(binary_dir):
         for file in files:
             local_file = Path(root) / file
-            data_size += local_file.stat().st_size
             dest_blob_name = (
                 dest_blob_prefix / Path(root).relative_to(binary_dir) / file
             )
@@ -321,6 +320,7 @@ def upload_symbol_binaries(
 
             blob.upload_from_filename(str(local_file), num_retries=10)
             new_count += 1
+            data_size += local_file.stat().st_size
             if local_file.name == "executable":
                 new_binary_count += 1
             logger.debug(f"File {local_file} uploaded to {dest_blob_name}.")
@@ -328,7 +328,7 @@ def upload_symbol_binaries(
     logger.info(f"New files uploaded = {new_count}")
     logger.info(f"New binaries uploaded = {new_binary_count}")
     logger.info(f"Ignored duplicates = {duplicate_count}")
-    logger.info(f"Uploaded size in bytes = {data_size}")
+    logger.info(f"Uploaded bytes = {data_size}")
 
 
 def validate_shell_deps() -> None:
