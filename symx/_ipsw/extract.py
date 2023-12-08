@@ -46,7 +46,7 @@ class IpswExtractor:
 
         if arch is not None:
             command.append("-a")
-            command.append(f'"{str(arch)}"')
+            command.append(str(arch))
 
         # Start the process using Popen
         with subprocess.Popen(
