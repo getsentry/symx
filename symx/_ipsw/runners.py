@@ -164,110 +164,9 @@ def _post_mirrored_filter(
     ]
 
 
-migrate_artifact_keys = [
-    "macOS_14.2_beta_2_23C5041e",
-    "macOS_14.2_beta_23C5030f",
-    "macOS_14.1_23B74",
-    "macOS_14.1_RC_23B73",
-    "macOS_14.1_beta_3_23B5067a",
-    "macOS_14.1_23B2077",
-    "macOS_14.1.2_23B92",
-    "macOS_14.1.1_23B81",
-    "macOS_14.0_23A344",
-    "macOS_14.0_RC_2_23A344",
-    "macOS_14.0_RC_23A339",
-    "macOS_13.6_22G120",
-    "macOS_13.5.2_22G91",
-    "macOS_13.1_beta_2_22C5044e",
-    "macOS_13.1_beta_22C5033e",
-    "macOS_13.0_beta_11_22A5373b",
-    "macOS_13.0_beta_10_22A5365d",
-    "macOS_13.0_beta_9_22A5358e",
-    "macOS_13.0_beta_8_22A5352e",
-    "macOS_13.0_beta_6_22A5331f",
-    "macOS_13.0_beta_5_22A5321d",
-    "macOS_13.0_beta_4_22A5311f",
-    "macOS_13.0_beta_3_22A5295i",
-    "macOS_13.0_beta_3_22A5295h",
-    "macOS_13.0_beta_2_22A5286j",
-    "macOS_13.0_RC_22A379",
-    "macOS_12.6_21G115",
-    "macOS_12.6.1_21G217",
-    "macOS_12.5_21G72",
-    "macOS_12.5_RC_21G69",
-    "macOS_12.5_beta_5_21G5063a",
-    "macOS_12.5_beta_3_21G5046c",
-    "macOS_12.5_beta_2_21G5037d",
-    "macOS_12.5.1_21G83",
-    "macOS_12.4_21F79",
-    "macOS_12.4_beta_4_21F5071b",
-    "macOS_12.4_beta_3_21F5063e",
-    "macOS_12.4_beta_2_21F5058e",
-    "macOS_12.4_beta_21F5048e",
-    "macOS_12.4_21F2092",
-    "macOS_12.4_21F2081",
-    "macOS_12.3_beta_5_21E5227a",
-    "macOS_12.3_beta_4_21E5222a",
-    "macOS_12.3_beta_3_21E5212f",
-    "macOS_12.3_beta_2_21E5206e",
-    "macOS_12.3_beta_21E5196i",
-    "macOS_12.3_21E230macOS_12.2_beta_2_21D5039d",
-    "macOS_12.2_21D49",
-    "macOS_12.2_RC_21D48",
-]
+migrate_artifact_keys = ["macOS_14.2_RC_2_23C64"]
 
-migrate_source_filenames = [
-    "UniversalMac_14.2_23C5041e_Restore.ipsw",
-    "UniversalMac_14.2_23C5030f_Restore.ipsw",
-    "UniversalMac_14.1_23B74_Restore.ipsw",
-    "UniversalMac_14.1_23B73_Restore.ipsw",
-    "UniversalMac_14.1_23B5067a_Restore.ipsw",
-    "UniversalMac_14.1_23B2077_Restore.ipsw",
-    "UniversalMac_14.1.2_23B92_Restore.ipsw",
-    "UniversalMac_14.1.1_23B81_Restore.ipsw",
-    "UniversalMac_14.0_23A344_Restore.ipsw",
-    "UniversalMac_14.0_23A344_Restore.ipsw",
-    "UniversalMac_14.0_23A339_Restore.ipsw",
-    "UniversalMac_13.6_22G120_Restore.ipsw",
-    "UniversalMac_13.5.2_22G91_Restore.ipsw",
-    "UniversalMac_13.1_22C5044e_Restore.ipsw",
-    "UniversalMac_13.1_22C5033e_Restore.ipsw",
-    "UniversalMac_13.0_22A5373b_Restore.ipsw",
-    "UniversalMac_13.0_22A5365d_Restore.ipsw",
-    "UniversalMac_13.0_22A5358e_Restore.ipsw",
-    "UniversalMac_13.0_22A5352e_Restore.ipsw",
-    "UniversalMac_13.0_22A5331f_Restore.ipsw",
-    "UniversalMac_13.0_22A5321d_Restore.ipsw",
-    "UniversalMac_13.0_22A5311f_Restore.ipsw",
-    "UniversalMac_13.0_22A5295i_Restore.ipsw",
-    "UniversalMac_13.0_22A5295h_Restore.ipsw",
-    "UniversalMac_13.0_22A5286j_Restore.ipsw",
-    "UniversalMac_13.0_22A379_Restore.ipsw",
-    "UniversalMac_12.6_21G115_Restore.ipsw",
-    "UniversalMac_12.6.1_21G217_Restore.ipsw",
-    "UniversalMac_12.5_21G72_Restore.ipsw",
-    "UniversalMac_12.5_21G69_Restore.ipsw",
-    "UniversalMac_12.5_21G5063a_Restore.ipsw",
-    "UniversalMac_12.5_21G5046c_Restore.ipsw",
-    "UniversalMac_12.5_21G5037d_Restore.ipsw",
-    "UniversalMac_12.5.1_21G83_Restore.ipsw",
-    "UniversalMac_12.4_21F79_Restore.ipsw",
-    "UniversalMac_12.4_21F5071b_Restore.ipsw",
-    "UniversalMac_12.4_21F5063e_Restore.ipsw",
-    "UniversalMac_12.4_21F5058e_Restore.ipsw",
-    "UniversalMac_12.4_21F5048e_Restore.ipsw",
-    "UniversalMac_12.4_21F2092_Restore.ipsw",
-    "UniversalMac_12.4_21F2081_Restore.ipsw",
-    "UniversalMac_12.3_21E5227a_Restore.ipsw",
-    "UniversalMac_12.3_21E5222a_Restore.ipsw",
-    "UniversalMac_12.3_21E5212f_Restore.ipsw",
-    "UniversalMac_12.3_21E5206e_Restore.ipsw",
-    "UniversalMac_12.3_21E5196i_Restore.ipsw",
-    "UniversalMac_12.3_21E230_Restore.ipsw",
-    "UniversalMac_12.2_21D5039d_Restore.ipsw",
-    "UniversalMac_12.2_21D49_Restore.ipsw",
-    "UniversalMac_12.2_21D48_Restore.ipsw",
-]
+migrate_source_filenames = ["UniversalMac_14.2_23C64_Restore.ipsw"]
 
 
 def migrate(ipsw_storage: IpswGcsStorage) -> None:
@@ -292,8 +191,8 @@ def migrate(ipsw_storage: IpswGcsStorage) -> None:
                 == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
             )
 
-            artifact.sources[source_idx].processing_state = (
-                ArtifactProcessingState.MIRRORED
-            )
-            artifact.sources[source_idx].update_last_run()
-            ipsw_storage.update_meta_item(artifact)
+            # artifact.sources[source_idx].processing_state = (
+            #     ArtifactProcessingState.MIRRORED
+            # )
+            # artifact.sources[source_idx].update_last_run()
+            # ipsw_storage.update_meta_item(artifact)
