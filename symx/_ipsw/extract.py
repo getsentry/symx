@@ -65,8 +65,10 @@ class IpswExtractor:
                 logger.debug(f"ipsw output: {ipsw_output}")
                 raise TimeoutError("IPSW extraction timed out and was terminated.")
             finally:
-                # we have very limited space on the GHA runners, so get rid of the source artifact ASAP
-                self.ipsw_path.unlink()
+                # we have very limited space on the GHA runners, so get rid of the source artifact ASAP,
+                # but we have to keep the IPSW in case we are extracting multiple architectures
+                if arch is None:
+                    self.ipsw_path.unlink()
 
             if process.returncode != 0:
                 error_msg = stderr.decode("utf-8")
@@ -95,7 +97,11 @@ class IpswExtractor:
                 _log_directory_contents(extract_dir)
                 split_dir = self._ipsw_split(extract_dir, arch)
                 _log_directory_contents(split_dir)
-                # We accumulate each architecture as a sub-dir in split_dir and let symsorter process them together
+
+            # after all architectures have been extracted, we can delete the IPSW to free up some space
+            self.ipsw_path.unlink()
+
+            # We accumulate each architecture as a sub-dir in split_dir and let symsorter process them together
         else:
             extract_dir = self._ipsw_extract()
             if extract_dir is None:
