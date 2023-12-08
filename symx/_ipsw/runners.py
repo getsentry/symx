@@ -191,8 +191,8 @@ def migrate(ipsw_storage: IpswGcsStorage) -> None:
                 == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
             )
 
-            # artifact.sources[source_idx].processing_state = (
-            #     ArtifactProcessingState.MIRRORED
-            # )
-            # artifact.sources[source_idx].update_last_run()
-            # ipsw_storage.update_meta_item(artifact)
+            artifact.sources[source_idx].processing_state = (
+                ArtifactProcessingState.MIRRORED
+            )
+            artifact.sources[source_idx].update_last_run()
+            ipsw_storage.update_meta_item(artifact)
