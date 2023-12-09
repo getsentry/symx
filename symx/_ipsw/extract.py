@@ -9,6 +9,8 @@ from symx._ipsw.common import IpswArtifact, IpswSource, IpswPlatform
 logger = logging.getLogger(__name__)
 
 
+# TODO: there is good chance that we should split the extractor into separate classes based on at least platform
+#   and provide a factory function that instantiates the right extractor class using artifact and maybe source.
 class IpswExtractor:
     def __init__(
         self,
@@ -76,7 +78,9 @@ class IpswExtractor:
 
         _log_directory_contents(self.processing_dir)
         for item in self.processing_dir.iterdir():
-            if item.is_dir():
+            # there should only be IPSW extraction directories or the "split_out" directory if we accumulate over
+            # multiple architectures. We shouldn't detect the latter as an input directory to the split function
+            if item.is_dir() and str(item.name) != "split_out":
                 logger.debug(
                     f"Found {item} in processing directory after IPSW extraction"
                 )
@@ -185,7 +189,7 @@ class IpswExtractError(Exception):
 def _log_directory_contents(directory: Path) -> None:
     if not directory.is_dir():
         return
-    dir_contents = "\n".join(str(item) for item in directory.iterdir())
+    dir_contents = "\n".join(str(item.name) for item in directory.iterdir())
     logger.debug(f"Contents of {directory}: \n\n{dir_contents}")
 
 

@@ -164,9 +164,9 @@ def _post_mirrored_filter(
     ]
 
 
-migrate_artifact_keys = ["macOS_14.2_RC_2_23C64"]
+migrate_artifact_keys = ["macOS_14.1.2_23B92"]
 
-migrate_source_filenames = ["UniversalMac_14.2_23C64_Restore.ipsw"]
+migrate_source_filenames = ["UniversalMac_14.1.2_23B92_Restore.ipsw"]
 
 
 def migrate(ipsw_storage: IpswGcsStorage) -> None:
