@@ -300,9 +300,16 @@ class OtaMirror:
                     continue
 
                 set_sentry_artifact_tags(key, ota)
-                ota_file = download_ota_from_apple(ota, Path(download_dir))
-                self.storage.save_ota(key, ota, ota_file)
-                ota_file.unlink()
+                try:
+                    ota_file = download_ota_from_apple(ota, Path(download_dir))
+                    self.storage.save_ota(key, ota, ota_file)
+                    ota_file.unlink()
+                except Exception as e:
+                    sentry_sdk.capture_exception(e)
+                    logger.exception(e)
+                    ota.processing_state = ArtifactProcessingState.INDEXED_INVALID
+                    ota.update_last_run()
+                    self.storage.update_meta_item(key, ota)
 
 
 DYLD_SHARED_CACHE = "dyld_shared_cache"
