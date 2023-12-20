@@ -196,7 +196,29 @@ def merge_lists(a: list[str], b: list[str]) -> list[str]:
     return list(set(a + b))
 
 
+def generate_duplicate_key_from(ours: OtaMetaData, their_key: str) -> str:
+    duplicate_num = 1
+    key_candidate = f"{their_key}_duplicate_{duplicate_num}"
+
+    while key_candidate in ours.keys():
+        duplicate_num += 1
+        key_candidate = f"{their_key}_duplicate_{duplicate_num}"
+
+    return key_candidate
+
+
 def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
+    """
+    This function is at the core of the whole thing:
+        - What meta-data does Apple consider as identity?
+        - What is sufficient "identity" to correctly map to the symbols store?
+        - Which merge/duplication strategy should we apply if items turn out to be the same?
+        - How to migrate if identities (or our knowledge of identities) change?
+    The answers to these questions are encoded in this function.
+    :param ours: The meta-data of all OTA artifacts in our store.
+    :param theirs: The meta-data of all OTA artifacts currently provided by Apple.
+    :return: None
+    """
     for their_key, their_item in theirs.items():
         if their_key in ours.keys():
             # we already have that id in out meta-store
@@ -208,10 +230,29 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
             )
             ours[their_key].devices = merge_lists(our_item.devices, their_item.devices)
 
-            # this is a little bit the core of the whole thing:
-            # - what does apple consider identity?
-            # - what is sufficient for sentry?
-            # - how to migrate if identities change?
+            # If we have differing build but all other values that contribute to identity are the same, then we have
+            # a duplicate that requires a corresponding duplicate key. Another option would be to merge the builds
+            # and have them as an array of a single meta-data item, but that wouldn't really help with the identity
+            # back-refs from the store (or any other identity resolution that goes beyond that). For our purposes we
+            # should treat this as a separate artifact where we append to the key so that the key-prefix is
+            # maintained and set the processing state to INDEXED_DUPLICATE.
+            if (
+                their_item.build != our_item.build
+                and their_item.version == our_item.version
+                and their_item.platform == our_item.platform
+                and their_item.url == our_item.url
+                and their_item.hash == our_item.hash
+                and their_item.hash_algorithm == our_item.hash_algorithm
+            ):
+                duplicate_key = generate_duplicate_key_from(ours, their_key)
+                ours[duplicate_key] = their_item
+                ours[duplicate_key].processing_state = (
+                    ArtifactProcessingState.INDEXED_DUPLICATE
+                )
+                continue
+
+            # if any of the remaining identity-contributing values differ at this point then our identity matching is
+            # still incomplete.
             if not (
                 their_item.build == our_item.build
                 and their_item.version == our_item.version
@@ -221,7 +262,7 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
                 and their_item.hash_algorithm == our_item.hash_algorithm
             ):
                 raise RuntimeError(
-                    "Same matching keys with different value:\n\tlocal:"
+                    "Matching keys with different value:\n\tlocal:"
                     f" {our_item}\n\tapple: {their_item}"
                 )
         else:
@@ -240,6 +281,7 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
                     ours[their_key].processing_state = (
                         ArtifactProcessingState.INDEXED_DUPLICATE
                     )
+                    break
 
 
 def check_ota_hash(ota_meta: OtaArtifact, filepath: Path) -> bool:

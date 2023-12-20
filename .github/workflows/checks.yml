@@ -19,3 +19,5 @@ jobs:
         run: poetry run black symx --check
       - name: mypy
         run: poetry run mypy --install-types --non-interactive
+      - name: pytest
+        run: poetry run pytest
