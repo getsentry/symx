@@ -33,6 +33,7 @@ PLATFORMS = [
     "accessory",
     "macos",
     "recovery",
+    "visionos",
 ]
 
 ARTIFACTS_META_JSON = "ota_image_meta.json"
