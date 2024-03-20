@@ -459,9 +459,9 @@ def find_dsc(
             f"Couldn't find any {DYLD_SHARED_CACHE} paths in {input_dir}"
         )
     elif len(dsc_search_results) > 1:
-        printable_paths = "\n".join([
-            str(result.artifact) for result in dsc_search_results
-        ])
+        printable_paths = "\n".join(
+            [str(result.artifact) for result in dsc_search_results]
+        )
         raise OtaExtractError(
             f"Found more than one {DYLD_SHARED_CACHE} path in"
             f" {input_dir}:\n{printable_paths}"
