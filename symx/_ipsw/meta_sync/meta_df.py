@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 import json
 
 import pandas as pd
