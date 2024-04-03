@@ -149,7 +149,7 @@ class IpswExtractor:
         # we have very limited space on the GHA runners, so get rid of processed input data
         shutil.rmtree(extract_dir)
 
-        if result.returncode == 1:
+        if result.returncode != 0:
             raise IpswExtractError(f"ipsw dyld split failed with {result}")
 
         return split_dir
@@ -176,7 +176,7 @@ class IpswExtractor:
         # we have very limited space on the GHA runners, so get rid of processed input data
         shutil.rmtree(split_dir)
 
-        if result.returncode == 1:
+        if result.returncode != 0:
             raise IpswExtractError(f"Symsorter failed with {result}")
 
         return output_dir

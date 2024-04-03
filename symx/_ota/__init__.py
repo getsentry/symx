@@ -487,7 +487,7 @@ def symsort(dsc_split_dir: Path, output_dir: Path, prefix: str, bundle_id: str) 
         ],
         capture_output=True,
     )
-    if result.returncode == 1:
+    if result.returncode != 0:
         raise OtaExtractError(f"Symsorter failed with {result}")
 
 
@@ -537,7 +537,7 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
         capture_output=True,
     )
 
-    if result.returncode == 1:
+    if result.returncode != 0:
         error_lines = []
         for line in result.stderr.decode("utf-8").splitlines():
             if line.startswith("   ⨯"):
