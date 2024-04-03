@@ -193,6 +193,7 @@ class AppleDbIpswImport:
                 self._process_platform(platform)
         except Exception as e:
             sentry_sdk.capture_exception(e)
+            logger.warning(f"Failed to sync IPSW meta-data: {e}")
         finally:
             logger.info(f"Number of github API requests = {self.api_request_count}")
             logger.info(f"Number of github file requests = {self.file_request_count}")
@@ -331,6 +332,7 @@ class AppleDbIpswImport:
             src_artifact = AppleDbArtifact.model_validate_json(response.content)
         except ValidationError as e:
             sentry_sdk.capture_exception(e)
+            logger.warning(f"Failed to validate AppleDb Artifact: {e}")
             self.update_import_state_log()
             return
 

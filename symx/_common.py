@@ -199,6 +199,9 @@ def try_download_url_to_file(url: str, filepath: Path, num_retries: int = 5) -> 
                 num_retries = num_retries - 1
             else:
                 sentry_sdk.capture_exception(e)
+                logger.warning(
+                    f"Failed to download URL {url} after {num_retries} retries: {e}"
+                )
 
 
 def download_url_to_file(url: str, filepath: Path) -> None:
@@ -373,6 +376,9 @@ def try_download_to_filename(
                 num_retries = num_retries - 1
             else:
                 sentry_sdk.capture_exception(e)
+                logger.warning(
+                    f"Failed to download blob {blob.name} after {num_retries} retries: {e}"
+                )
                 return False
 
     return True

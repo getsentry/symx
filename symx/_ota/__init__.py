@@ -609,6 +609,7 @@ class OtaExtract:
                     # we only "handle" OtaExtractError as something where we can go on, all
                     # other exceptions should just stop the symbol-extraction process.
                     sentry_sdk.capture_exception(e)
+                    logger.warning(f"Failed to extract symbols from {key}: {ota}")
                     # also need to mark failing cases, because otherwise they will fail again
                     ota.processing_state = (
                         ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
