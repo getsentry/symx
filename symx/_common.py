@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from math import floor
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 from urllib.parse import ParseResult, urlparse
 
 import requests
@@ -376,3 +376,17 @@ def try_download_to_filename(
                 return False
 
     return True
+
+
+def is_dir_empty(dir_path: Path) -> bool:
+    if dir_path.exists() and dir_path.is_dir():
+        return not any(dir_path.iterdir())
+    else:
+        raise ValueError("The provided path does not exist or is not a directory.")
+
+
+def list_dirs_in(dir_path: Path) -> List[Path]:
+    if dir_path.exists() and dir_path.is_dir():
+        return [entry for entry in dir_path.iterdir() if entry.is_dir()]
+    else:
+        raise ValueError("The provided path does not exist or is not a directory.")

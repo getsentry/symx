@@ -21,6 +21,7 @@ from symx._common import (
     check_sha1,
     validate_shell_deps,
     try_download_url_to_file,
+    list_dirs_in,
 )
 
 logger = logging.getLogger(__name__)
@@ -491,24 +492,6 @@ def symsort(dsc_split_dir: Path, output_dir: Path, prefix: str, bundle_id: str) 
         raise OtaExtractError(f"Symsorter failed with {result}")
 
 
-def find_path_prefix_in_dsc_extract_cmd_output(
-    cmd_output: str, top_output_dir: Path
-) -> Path:
-    for line in cmd_output.splitlines():
-        top_output_path_index = line.find(str(top_output_dir))
-        if top_output_path_index == -1:
-            continue
-
-        extraction_name_start = top_output_path_index + len(str(top_output_dir)) + 1
-        extraction_name_end = line.find("/", extraction_name_start)
-        if extraction_name_end == -1:
-            continue
-
-        return top_output_dir / line[extraction_name_start:extraction_name_end]
-
-    raise OtaExtractError(f"Couldn't find path_prefix in command-output: {cmd_output}")
-
-
 def detach_dev(dev: str) -> None:
     result = subprocess.run(["hdiutil", "detach", dev], capture_output=True, check=True)
     logger.debug(f"\t\t\tResult from detach: {result}")
@@ -524,7 +507,7 @@ def mount_dmg(dmg: Path) -> MountInfo:
 
 
 def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
-    result = subprocess.run(
+    subprocess.run(
         [
             "ipsw",
             "ota",
@@ -537,21 +520,19 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
         capture_output=True,
     )
 
-    if result.returncode != 0:
-        error_lines = []
-        for line in result.stderr.decode("utf-8").splitlines():
-            if line.startswith("   ⨯"):
-                error_lines.append(line)
-        errors = "\n\t".join(error_lines)
+    extract_dirs = list_dirs_in(output_dir)
+
+    if len(extract_dirs) == 0:
+        raise OtaExtractError(f"Could not to find {DYLD_SHARED_CACHE} in {artifact}")
+    elif len(extract_dirs) > 1:
+        extract_dirs_output = "\n".join([str(dir_path) for dir_path in extract_dirs])
         raise OtaExtractError(
-            f"Failed to extract {DYLD_SHARED_CACHE} from {artifact}:\n\t{errors}"
+            f"Found more than one image directory in {artifact}:\n{extract_dirs_output}"
         )
 
     logger.info(f"\t\tSuccessfully extracted {DYLD_SHARED_CACHE} from: {artifact}")
-    return find_path_prefix_in_dsc_extract_cmd_output(
-        result.stderr.decode("utf-8"),
-        Path(output_dir),
-    )
+
+    return extract_dirs[0]
 
 
 def iter_mirror(storage: OtaStorage) -> Iterator[tuple[str, OtaArtifact]]:
