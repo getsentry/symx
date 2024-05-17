@@ -19,6 +19,6 @@ def migrate(storage: OtaGcsStorage) -> None:
         ):
             print(f"{key}: {ota}")
 
-            # ota.processing_state = ArtifactProcessingState.MIRRORED
-            # ota.update_last_run()
-            # storage.update_meta_item(key, ota)
+            ota.processing_state = ArtifactProcessingState.MIRRORED
+            ota.update_last_run()
+            storage.update_meta_item(key, ota)
