@@ -23,7 +23,9 @@ def main() -> None:
             for source in sources_json:
                 if source["hashes"] is None:
                     source["hashes"] = {"sha1": None, "sha2": None}
-            normalized = pd.json_normalize(sources_json)
+            normalized = pd.json_normalize(
+                sources_json
+            )  # pyright: ignore[reportArgumentType]
             if normalized.empty:
                 continue
 
