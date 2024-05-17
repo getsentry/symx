@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from enum import StrEnum
 from math import floor
@@ -289,6 +290,24 @@ def parse_gcs_url(storage: str) -> ParseResult | None:
     return uri
 
 
+def upload_file(local_file: Path, dest_blob_name: Path, bucket: Bucket) -> bool:
+    blob = bucket.blob(str(dest_blob_name))
+
+    if blob.exists():
+        # If the blob exists we can continue with the next file because there should be no duplicate
+        # which contains a mismatching symbol table. this is a big assumption, and we should probably
+        # cross-check the symbols between the debug-id-equal binaries of each artifact. but this if is
+        # not that place.
+        logger.info(
+            f"{local_file} exists in symbol-store at {dest_blob_name}. Continue"
+            " with next."
+        )
+        return False
+
+    blob.upload_from_filename(str(local_file), num_retries=10)
+    return True
+
+
 def upload_symbol_binaries(
     bucket: Bucket, platform: str, bundle_id: str, binary_dir: Path
 ) -> None:
@@ -304,8 +323,7 @@ def upload_symbol_binaries(
 
     duplicate_count = 0
     new_count = 0
-    data_size = 0
-    new_binary_count = 0
+    upload_tasks = []
 
     for root, dirs, files in os.walk(binary_dir):
         for file in files:
@@ -313,31 +331,22 @@ def upload_symbol_binaries(
             dest_blob_name = (
                 dest_blob_prefix / Path(root).relative_to(binary_dir) / file
             )
-            blob = bucket.blob(str(dest_blob_name))
+            upload_tasks.append((local_file, dest_blob_name, bucket))
 
-            if blob.exists():
-                # If the blob exists we can continue with the next file because there should be no duplicate
-                # which contains a mismatching symbol table. this is a big assumption, and we should probably
-                # cross-check the symbols between the debug-id-equal binaries of each artifact. but this if is
-                # not that place.
-                logger.info(
-                    f"{local_file} exists in symbol-store at {dest_blob_name}. Continue"
-                    " with next."
-                )
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [
+            executor.submit(upload_file, local_file, dest_blob_name, bucket)
+            for local_file, dest_blob_name, bucket in upload_tasks
+        ]
+
+        for future in as_completed(futures):
+            if not future.result():
                 duplicate_count += 1
-                continue
-
-            blob.upload_from_filename(str(local_file), num_retries=10)
-            new_count += 1
-            data_size += local_file.stat().st_size
-            if local_file.name == "executable":
-                new_binary_count += 1
-            logger.debug(f"File {local_file} uploaded to {dest_blob_name}.")
+            else:
+                new_count += 1
 
     logger.info(f"New files uploaded = {new_count}")
-    logger.info(f"New binaries uploaded = {new_binary_count}")
     logger.info(f"Ignored duplicates = {duplicate_count}")
-    logger.info(f"Uploaded bytes = {data_size}")
 
 
 def validate_shell_deps() -> None:
