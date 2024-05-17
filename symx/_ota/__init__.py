@@ -429,6 +429,16 @@ def split_dsc(search_result: list[DSCSearchResult]) -> list[Path]:
             logger.debug(f"\t\t\tResult from split: {result}")
             split_dirs.append(result_item.split_dir)
 
+    # If none of the split attempts were successful the OTA extraction failed
+    if len(split_dirs) == 0:
+        artifacts = "\n".join(
+            [
+                f"{result_item.artifact}_{result_item.arch}"
+                for result_item in search_result
+            ]
+        )
+        raise OtaExtractError(f"Split failed for all of:\n{artifacts}")
+
     return split_dirs
 
 
