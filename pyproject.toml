@@ -14,7 +14,6 @@ google-cloud-storage = "^2.10"
 pydantic = "^2.0"
 pandas = "^2.1"
 
-
 [tool.poetry.group.dev.dependencies]
 pyright = "1.1.363"
 ruff = "0.4.4"

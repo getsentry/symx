@@ -399,7 +399,7 @@ def split_dsc(search_result: list[DSCSearchResult]) -> list[Path]:
             capture_output=True,
         )
         if result.returncode != 0:
-            logger.error(f"Split for {result_item.artifact} (arch: {result_item.arch} failed:" f" {result}")
+            logger.warning(f"Split for {result_item.artifact} (arch: {result_item.arch} failed:" f" {result}")
         else:
             logger.debug(f"\t\t\tResult from split: {result}")
             split_dirs.append(result_item.split_dir)
