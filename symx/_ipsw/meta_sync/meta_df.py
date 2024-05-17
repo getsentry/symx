@@ -23,23 +23,17 @@ def main() -> None:
             for source in sources_json:
                 if source["hashes"] is None:
                     source["hashes"] = {"sha1": None, "sha2": None}
-            normalized = pd.json_normalize(
-                sources_json
-            )  # pyright: ignore[reportArgumentType]
+            normalized = pd.json_normalize(sources_json)  # pyright: ignore[reportArgumentType]
             if normalized.empty:
                 continue
 
             # make sure that we keep the parent key, so we can join below
             normalized["key"] = row["key"]
-            normalized_source_rows.append(
-                normalized.drop(columns=["hashes.sha1", "hashes.sha2", "mirror_path"])
-            )
+            normalized_source_rows.append(normalized.drop(columns=["hashes.sha1", "hashes.sha2", "mirror_path"]))
 
         normalized_sources_df = pd.concat(normalized_source_rows)
 
-        df = pd.merge(
-            input_df.drop(columns=["sources"]), normalized_sources_df, on="key"
-        )
+        df = pd.merge(input_df.drop(columns=["sources"]), normalized_sources_df, on="key")
 
         pd.set_option("display.max_columns", None)
         pd.set_option("display.max_rows", None)
@@ -62,9 +56,7 @@ def main() -> None:
             .reset_index(name="counts")  # pyright: ignore[reportCallIssue]
         )
         print(
-            df.groupby(["platform", "processing_state"])
-            .size()
-            .reset_index(name="counts")  # pyright: ignore[reportCallIssue]
+            df.groupby(["platform", "processing_state"]).size().reset_index(name="counts")  # pyright: ignore[reportCallIssue]
         )
         print(
             df.groupby(["platform", "processing_state"]).agg(

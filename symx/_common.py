@@ -145,8 +145,7 @@ def downloader_validate_shell_deps() -> None:
 
 
 DEVICE_ROW_RE = re.compile(
-    r"\|\s([\w,\-]*)\s*\|\s([a-z0-9]*)\s*\|\s([\w,\-()."
-    r" ]*)\s*\|\s([a-z0-9]*)\s*\|\s([a-z0-9]*)\s*\|\s(\d*)"
+    r"\|\s([\w,\-]*)\s*\|\s([a-z0-9]*)\s*\|\s([\w,\-()." r" ]*)\s*\|\s([a-z0-9]*)\s*\|\s([a-z0-9]*)\s*\|\s(\d*)"
 )
 
 
@@ -201,9 +200,7 @@ def try_download_url_to_file(url: str, filepath: Path, num_retries: int = 5) -> 
                 num_retries = num_retries - 1
             else:
                 sentry_sdk.capture_exception(e)
-                logger.warning(
-                    f"Failed to download URL {url} after {num_retries} retries: {e}"
-                )
+                logger.warning(f"Failed to download URL {url} after {num_retries} retries: {e}")
 
 
 def download_url_to_file(url: str, filepath: Path) -> None:
@@ -243,9 +240,7 @@ def compare_md5_hash(local_file: Path, remote_blob: Blob) -> bool:
     remote_hash = remote_blob.md5_hash
     local_hash = _fs_md5_hash(local_file)
     if remote_hash == local_hash:
-        logger.info(
-            f'"{remote_blob.name}" was already uploaded with matching MD5 hash.'
-        )
+        logger.info(f'"{remote_blob.name}" was already uploaded with matching MD5 hash.')
         return True
     else:
         logger.error(
@@ -276,17 +271,11 @@ def _fs_md5_hash(file_path: Path) -> str:
 def parse_gcs_url(storage: str) -> ParseResult | None:
     uri = urlparse(storage)
     if uri.scheme != "gs":
-        print(
-            '[bold red]Unsupported "--storage" URI-scheme used:[/bold red] currently'
-            ' symx supports "gs://" only'
-        )
+        print('[bold red]Unsupported "--storage" URI-scheme used:[/bold red] currently' ' symx supports "gs://" only')
         return None
 
     if not uri.hostname:
-        print(
-            "[bold red]You must supply at least a bucket-name for the GCS storage[/bold"
-            " red]"
-        )
+        print("[bold red]You must supply at least a bucket-name for the GCS storage[/bold" " red]")
         return None
     return uri
 
@@ -299,28 +288,20 @@ def upload_file(local_file: Path, dest_blob_name: Path, bucket: Bucket) -> bool:
         # which contains a mismatching symbol table. this is a big assumption, and we should probably
         # cross-check the symbols between the debug-id-equal binaries of each artifact. but this if is
         # not that place.
-        logger.info(
-            f"{local_file} exists in symbol-store at {dest_blob_name}. Continue"
-            " with next."
-        )
+        logger.info(f"{local_file} exists in symbol-store at {dest_blob_name}. Continue" " with next.")
         return False
 
     blob.upload_from_filename(str(local_file), num_retries=10)
     return True
 
 
-def upload_symbol_binaries(
-    bucket: Bucket, platform: str, bundle_id: str, binary_dir: Path
-) -> None:
+def upload_symbol_binaries(bucket: Bucket, platform: str, bundle_id: str, binary_dir: Path) -> None:
     logger.info(f"Uploading symbol binaries for {platform} and {bundle_id}")
     dest_blob_prefix = Path("symbols")
     bundle_index_path = dest_blob_prefix / platform / "bundles" / bundle_id
     blob = bucket.blob(str(bundle_index_path))
     if blob.exists():
-        logger.warning(
-            f"We already have a `bundle_id` {bundle_id} for {platform} in"
-            " the symbol store. "
-        )
+        logger.warning(f"We already have a `bundle_id` {bundle_id} for {platform} in" " the symbol store. ")
 
     duplicate_count = 0
     new_count = 0
@@ -329,9 +310,7 @@ def upload_symbol_binaries(
     for root, dirs, files in os.walk(binary_dir):
         for file in files:
             local_file = Path(root) / file
-            dest_blob_name = (
-                dest_blob_prefix / Path(root).relative_to(binary_dir) / file
-            )
+            dest_blob_name = dest_blob_prefix / Path(root).relative_to(binary_dir) / file
             upload_tasks.append((local_file, dest_blob_name, bucket))
 
     with ThreadPoolExecutor(max_workers=10) as executor:
@@ -375,9 +354,7 @@ def validate_shell_deps() -> None:
         sys.exit(1)
 
 
-def try_download_to_filename(
-    blob: Blob, local_file_path: Path, num_retries: int = 5
-) -> bool:
+def try_download_to_filename(blob: Blob, local_file_path: Path, num_retries: int = 5) -> bool:
     while num_retries > 0:
         try:
             blob.download_to_filename(str(local_file_path))
@@ -387,9 +364,7 @@ def try_download_to_filename(
                 num_retries = num_retries - 1
             else:
                 sentry_sdk.capture_exception(e)
-                logger.warning(
-                    f"Failed to download blob {blob.name} after {num_retries} retries: {e}"
-                )
+                logger.warning(f"Failed to download blob {blob.name} after {num_retries} retries: {e}")
                 return False
 
     return True

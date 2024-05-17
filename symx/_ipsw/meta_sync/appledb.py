@@ -127,10 +127,7 @@ def random_user_agent() -> str:
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/604.1.38"
             " (KHTML, like Gecko) Version/11.0 Safari/604.1.38"
         ),
-        (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:56.0) Gecko/20100101"
-            " Firefox/56.0"
-        ),
+        ("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:56.0) Gecko/20100101" " Firefox/56.0"),
         (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13) AppleWebKit/604.1.38 (KHTML,"
             " like Gecko) Version/11.0 Safari/604.1.38"
@@ -198,12 +195,8 @@ class AppleDbIpswImport:
             logger.info(f"Number of github API requests = {self.api_request_count}")
             logger.info(f"Number of github file requests = {self.file_request_count}")
             logger.info(f"Number of processed files = {self.processed_file_count}")
-            logger.info(
-                f"Number of already imported files = {self.already_imported_count}"
-            )
-            logger.info(
-                f"Number of artifacts w/o sources = {self.artifact_wo_sources_count}"
-            )
+            logger.info(f"Number of already imported files = {self.already_imported_count}")
+            logger.info(f"Number of artifacts w/o sources = {self.artifact_wo_sources_count}")
 
             self._store_appledb_indexed()
 
@@ -247,16 +240,10 @@ class AppleDbIpswImport:
         if response.status_code != 200:
             github_response = GithubAPIResponse.model_validate_json(response.text)
             # we are not interested in rate-limit error notifications only log a warning
-            if (
-                response.status_code == 403
-                and "API rate limit exceeded" in github_response.message
-            ):
+            if response.status_code == 403 and "API rate limit exceeded" in github_response.message:
                 logger.warning(github_response.message)
             else:
-                logger.error(
-                    f"Failed github API GET-request: {response.status_code},"
-                    f" {github_response}"
-                )
+                logger.error(f"Failed github API GET-request: {response.status_code}," f" {github_response}")
             return None
 
         return response.content
@@ -276,9 +263,7 @@ class AppleDbIpswImport:
             if item["type"] == "dir":
                 folder_name = item["name"]
                 self.state.folder_hash = item["sha"]
-                sentry_sdk.set_tag(
-                    "ipsw.import.appledb.folder_hash", self.state.folder_hash
-                )
+                sentry_sdk.set_tag("ipsw.import.appledb.folder_hash", self.state.folder_hash)
                 sentry_sdk.set_tag("ipsw.import.appledb.folder_name", folder_name)
                 folder_url = f"{platform_url}/{folder_name}"
                 self._process_folder(folder_url)
@@ -286,9 +271,7 @@ class AppleDbIpswImport:
                 self.state.file_hash = item["sha"]
                 download_url = item["download_url"]
                 sentry_sdk.set_tag("ipsw.import.appledb.download_url", download_url)
-                sentry_sdk.set_tag(
-                    "ipsw.import.appledb.file_hash", self.state.file_hash
-                )
+                sentry_sdk.set_tag("ipsw.import.appledb.file_hash", self.state.file_hash)
                 self._process_file(download_url)
 
     def _process_folder(self, folder_url: str) -> None:
@@ -322,10 +305,7 @@ class AppleDbIpswImport:
         response = requests.get(download_url, headers)
         self.file_request_count += 1
         if response.status_code != 200:
-            logger.error(
-                "Failed to download file contents:"
-                f" {response.status_code}, {response.text}"
-            )
+            logger.error("Failed to download file contents:" f" {response.status_code}, {response.text}")
             return
 
         try:
@@ -346,9 +326,7 @@ class AppleDbIpswImport:
         ipsw_sources: list[IpswSource] = []
         for source in src_artifact.sources:
             if source.link and source.type == "ipsw":
-                ipsw_sources.append(
-                    IpswSource(**source.model_dump(exclude={"type", "links"}))
-                )
+                ipsw_sources.append(IpswSource(**source.model_dump(exclude={"type", "links"})))
         # ...or it has no usable sources (e.g. URLs that are no longer active, non-IPSW source, etc.)
         if len(ipsw_sources) == 0:
             self.update_import_state_log()
@@ -365,9 +343,7 @@ class AppleDbIpswImport:
             # differ... this should be easy to check with pydantic, but it might help to log
             # the diff with something like deepdiff
             logger.warning(
-                f"{artifact.key} already added\n\told ="
-                f" {self.meta_db.get(artifact.key)}\n\tnew ="
-                f" {artifact}"
+                f"{artifact.key} already added\n\told =" f" {self.meta_db.get(artifact.key)}\n\tnew =" f" {artifact}"
             )
         else:
             self.new_artifacts.append(artifact)
@@ -377,17 +353,12 @@ class AppleDbIpswImport:
     def file_in_import_state_log(self) -> bool:
         return (
             self.state.folder_hash in self.apple_db_import_state
-            and self.state.file_hash
-            in self.apple_db_import_state[self.state.folder_hash]
+            and self.state.file_hash in self.apple_db_import_state[self.state.folder_hash]
         )
 
     def update_import_state_log(self) -> None:
         assert self.state.file_hash is not None
-        folder_hash = (
-            self.state.folder_hash
-            if self.state.folder_hash is not None
-            else self.state.file_hash
-        )
+        folder_hash = self.state.folder_hash if self.state.folder_hash is not None else self.state.file_hash
 
         if folder_hash in self.apple_db_import_state:
             if self.state.file_hash not in self.apple_db_import_state[folder_hash]:

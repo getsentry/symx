@@ -20,10 +20,7 @@ def verify_download(filepath: Path, source: IpswSource) -> bool:
         # if we only have a size in the meta-data, let's test if the download has that size
         actual_size = filepath.stat().st_size
         if actual_size == source.size:
-            logger.info(
-                f"Downloading {source.link} completed but only size verified (no"
-                " hash in meta-data)"
-            )
+            logger.info(f"Downloading {source.link} completed but only size verified (no" " hash in meta-data)")
             return True
         else:
             logger.error(
@@ -33,8 +30,5 @@ def verify_download(filepath: Path, source: IpswSource) -> bool:
             return False
     else:
         # if we have neither size nor hash-sum, we can only accept the download as is
-        logger.info(
-            f"Downloading {source.link} completed but not verified (no hash nor"
-            " size in meta-data)"
-        )
+        logger.info(f"Downloading {source.link} completed but not verified (no hash nor" " size in meta-data)")
         return True

@@ -15,8 +15,8 @@ jobs:
           poetry install
       - name: ruff
         run: poetry run ruff check symx
-      - name: black
-        run: poetry run black symx --check
+      - name: ruff format
+        run: poetry run ruff format --check
       - name: mypy
         run: poetry run pyright
       - name: pytest

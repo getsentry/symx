@@ -85,9 +85,7 @@ class OtaGcsStorage(OtaStorage):
 
         return ours
 
-    def save_ota(
-        self, ota_meta_key: str, ota_meta: OtaArtifact, ota_file: Path
-    ) -> None:
+    def save_ota(self, ota_meta_key: str, ota_meta: OtaArtifact, ota_file: Path) -> None:
         if not ota_file.is_file():
             raise RuntimeError("Path to upload must be a file")
 
@@ -114,9 +112,7 @@ class OtaGcsStorage(OtaStorage):
         blob = self.bucket.blob(ota.download_path)
         local_ota_path = download_dir / f"{ota.id}.zip"
         if not blob.exists():
-            logger.error(
-                "The OTA references a mirror-path that is no longer accessible"
-            )
+            logger.error("The OTA references a mirror-path that is no longer accessible")
             return None
 
         if not try_download_to_filename(blob, local_ota_path):
@@ -150,9 +146,7 @@ class OtaGcsStorage(OtaStorage):
 
         raise RuntimeError("Failed to update meta-data item")
 
-    def upload_symbols(
-        self, input_dir: Path, ota_meta_key: str, ota_meta: OtaArtifact, bundle_id: str
-    ) -> None:
+    def upload_symbols(self, input_dir: Path, ota_meta_key: str, ota_meta: OtaArtifact, bundle_id: str) -> None:
         upload_symbol_binaries(self.bucket, ota_meta.platform, bundle_id, input_dir)
         ota_meta.processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
         ota_meta.update_last_run()

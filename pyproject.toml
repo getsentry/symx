@@ -17,9 +17,8 @@ pandas = "^2.1"
 
 [tool.poetry.group.dev.dependencies]
 pyright = "1.1.363"
-ruff = "0.1.7"
-black = "24.3.0"
-pytest = "^7.4.3"
+ruff = "0.4.4"
+pytest = "8.2.0"
 
 [build-system]
 requires = ["poetry-core"]
@@ -31,22 +30,3 @@ symx = "symx:app"
 [tool.ruff]
 target-version = "py311"
 line-length = 120
-
-[tool.black]
-target-version = ['py311']
-preview = true
-force-exclude = '''
-.*/setup\.py$
-'''
-
-[tool.mypy]
-files = "symx"
-namespace_packages = true
-explicit_package_bases = true
-show_error_codes = true
-strict = true
-enable_error_code = [
-    "ignore-without-code",
-    "redundant-expr",
-    "truthy-bool",
-]

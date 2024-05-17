@@ -40,10 +40,7 @@ def extract_filter(
     return [
         artifact
         for artifact in artifacts
-        if any(
-            source.processing_state == ArtifactProcessingState.MIRRORED
-            for source in artifact.sources
-        )
+        if any(source.processing_state == ArtifactProcessingState.MIRRORED for source in artifact.sources)
     ]
 
 
@@ -58,10 +55,7 @@ def mirror_filter(
         for artifact in artifacts
         if artifact.released is not None
         and artifact.released.year >= datetime.date.today().year - 1
-        and any(
-            source.processing_state == ArtifactProcessingState.INDEXED
-            for source in artifact.sources
-        )
+        and any(source.processing_state == ArtifactProcessingState.INDEXED for source in artifact.sources)
     ]
 
 
@@ -98,9 +92,7 @@ class IpswGcsStorage:
             if_generation_match=import_state_blob.generation,
         )
 
-    def upload_ipsw(
-        self, artifact: IpswArtifact, downloaded_source: tuple[Path, IpswSource]
-    ) -> IpswArtifact:
+    def upload_ipsw(self, artifact: IpswArtifact, downloaded_source: tuple[Path, IpswSource]) -> IpswArtifact:
         ipsw_file, source = downloaded_source
         sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
         sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
@@ -117,13 +109,8 @@ class IpswGcsStorage:
             # without uploading and only update meta, since that means some meta is still set to INDEXED instead
             # of MIRRORED. On the other hand, if the hashes differ, then we have a problem and should be getting out
             if not compare_md5_hash(ipsw_file, blob):
-                logger.error(
-                    "Trying to upload IPSW that already exists in mirror with a"
-                    " different MD5"
-                )
-                artifact.sources[source_idx].processing_state = (
-                    ArtifactProcessingState.MIRRORING_FAILED
-                )
+                logger.error("Trying to upload IPSW that already exists in mirror with a" " different MD5")
+                artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORING_FAILED
                 return artifact
         else:
             # this file will be split into considerable chunks: set timeout to something high
@@ -136,9 +123,7 @@ class IpswGcsStorage:
 
         return artifact
 
-    def update_meta_item(
-        self, ipsw_meta: IpswArtifact, retry: int = 5
-    ) -> IpswArtifactDb:
+    def update_meta_item(self, ipsw_meta: IpswArtifact, retry: int = 5) -> IpswArtifactDb:
         while retry > 0:
             blob, meta_db, generation = self.refresh_artifacts_db()
             meta_db.upsert(ipsw_meta.key, ipsw_meta)
@@ -196,9 +181,7 @@ class IpswGcsStorage:
 
             filtered_artifacts = filter_fun(meta_db.artifacts.values())
             logger.info(f"Number of filtered artifacts = {len(filtered_artifacts)}")
-            sorted_by_age_descending = sorted(
-                filtered_artifacts, key=_ipsw_artifact_sort_by_released, reverse=True
-            )
+            sorted_by_age_descending = sorted(filtered_artifacts, key=_ipsw_artifact_sort_by_released, reverse=True)
 
             if len(sorted_by_age_descending) == 0:
                 break
@@ -210,15 +193,10 @@ class IpswGcsStorage:
         blob = self.bucket.blob(ipsw_source.mirror_path)
         local_ipsw_path = self.local_dir / ipsw_source.file_name
         if not blob.exists():
-            logger.error(
-                "The IPSW-source references a mirror-path that is no longer accessible"
-            )
+            logger.error("The IPSW-source references a mirror-path that is no longer accessible")
             return None
 
-        if not (
-            try_download_to_filename(blob, local_ipsw_path)
-            and verify_download(local_ipsw_path, ipsw_source)
-        ):
+        if not (try_download_to_filename(blob, local_ipsw_path) and verify_download(local_ipsw_path, ipsw_source)):
             return None
 
         return local_ipsw_path
@@ -232,9 +210,7 @@ class IpswGcsStorage:
         binary_dir: Path,
     ) -> None:
         upload_symbol_binaries(self.bucket, prefix, bundle_id, binary_dir)
-        artifact.sources[source_idx].processing_state = (
-            ArtifactProcessingState.SYMBOLS_EXTRACTED
-        )
+        artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
         artifact.sources[source_idx].update_last_run()
         self.update_meta_item(artifact)
 
@@ -243,18 +219,12 @@ class IpswGcsStorage:
             if item.is_dir():
                 try:
                     shutil.rmtree(item)
-                    logger.info(
-                        f"Removed directory {item} as part of local storage cleanup"
-                    )
+                    logger.info(f"Removed directory {item} as part of local storage cleanup")
                 except Exception as e:
-                    logger.error(
-                        f"Error occurred while removing directory: {item}, Error: {e}"
-                    )
+                    logger.error(f"Error occurred while removing directory: {item}, Error: {e}")
             elif item.is_file() and item.suffix == ".ipsw":
                 try:
                     item.unlink()
                     logger.info(f"Removed {item} as part of local storage cleanup")
                 except Exception as e:
-                    logger.error(
-                        f"Error occurred while removing directory: {item}, Error: {e}"
-                    )
+                    logger.error(f"Error occurred while removing directory: {item}, Error: {e}")

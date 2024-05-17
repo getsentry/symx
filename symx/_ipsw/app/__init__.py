@@ -24,9 +24,7 @@ def init_storage(local_dir: Path, storage: str) -> IpswGcsStorage | None:
 
 
 @ipsw_app.command()
-def meta_sync(
-    storage: str = typer.Option(..., "--storage", "-s", help="Storage")
-) -> None:
+def meta_sync(storage: str = typer.Option(..., "--storage", "-s", help="Storage")) -> None:
     """
     Synchronize meta-data with appledb.
     """

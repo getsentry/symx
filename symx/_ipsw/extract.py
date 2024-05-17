@@ -25,9 +25,7 @@ class IpswExtractor:
         self.artifact = artifact
         self.source = source
         if not processing_dir.is_dir():
-            raise ValueError(
-                f"IPSW path is expected to be a directory: {processing_dir}"
-            )
+            raise ValueError(f"IPSW path is expected to be a directory: {processing_dir}")
         self.processing_dir = processing_dir
         _log_directory_contents(self.processing_dir)
 
@@ -51,9 +49,7 @@ class IpswExtractor:
             command.append(str(arch))
 
         # Start the process using Popen
-        with subprocess.Popen(
-            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        ) as process:
+        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
             try:
                 # IPSW extraction is typically finished in a couple of minutes. Everything beyond 20 minutes is probably
                 # stuck because the dmg mounter asks for a password or something similar.
@@ -81,9 +77,7 @@ class IpswExtractor:
             # there should only be IPSW extraction directories or the "split_out" directory if we accumulate over
             # multiple architectures. We shouldn't detect the latter as an input directory to the split function
             if item.is_dir() and str(item.name) != "split_out":
-                logger.debug(
-                    f"Found {item} in processing directory after IPSW extraction"
-                )
+                logger.debug(f"Found {item} in processing directory after IPSW extraction")
                 return item
 
         return None
@@ -96,9 +90,7 @@ class IpswExtractor:
             for arch in [Arch.ARM64E, Arch.X86_64]:
                 extract_dir = self._ipsw_extract(arch)
                 if extract_dir is None:
-                    raise IpswExtractError(
-                        "Couldn't find IPSW dyld_shared_cache extraction directory"
-                    )
+                    raise IpswExtractError("Couldn't find IPSW dyld_shared_cache extraction directory")
                 _log_directory_contents(extract_dir)
                 split_dir = self._ipsw_split(extract_dir, arch)
                 _log_directory_contents(split_dir)
@@ -110,9 +102,7 @@ class IpswExtractor:
         else:
             extract_dir = self._ipsw_extract()
             if extract_dir is None:
-                raise IpswExtractError(
-                    "Couldn't find IPSW dyld_shared_cache extraction directory"
-                )
+                raise IpswExtractError("Couldn't find IPSW dyld_shared_cache extraction directory")
             _log_directory_contents(extract_dir)
             split_dir = self._ipsw_split(extract_dir)
             _log_directory_contents(split_dir)
@@ -125,16 +115,12 @@ class IpswExtractor:
     def _ipsw_split(self, extract_dir: Path, arch: Arch | None = None) -> Path:
         dsc_root_file = None
         for item in extract_dir.iterdir():
-            if (
-                item.is_file() and not item.suffix
-            ):  # check if it is a file and has no extension
+            if item.is_file() and not item.suffix:  # check if it is a file and has no extension
                 dsc_root_file = item
                 break
 
         if dsc_root_file is None:
-            raise IpswExtractError(
-                f"Failed to find dyld_shared_cache root-file in {extract_dir}"
-            )
+            raise IpswExtractError(f"Failed to find dyld_shared_cache root-file in {extract_dir}")
 
         split_dir = self.processing_dir / "split_out"
         if arch is not None:

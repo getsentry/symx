@@ -11,9 +11,7 @@ ota_app = typer.Typer()
 
 @ota_app.command()
 def mirror(
-    storage: str = typer.Option(
-        ..., "--storage", "-s", help="URI to a supported storage backend"
-    ),
+    storage: str = typer.Option(..., "--storage", "-s", help="URI to a supported storage backend"),
     timeout: int = typer.Option(
         345,
         "--timeout",
@@ -32,9 +30,7 @@ def mirror(
 
 @ota_app.command()
 def extract(
-    storage: str = typer.Option(
-        ..., "--storage", "-s", help="URI to a supported storage backend"
-    ),
+    storage: str = typer.Option(..., "--storage", "-s", help="URI to a supported storage backend"),
     timeout: int = typer.Option(
         345,
         "--timeout",
@@ -52,9 +48,7 @@ def extract(
 
 
 @ota_app.command()
-def migrate_storage(
-    storage: str = typer.Option(..., "--storage", "-s", help="Storage")
-) -> None:
+def migrate_storage(storage: str = typer.Option(..., "--storage", "-s", help="Storage")) -> None:
     """
     Migrate the data on the store to the latest layout.
     This currently does not include any versioning or migration history, but could later become a goal. Right now it is
