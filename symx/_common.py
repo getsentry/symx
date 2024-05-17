@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -396,3 +397,8 @@ def list_dirs_in(dir_path: Path) -> List[Path]:
         return [entry for entry in dir_path.iterdir() if entry.is_dir()]
     else:
         raise ValueError("The provided path does not exist or is not a directory.")
+
+
+def rmdir_if_exists(dir_path: Path) -> None:
+    if dir_path.exists() and dir_path.is_dir():
+        shutil.rmtree(dir_path)

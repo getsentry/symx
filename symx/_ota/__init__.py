@@ -22,6 +22,7 @@ from symx._common import (
     validate_shell_deps,
     try_download_url_to_file,
     list_dirs_in,
+    rmdir_if_exists,
 )
 
 logger = logging.getLogger(__name__)
@@ -404,33 +405,46 @@ class OtaExtractError(Exception):
     pass
 
 
-def split_dsc(search_result: DSCSearchResult) -> Path:
-    logger.info(f"\t\tSplitting {DYLD_SHARED_CACHE} of {search_result.artifact}")
-    result = subprocess.run(
-        [
-            "ipsw",
-            "dyld",
-            "split",
-            str(search_result.artifact),
-            "--output",
-            str(search_result.split_dir),
-        ],
-        capture_output=True,
-    )
-    if result.returncode != 0:
-        raise OtaExtractError(
-            f"Split for {search_result.artifact} (arch: {search_result.arch} failed:"
-            f" {result}"
+def split_dsc(search_result: list[DSCSearchResult]) -> list[Path]:
+    split_dirs: list[Path] = []
+    for result_item in search_result:
+        logger.info(f"\t\tSplitting {DYLD_SHARED_CACHE} of {result_item.artifact}")
+        result = subprocess.run(
+            [
+                "ipsw",
+                "dyld",
+                "split",
+                str(result_item.artifact),
+                "--output",
+                str(result_item.split_dir),
+            ],
+            capture_output=True,
         )
-    else:
-        logger.debug(f"\t\t\tResult from split: {result}")
+        if result.returncode != 0:
+            logger.error(
+                f"Split for {result_item.artifact} (arch: {result_item.arch} failed:"
+                f" {result}"
+            )
+        else:
+            logger.debug(f"\t\t\tResult from split: {result}")
+            split_dirs.append(result_item.split_dir)
 
-    return search_result.split_dir
+    return split_dirs
+
+
+def split_dir_exists_in_dsc_search_results(
+    split_dir: Path, dsc_search_result: list[DSCSearchResult]
+) -> bool:
+    for result_item in dsc_search_result:
+        if split_dir == result_item.split_dir:
+            return True
+
+    return False
 
 
 def find_dsc(
     input_dir: Path, ota_meta: OtaArtifact, output_dir: Path
-) -> DSCSearchResult:
+) -> list[DSCSearchResult]:
     # TODO: are we also interested in the DriverKit dyld_shared_cache?
     #  System/DriverKit/System/Library/dyld/
     dsc_path_prefix_options = [
@@ -440,18 +454,27 @@ def find_dsc(
         "AssetData/payloadv2/ecc_data/System/Library/Caches/com.apple.dyld/",
     ]
 
-    dsc_search_results = []
+    counter = 1
+    dsc_search_results: list[DSCSearchResult] = []
     for path_prefix in dsc_path_prefix_options:
         for arch in Arch:
             dsc_path = input_dir / (path_prefix + DYLD_SHARED_CACHE + "_" + arch)
             if os.path.isfile(dsc_path):
+                split_dir = (
+                    output_dir
+                    / "split_symbols"
+                    / f"{ota_meta.version}_{ota_meta.build}_{arch}"
+                )
+
+                if split_dir_exists_in_dsc_search_results(
+                    split_dir, dsc_search_results
+                ):
+                    split_dir = split_dir.parent / f"{split_dir.name}_{counter}"
+                    counter = counter + 1
+
                 dsc_search_results.append(
                     DSCSearchResult(
-                        arch=Arch(arch),
-                        artifact=dsc_path,
-                        split_dir=output_dir
-                        / "split_symbols"
-                        / f"{ota_meta.version}_{ota_meta.build}_{arch}",
+                        arch=Arch(arch), artifact=dsc_path, split_dir=split_dir
                     )
                 )
 
@@ -459,21 +482,14 @@ def find_dsc(
         raise OtaExtractError(
             f"Couldn't find any {DYLD_SHARED_CACHE} paths in {input_dir}"
         )
-    elif len(dsc_search_results) > 1:
-        printable_paths = "\n".join(
-            [str(result.artifact) for result in dsc_search_results]
-        )
-        raise OtaExtractError(
-            f"Found more than one {DYLD_SHARED_CACHE} path in"
-            f" {input_dir}:\n{printable_paths}"
-        )
 
-    return dsc_search_results[0]
+    return dsc_search_results
 
 
 def symsort(dsc_split_dir: Path, output_dir: Path, prefix: str, bundle_id: str) -> None:
     logger.info(f"\t\t\tSymsorting {dsc_split_dir} to {output_dir}")
 
+    rmdir_if_exists(output_dir)
     result = subprocess.run(
         [
             "./symsorter",
@@ -609,7 +625,7 @@ class OtaExtract:
                     # we only "handle" OtaExtractError as something where we can go on, all
                     # other exceptions should just stop the symbol-extraction process.
                     sentry_sdk.capture_exception(e)
-                    logger.warning(f"Failed to extract symbols from {key}: {ota}")
+                    logger.warning(f"Failed to extract symbols from {ota}: {e}")
                     # also need to mark failing cases, because otherwise they will fail again
                     ota.processing_state = (
                         ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
@@ -668,9 +684,9 @@ class OtaExtract:
         ota_meta: OtaArtifact,
         output_dir: Path,
     ) -> None:
-        split_dir = split_dsc(find_dsc(input_dir, ota_meta, output_dir))
+        split_dirs = split_dsc(find_dsc(input_dir, ota_meta, output_dir))
 
-        self.symsort_split_results(split_dir, ota_meta_key, ota_meta, output_dir)
+        self.symsort_split_results(split_dirs, ota_meta_key, ota_meta, output_dir)
 
     def process_cryptex_dmg(
         self,
@@ -681,27 +697,28 @@ class OtaExtract:
     ) -> None:
         mount = mount_dmg(extracted_dmgs["cryptex-system-arm64e"])
 
-        split_dir = split_dsc(find_dsc(mount.point, ota_meta, output_dir))
+        split_dirs = split_dsc(find_dsc(mount.point, ota_meta, output_dir))
 
         detach_dev(mount.dev)
 
-        self.symsort_split_results(split_dir, ota_meta_key, ota_meta, output_dir)
+        self.symsort_split_results(split_dirs, ota_meta_key, ota_meta, output_dir)
 
     def symsort_split_results(
         self,
-        split_dir: Path,
+        split_dirs: list[Path],
         ota_meta_key: str,
         ota_meta: OtaArtifact,
         output_dir: Path,
     ) -> None:
-        bundle_id = f"ota_{ota_meta_key}"
-        symbols_output_dir = output_dir / "symbols" / bundle_id
-        symsort(
-            split_dir,
-            symbols_output_dir,
-            ota_meta.platform,
-            bundle_id,
-        )
-        self.storage.upload_symbols(
-            symbols_output_dir, ota_meta_key, ota_meta, bundle_id
-        )
+        for split_dir in split_dirs:
+            bundle_id = f"ota_{ota_meta_key}"
+            symbols_output_dir = output_dir / "symbols" / bundle_id
+            symsort(
+                split_dir,
+                symbols_output_dir,
+                ota_meta.platform,
+                bundle_id,
+            )
+            self.storage.upload_symbols(
+                symbols_output_dir, ota_meta_key, ota_meta, bundle_id
+            )
