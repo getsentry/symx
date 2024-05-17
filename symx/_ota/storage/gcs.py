@@ -39,6 +39,8 @@ def download_and_hydrate_meta(blob: Blob) -> tuple[OtaMetaData, int]:
         for k, v in json.load(f.file).items():
             result[k] = OtaArtifact(**v)
 
+    if generation is None:
+        generation = 0
     return result, generation
 
 
@@ -149,12 +151,12 @@ class OtaGcsStorage(OtaStorage):
         raise RuntimeError("Failed to update meta-data item")
 
     def upload_symbols(
-        self, input_dir: Path, ota_key: str, ota_meta: OtaArtifact, bundle_id: str
+        self, input_dir: Path, ota_meta_key: str, ota_meta: OtaArtifact, bundle_id: str
     ) -> None:
         upload_symbol_binaries(self.bucket, ota_meta.platform, bundle_id, input_dir)
         ota_meta.processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
         ota_meta.update_last_run()
-        self.update_meta_item(ota_key, ota_meta)
+        self.update_meta_item(ota_meta_key, ota_meta)
 
 
 def init_storage(storage: str) -> OtaGcsStorage | None:

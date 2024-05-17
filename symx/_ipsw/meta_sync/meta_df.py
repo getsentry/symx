@@ -1,4 +1,3 @@
-# mypy: ignore-errors
 import json
 
 import pandas as pd
@@ -46,24 +45,24 @@ def main() -> None:
             df[(df["processing_state"] == "symbols_extracted")]
             .groupby(["platform", "version", "build"])
             .size()
-            .reset_index(name="counts")
+            .reset_index(name="counts")  # pyright: ignore[reportCallIssue]
         )
         print(
             df[(df["platform"] == "watchOS")]
             .groupby(["version", "build", "processing_state"])
             .size()
-            .reset_index(name="counts")
+            .reset_index(name="counts")  # pyright: ignore[reportCallIssue]
         )
         print(
             df[(df["platform"] == "tvOS")]
             .groupby(["version", "build", "processing_state"])
             .size()
-            .reset_index(name="counts")
+            .reset_index(name="counts")  # pyright: ignore[reportCallIssue]
         )
         print(
             df.groupby(["platform", "processing_state"])
             .size()
-            .reset_index(name="counts")
+            .reset_index(name="counts")  # pyright: ignore[reportCallIssue]
         )
         print(
             df.groupby(["platform", "processing_state"]).agg(

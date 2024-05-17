@@ -89,6 +89,7 @@ class IpswExtractor:
         return None
 
     def run(self) -> Path:
+        split_dir = self.processing_dir / "split_out"
         if self.artifact.platform == IpswPlatform.MACOS:
             # all macOS IPSWs have dyld_shared_caches for both architectures
             # TODO: figure out from which version this starts to be true

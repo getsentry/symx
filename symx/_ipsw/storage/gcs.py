@@ -168,6 +168,9 @@ class IpswGcsStorage:
                     )
         else:
             meta_db, generation = IpswArtifactDb(), 0
+
+        if generation is None:
+            generation = 0
         return blob, meta_db, generation
 
     def artifact_iter(

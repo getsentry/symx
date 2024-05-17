@@ -219,16 +219,17 @@ def download_url_to_file(url: str, filepath: Path) -> None:
     with open(filepath, "wb") as f:
         actual = 0
         last_print = 0.0
+        actual_mib = actual / MiB
         for chunk in res.iter_content(chunk_size=8192):
             f.write(chunk)
             actual = actual + len(chunk)
 
             actual_mib = actual / MiB
-            if actual_mib - last_print > 100:
+            if actual_mib - last_print > 100.0:
                 logger.debug(f"{floor(actual_mib)} MiB")
                 last_print = actual_mib
 
-    logger.debug(f"{floor(actual_mib)} MiB")
+        logger.debug(f"{floor(actual_mib)} MiB")
 
 
 def compare_md5_hash(local_file: Path, remote_blob: Blob) -> bool:
