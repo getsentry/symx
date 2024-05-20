@@ -16,6 +16,6 @@ def migrate(storage: OtaGcsStorage) -> None:
         if ota.platform == "macos" and ota.processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED:
             print(f"{key}: {ota}")
 
-            ota.processing_state = ArtifactProcessingState.MIRRORED
-            ota.update_last_run()
-            storage.update_meta_item(key, ota)
+            # ota.processing_state = ArtifactProcessingState.MIRRORED
+            # ota.update_last_run()
+            # storage.update_meta_item(key, ota)
