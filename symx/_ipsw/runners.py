@@ -134,7 +134,7 @@ def _source_post_mirror_condition(source: IpswSource) -> bool:
     )
 
 
-def _post_mirrored_filter(
+def _post_mirrored_filter(  # pyright: ignore [reportUnusedFunction]
     artifacts: Iterable[IpswArtifact],
 ) -> Sequence[IpswArtifact]:
     return [

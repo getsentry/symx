@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 
 from google.cloud.exceptions import PreconditionFailed
-from google.cloud.storage import Blob, Client, Bucket  # type: ignore[import-untyped]
+from google.cloud.storage import Blob, Client, Bucket
 
 from symx._common import (
     DataClassJSONEncoder,
@@ -109,6 +109,10 @@ class OtaGcsStorage(OtaStorage):
         self.update_meta_item(ota_meta_key, ota_meta)
 
     def load_ota(self, ota: OtaArtifact, download_dir: Path) -> Path | None:
+        if ota.download_path is None:
+            logger.error("The OTA does not have a mirror path")
+            return None
+
         blob = self.bucket.blob(ota.download_path)
         local_ota_path = download_dir / f"{ota.id}.zip"
         if not blob.exists():

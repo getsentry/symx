@@ -54,7 +54,7 @@ class AppleDbSource(BaseModel):
     size: int | None = None
 
     @field_validator("size")
-    def size_must_be_a_positive_int(cls, v: int) -> int:
+    def size_must_be_a_positive_int(cls, v: int | None) -> int:
         if v is None:
             raise ValueError("We expect size to be not None")
         if v < 0:

@@ -19,7 +19,7 @@ from urllib.parse import ParseResult, urlparse
 
 import requests
 import sentry_sdk
-from google.cloud.storage import Blob, Bucket  # type: ignore[import-untyped]
+from google.cloud.storage import Blob, Bucket
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +152,7 @@ DEVICE_ROW_RE = re.compile(
 def ipsw_device_list() -> list[Device]:
     result = subprocess.run(["ipsw", "device-list"], capture_output=True, check=True)
     data_start = False
-    device_list = []
+    device_list: list[Device] = []
     for line in result.stdout.decode("utf-8").splitlines():
         if data_start:
             match = DEVICE_ROW_RE.match(line)
@@ -305,9 +305,9 @@ def upload_symbol_binaries(bucket: Bucket, platform: str, bundle_id: str, binary
 
     duplicate_count = 0
     new_count = 0
-    upload_tasks = []
+    upload_tasks: list[tuple[Path, Path, Bucket]] = []
 
-    for root, dirs, files in os.walk(binary_dir):
+    for root, _, files in os.walk(binary_dir):
         for file in files:
             local_file = Path(root) / file
             dest_blob_name = dest_blob_prefix / Path(root).relative_to(binary_dir) / file

@@ -6,7 +6,7 @@ from typing import Tuple, Iterator, Iterable, Callable, Sequence
 
 import sentry_sdk
 from google.cloud.exceptions import PreconditionFailed
-from google.cloud.storage import Blob, Bucket, Client  # type: ignore[import-untyped]
+from google.cloud.storage import Blob, Bucket, Client
 
 from symx._common import (
     ArtifactProcessingState,
@@ -71,24 +71,24 @@ class IpswGcsStorage:
     def load_artifacts_meta(self) -> Blob:
         artifacts_meta_blob = self.bucket.blob(ARTIFACTS_META_JSON)
         if artifacts_meta_blob.exists():
-            artifacts_meta_blob.download_to_filename(self.local_artifacts_meta)
+            artifacts_meta_blob.download_to_filename(str(self.local_artifacts_meta))
         return artifacts_meta_blob
 
     def load_import_state(self) -> Blob:
         import_state_blob = self.bucket.blob(IMPORT_STATE_JSON)
         if import_state_blob.exists():
-            import_state_blob.download_to_filename(self.local_import_state)
+            import_state_blob.download_to_filename(str(self.local_import_state))
         return import_state_blob
 
     def store_artifacts_meta(self, artifacts_meta_blob: Blob) -> None:
         artifacts_meta_blob.upload_from_filename(
-            self.local_artifacts_meta,
+            str(self.local_artifacts_meta),
             if_generation_match=artifacts_meta_blob.generation,
         )
 
     def store_import_state(self, import_state_blob: Blob) -> None:
         import_state_blob.upload_from_filename(
-            self.local_import_state,
+            str(self.local_import_state),
             if_generation_match=import_state_blob.generation,
         )
 
@@ -174,7 +174,7 @@ class IpswGcsStorage:
         :param filter_fun: a callable that expects some artifacts and returns a filtered list based on some condition
         """
         while True:
-            meta_blob, meta_db, generation = self.refresh_artifacts_db()
+            _, meta_db, _ = self.refresh_artifacts_db()
             if len(meta_db.artifacts) == 0:
                 logger.error("No artifacts in IPSW meta-data.")
                 return
@@ -190,6 +190,10 @@ class IpswGcsStorage:
 
     def download_ipsw(self, ipsw_source: IpswSource) -> Path | None:
         logger.info(f"Downloading source {ipsw_source.file_name}")
+        if ipsw_source.mirror_path is None:
+            logger.error("Attempting to download IPSW without mirror path.")
+            return None
+
         blob = self.bucket.blob(ipsw_source.mirror_path)
         local_ipsw_path = self.local_dir / ipsw_source.file_name
         if not blob.exists():

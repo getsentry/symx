@@ -181,7 +181,7 @@ def retrieve_current_meta() -> OtaMetaData:
     return meta
 
 
-def merge_lists(a: list[str], b: list[str]) -> list[str]:
+def merge_lists(a: list[str] | None, b: list[str] | None) -> list[str]:
     if a is None:
         a = []
     if b is None:
@@ -258,7 +258,7 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
             ours[their_key] = their_item
 
             # identify and mark beta <-> normal release duplicates
-            for our_k, our_v in ours.items():
+            for _, our_v in ours.items():
                 if (
                     their_item.hash == our_v.hash
                     and their_item.hash_algorithm == our_v.hash_algorithm
@@ -353,7 +353,7 @@ class MountInfo:
 
 
 def patch_cryptex_dmg(artifact: Path, output_dir: Path) -> dict[str, Path]:
-    dmg_files = {}
+    dmg_files: dict[str, Path] = {}
     result = subprocess.run(
         ["ipsw", "ota", "patch", str(artifact), "--output", str(output_dir)],
         capture_output=True,
@@ -368,7 +368,7 @@ def patch_cryptex_dmg(artifact: Path, output_dir: Path) -> dict[str, Path]:
 
 
 def find_system_os_dmgs(search_dir: Path) -> list[Path]:
-    result = []
+    result: list[Path] = []
     for artifact in glob.iglob(str(search_dir) + "/**/SystemOS/*.dmg", recursive=True):
         result.append(Path(artifact))
     return result

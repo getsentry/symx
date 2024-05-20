@@ -23,7 +23,7 @@ def main() -> None:
             for source in sources_json:
                 if source["hashes"] is None:
                     source["hashes"] = {"sha1": None, "sha2": None}
-            normalized = pd.json_normalize(sources_json)  # pyright: ignore[reportArgumentType]
+            normalized = pd.json_normalize(sources_json)
             if normalized.empty:
                 continue
 
@@ -41,23 +41,21 @@ def main() -> None:
             df[(df["processing_state"] == "symbols_extracted")]
             .groupby(["platform", "version", "build"])
             .size()
-            .reset_index(name="counts")  # pyright: ignore[reportCallIssue]
+            .reset_index(name="counts")
         )
         print(
             df[(df["platform"] == "watchOS")]
             .groupby(["version", "build", "processing_state"])
             .size()
-            .reset_index(name="counts")  # pyright: ignore[reportCallIssue]
+            .reset_index(name="counts")
         )
         print(
             df[(df["platform"] == "tvOS")]
             .groupby(["version", "build", "processing_state"])
             .size()
-            .reset_index(name="counts")  # pyright: ignore[reportCallIssue]
+            .reset_index(name="counts")
         )
-        print(
-            df.groupby(["platform", "processing_state"]).size().reset_index(name="counts")  # pyright: ignore[reportCallIssue]
-        )
+        print(df.groupby(["platform", "processing_state"]).size().reset_index(name="counts"))
         print(
             df.groupby(["platform", "processing_state"]).agg(
                 counts=(
