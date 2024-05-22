@@ -1,5 +1,9 @@
 {
-  "strict": ["symx/**"],
+  "strict": [
+    "symx/**"
+  ],
   "stubPath": "typings",
-  "ignore": ["symx/_ipsw/meta_sync/meta_df.py"]
+  "ignore": [
+    "symx/_ipsw/meta_sync/meta_df.py"
+  ]
 }
