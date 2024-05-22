@@ -262,6 +262,8 @@ class AppleDbIpswImport:
         for item in sorted(platform_items, key=_folder_sort_key, reverse=True):
             if item["type"] == "dir":
                 folder_name = item["name"]
+                if folder_name in ["0x - Classic"]:
+                    continue
                 self.state.folder_hash = item["sha"]
                 sentry_sdk.set_tag("ipsw.import.appledb.folder_hash", self.state.folder_hash)
                 sentry_sdk.set_tag("ipsw.import.appledb.folder_name", folder_name)
