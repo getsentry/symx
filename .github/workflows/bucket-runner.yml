@@ -27,8 +27,16 @@ jobs:
       id-token: 'write'
 
     steps:
-      - name: Init gcloud
-        uses: ./.github/actions/init-gcloud
+      - name: Auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/868781662168/locations/global/workloadIdentityPools/prod-github/providers/github-oidc-pool
+          service_account: symx-downloader@sac-prod-sa.iam.gserviceaccount.com
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          version: ">= 363.0.0"
 
       - name: ${{ inputs.bucket_step }}
         run: ${{ inputs.buket_run }}
