@@ -8,7 +8,7 @@ concurrency: ipsw_extract
 
 jobs:
   call-reusable-workflow:
-    uses: ./.github/workflows/symx/runner/macos.yml
+    uses: ./.github/workflows/symx-runner-macos.yml
     with:
       job_name: Extract IPSW symbols
       symx_step: IPSW Extract

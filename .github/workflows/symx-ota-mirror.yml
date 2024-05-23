@@ -8,7 +8,7 @@ concurrency: ota_mirror
 
 jobs:
   call-reusable-workflow:
-    uses: ./.github/workflows/symx/runner/ubuntu.yml
+    uses: ./.github/workflows/symx-runner-ubuntu.yml
     with:
       job_name: Mirror OTA images
       symx_step: OTA Mirror

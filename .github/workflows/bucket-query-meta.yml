@@ -5,7 +5,7 @@ on:
 
 jobs:
   call-reusable-workflow:
-    uses: ./.github/workflows/bucket/runner.yml
+    uses: ./.github/workflows/bucket-runner.yml
     with:
       job_name: 'Query the meta-data store'
       bucket_step: 'Render meta-data'

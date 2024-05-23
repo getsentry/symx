@@ -10,7 +10,7 @@ on:
 
 jobs:
   call-reusable-workflow:
-    uses: ./.github/workflows/bucket/runner.yml
+    uses: ./.github/workflows/bucket-runner.yml
     with:
       job_name: 'List bucket contents'
       bucket_step: 'List bucket contents'

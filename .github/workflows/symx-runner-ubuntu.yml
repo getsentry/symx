@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Init workflow
-        uses: ./.github/actions/init_symx.yml
+        uses: ./.github/actions/init-symx
 
       - name: Install dependencies
         run: |
