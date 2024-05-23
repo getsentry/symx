@@ -15,7 +15,7 @@ on:
 
 jobs:
   symx-on-ubuntu:
-    name: ${{ input.job_name }}
+    name: ${{ inputs.job_name }}
     runs-on: "ubuntu-22.04"
     permissions:
       contents: "read"
@@ -53,8 +53,8 @@ jobs:
           sudo cp AppleIncRootCertificate.crt /usr/local/share/ca-certificates
           sudo update-ca-certificates
 
-      - name: ${{ input.symx_step }}
-        run: ${{ input.symx_run }}
+      - name: ${{ inputs.symx_step }}
+        run: ${{ inputs.symx_run }}
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
