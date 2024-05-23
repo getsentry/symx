@@ -1,0 +1,44 @@
+name: symx on macOS
+
+on:
+  workflow_call:
+    inputs:
+      job_name:
+        required: true
+        type: string
+      symx_step:
+        required: true
+        type: string
+      symx_run:
+        required: true
+        type: string
+
+jobs:
+  symx-macos-job:
+    name: ${{ inputs.job_name }}
+    runs-on: "macos-13"
+    permissions:
+      contents: "read"
+      id-token: "write"
+
+    steps:
+      - name: Init workflow
+        uses: ./.github/actions/init-symx
+
+      - name: Install dependencies
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          export PATH="/Users/runner/.local/bin:$PATH"
+          poetry --version
+          poetry install
+          brew install blacktop/tap/ipsw
+          curl -L https://github.com/getsentry/symbolicator/releases/latest/download/symsorter-Darwin-universal > symsorter
+          chmod +x symsorter
+          pwd
+          ls -la
+
+      - name: ${{ inputs.symx_step }}
+        run: ${{ inputs.symx_run }}
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

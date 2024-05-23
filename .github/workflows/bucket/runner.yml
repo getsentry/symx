@@ -1,0 +1,40 @@
+name: bucket runner
+
+on:
+  workflow_call:
+    inputs:
+      job_name:
+        required: true
+        type: string
+      bucket_step:
+        required: true
+        type: string
+      bucket_run:
+        required: true
+        type: string
+      upload_name:
+        required: false
+        type: string
+      upload_path:
+        required: false
+        type: string
+jobs:
+  list-bucket-contents:
+    name: ${{ inputs.job_name }}
+    runs-on: 'ubuntu-22.04'
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+      - name: Init gcloud
+        uses: ./.github/actions/init-gcloud
+
+      - name: ${{ inputs.bucket_step }}
+        run: ${{ inputs.buket_run }}
+
+      - uses: actions/upload-artifact@v3
+        if: ${{ inputs.upload_name && inputs.upload_path }}
+        with:
+          name: ${{ inputs.upload_name }}
+          path: ${{ inputs.upload_path }}

@@ -1,0 +1,16 @@
+name: 'Query meta-data'
+
+on:
+  workflow_dispatch:
+
+jobs:
+  call-reusable-workflow:
+    uses: ./.github/workflows/bucket/runner.yml
+    with:
+      job_name: 'Query the meta-data store'
+      bucket_step: 'Render meta-data'
+      bucket_run: |
+        gcloud storage cp ${{ vars.SYMX_STORE }}/ota_image_meta.json .
+        cat ota_image_meta.json | jq
+      upload_name: ota-image-meta
+      upload_path: ota_image_meta.json

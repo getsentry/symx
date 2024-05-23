@@ -1,0 +1,19 @@
+name: 'Copy bucket contents'
+
+on:
+  workflow_dispatch:
+    inputs:
+      gs_cli_parameters:
+        description: 'gcloud storage cp parameters'
+        required: true
+        default: 'some_file'
+
+jobs:
+  call-reusable-workflow:
+    uses: ./.github/workflows/bucket/runner.yml
+    with:
+      job_name: 'Copy bucket contents'
+      bucket_step: 'Copy bucket contents'
+      bucket_run: 'gcloud storage cp ${{ vars.SYMX_STORE }}/${{ github.event.inputs.gs_cli_parameters }} bucket.file'
+      upload_name: downloaded-bucket-file
+      upload_path: bucket.file

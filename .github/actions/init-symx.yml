@@ -1,0 +1,15 @@
+name: 'Init symx workflow action'
+description: 'Runs all init steps common between Ubuntu and macOS symx workflows'
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout sources
+      uses: actions/checkout@v4
+
+    - name: Init gcloud
+      uses: ./.github/actions/init-gcloud
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"

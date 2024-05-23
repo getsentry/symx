@@ -1,0 +1,17 @@
+name: 'Remove bucket contents'
+
+on:
+  workflow_dispatch:
+    inputs:
+      gs_cli_parameters:
+        description: 'gcloud storage rm parameters'
+        required: true
+        default: 'gs://sentryio-symx-symbols-0//var/**'
+
+jobs:
+  call-reusable-workflow:
+    uses: ./.github/workflows/bucket/runner.yml
+    with:
+      job_name: 'Remove bucket contents'
+      bucket_step: 'Remove bucket contents'
+      bucket_run: 'gcloud storage rm ${{ github.event.inputs.gs_cli_parameters }}'
