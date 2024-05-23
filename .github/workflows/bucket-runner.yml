@@ -39,7 +39,7 @@ jobs:
           version: ">= 363.0.0"
 
       - name: ${{ inputs.bucket_step }}
-        run: ${{ inputs.buket_run }}
+        run: ${{ inputs.bucket_run }}
 
       - uses: actions/upload-artifact@v4
         if: ${{ inputs.upload_name && inputs.upload_path }}
