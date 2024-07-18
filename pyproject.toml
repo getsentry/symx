@@ -9,7 +9,7 @@ license = "MIT"
 [tool.poetry.dependencies]
 python = "^3.11"
 typer = { extras = ["all"], version = "^0.9" }
-sentry-sdk = "^1.27"
+sentry-sdk = "^2.8"
 google-cloud-storage = "^2.10"
 pydantic = "^2.0"
 pandas = "^2.1"
