@@ -1,8 +1,6 @@
 import argparse
 import base64
-import dataclasses
 import hashlib
-import json
 import logging
 import os
 import re
@@ -14,7 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from math import floor
 from pathlib import Path
-from typing import Any, List
+from typing import List
 from urllib.parse import ParseResult, urlparse
 
 import requests
@@ -95,13 +93,6 @@ class Device:
             return self.product[:-2]
 
         return self.product
-
-
-class DataClassJSONEncoder(json.JSONEncoder):
-    def default(self, o: Any) -> Any:
-        if dataclasses.is_dataclass(o):
-            return dataclasses.asdict(o)
-        return super().default(o)
 
 
 def directory_arg_type(path: str) -> Path:

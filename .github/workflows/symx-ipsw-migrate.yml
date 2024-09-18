@@ -9,3 +9,4 @@ jobs:
       job_name: Migrate IPSW storage
       symx_step: IPSW migrate-storage
       symx_run: symx -v ipsw migrate -s ${{ vars.SYMX_STORE }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
