@@ -9,4 +9,3 @@ jobs:
       job_name: Migrate OTA storage
       symx_step: OTA migrate-storage
       symx_run: symx -v ota migrate-storage -s ${{ vars.SYMX_STORE }}
-      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}

@@ -12,9 +12,6 @@ on:
       symx_run:
         required: true
         type: string
-      SENTRY_DSN:
-        required: true
-        type: string
 
 jobs:
   symx-ubuntu-job:
@@ -42,7 +39,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
@@ -60,5 +57,5 @@ jobs:
       - name: ${{ inputs.symx_step }}
         run: ${{ inputs.symx_run }}
         env:
-          SENTRY_DSN: ${{ input.SENTRY_DSN }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

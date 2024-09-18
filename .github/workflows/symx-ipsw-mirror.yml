@@ -13,4 +13,3 @@ jobs:
       job_name: IPSW mirror
       symx_step: IPSW mirror
       symx_run: symx -v ipsw mirror -t 315 -s ${{ vars.SYMX_STORE }}
-      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}

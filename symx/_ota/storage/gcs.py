@@ -7,6 +7,7 @@ from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Client, Bucket
 
 from symx._common import (
+    DataClassJSONEncoder,
     ArtifactProcessingState,
     compare_md5_hash,
     parse_gcs_url,
@@ -30,8 +31,8 @@ def convert_image_name_to_path(old_name: str) -> str:
     return f"mirror/ota/{platform}/{version}/{build}/{file}"
 
 
-def download_and_hydrate_meta(blob: Blob) -> tuple[dict[str, OtaArtifact], int]:
-    result: dict[str, OtaArtifact] = {}
+def download_and_hydrate_meta(blob: Blob) -> tuple[OtaMetaData, int]:
+    result: OtaMetaData = {}
     with tempfile.NamedTemporaryFile() as f:
         blob.download_to_filename(f.name)
         generation = blob.generation
@@ -62,14 +63,13 @@ class OtaGcsStorage(OtaStorage):
             else:
                 ours, generation_match_precondition = {}, 0
 
-            merge_meta_data(ours, theirs.artifacts)
-            our_meta = OtaMetaData(artifacts=ours)
+            merge_meta_data(ours, theirs)
             try:
                 blob.upload_from_string(
-                    our_meta.model_dump_json(),
+                    json.dumps(ours, cls=DataClassJSONEncoder),
                     if_generation_match=generation_match_precondition,
                 )
-                return our_meta
+                return ours
             except PreconditionFailed:
                 retry = retry - 1
 
@@ -83,7 +83,7 @@ class OtaGcsStorage(OtaStorage):
             logger.warning("Failed to load meta-data")
             return None
 
-        return OtaMetaData(artifacts=ours)
+        return ours
 
     def save_ota(self, ota_meta_key: str, ota_meta: OtaArtifact, ota_file: Path) -> None:
         if not ota_file.is_file():
@@ -139,13 +139,12 @@ class OtaGcsStorage(OtaStorage):
                 ours, generation_match_precondition = {}, 0
 
             ours[ota_meta_key] = ota_meta
-            our_meta = OtaMetaData(artifacts=ours)
             try:
                 blob.upload_from_string(
-                    our_meta.model_dump_json(),
+                    json.dumps(ours, cls=DataClassJSONEncoder),
                     if_generation_match=generation_match_precondition,
                 )
-                return our_meta
+                return ours
             except PreconditionFailed:
                 retry = retry - 1
 
