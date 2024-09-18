@@ -126,11 +126,12 @@ def parse_download_meta_output(
         platform_meta = json.loads(result.stdout)
         for meta_item in platform_meta:
             url = meta_item["url"]
+            sentry_sdk.set_tag("artifact.url", url)
             zip_id_start_idx = url.rfind("/") + 1
             zip_id = url[zip_id_start_idx:-4]
             # zip ids are either SHA1 (40 hex digits) or SHA256 (64 hex digits)
             if len(zip_id) not in (40, 64):
-                logger.error(f"Parsing download meta: unexpected url-format in {meta_item}")
+                logger.error(f"Parsing download meta: unexpected url-format")
 
             if "description" in meta_item:
                 desc = [meta_item["description"]]
