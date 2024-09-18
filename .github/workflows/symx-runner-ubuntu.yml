@@ -12,6 +12,9 @@ on:
       symx_run:
         required: true
         type: string
+    secrets:
+      SENTRY_DSN:
+        required: true
 
 jobs:
   symx-ubuntu-job:
