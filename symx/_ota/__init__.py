@@ -131,7 +131,7 @@ def parse_download_meta_output(
             zip_id = url[zip_id_start_idx:-4]
             # zip ids are either SHA1 (40 hex digits) or SHA256 (64 hex digits)
             if len(zip_id) not in (40, 64):
-                logger.error(f"Parsing download meta: unexpected url-format")
+                logger.error("Parsing download meta: unexpected url-format")
 
             if "description" in meta_item:
                 desc = [meta_item["description"]]
