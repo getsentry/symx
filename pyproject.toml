@@ -7,7 +7,7 @@ readme = "README.md"
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "3.12"
+python = "^3.12"
 typer = { version = "0.12.5", extras = ["all"] }
 sentry-sdk = "2.13"
 google-cloud-storage = "2.18.2"
