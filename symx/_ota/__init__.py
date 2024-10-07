@@ -223,17 +223,28 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
             ours[their_key].description = merge_lists(our_item.description, their_item.description)
             ours[their_key].devices = merge_lists(our_item.devices, their_item.devices)
 
-            # If we have differing build but all other values that contribute to identity are the same, then we have
-            # a duplicate that requires a corresponding duplicate key. Another option would be to merge the builds
-            # and have them as an array of a single meta-data item, but that wouldn't really help with the identity
-            # back-refs from the store (or any other identity resolution that goes beyond that). For our purposes we
-            # should treat this as a separate artifact where we append to the key so that the key-prefix is
-            # maintained and set the processing state to INDEXED_DUPLICATE.
+            # If we have
+            # - a differing build or
+            # - a differing url
+            # but all other values that contribute to identity are the same then we have a duplicate that requires a
+            # corresponding duplicate key.
+            #
+            # Another option would be to merge the builds and have them as an array of a single meta-data item, but that
+            # wouldn't really help with the identity back-refs from the store (or any other identity resolution that
+            # goes beyond that). For our purposes we should treat this as a separate artifact where we append to the key
+            # so that the key-prefix is maintained and set the processing state to INDEXED_DUPLICATE.
             if (
                 their_item.build != our_item.build
                 and their_item.version == our_item.version
                 and their_item.platform == our_item.platform
                 and their_item.url == our_item.url
+                and their_item.hash == our_item.hash
+                and their_item.hash_algorithm == our_item.hash_algorithm
+            ) or (
+                their_item.url != our_item.url
+                and their_item.build == our_item.build
+                and their_item.version == our_item.version
+                and their_item.platform == our_item.platform
                 and their_item.hash == our_item.hash
                 and their_item.hash_algorithm == our_item.hash_algorithm
             ):
