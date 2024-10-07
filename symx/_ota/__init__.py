@@ -8,11 +8,11 @@ import subprocess
 import tempfile
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
 import sentry_sdk
+from pydantic import BaseModel
 
 from symx._common import (
     Arch,
@@ -41,8 +41,7 @@ PLATFORMS = [
 ARTIFACTS_META_JSON = "ota_image_meta.json"
 
 
-@dataclass
-class OtaArtifact:
+class OtaArtifact(BaseModel):
     build: str
     description: list[str]
     version: str
@@ -68,7 +67,11 @@ class OtaArtifact:
         self.last_run = github_run_id()
 
 
-OtaMetaData = dict[str, OtaArtifact]
+OtaArtifactStore = dict[str, OtaArtifact]
+
+
+class OtaMetaData(BaseModel):
+    artifacts: OtaArtifactStore
 
 
 class OtaStorage(ABC):
@@ -113,7 +116,7 @@ class OtaMirrorError(Exception):
 def parse_download_meta_output(
     platform: str,
     result: subprocess.CompletedProcess[bytes],
-    meta_data: OtaMetaData,
+    meta_data: OtaArtifactStore,
     beta: bool,
 ) -> None:
     if result.returncode != 0:
@@ -161,7 +164,7 @@ def parse_download_meta_output(
 
 
 def retrieve_current_meta() -> OtaMetaData:
-    meta: OtaMetaData = {}
+    meta: OtaArtifactStore = {}
     for platform in PLATFORMS:
         logger.info(f"Downloading meta for {platform}")
         cmd = [
@@ -180,7 +183,7 @@ def retrieve_current_meta() -> OtaMetaData:
         beta_cmd.append("--beta")
         parse_download_meta_output(platform, subprocess.run(beta_cmd, capture_output=True), meta, True)
 
-    return meta
+    return OtaMetaData(artifacts=meta)
 
 
 def merge_lists(a: list[str] | None, b: list[str] | None) -> list[str]:
@@ -191,7 +194,7 @@ def merge_lists(a: list[str] | None, b: list[str] | None) -> list[str]:
     return list(set(a + b))
 
 
-def generate_duplicate_key_from(ours: OtaMetaData, their_key: str) -> str:
+def generate_duplicate_key_from(ours: OtaArtifactStore, their_key: str) -> str:
     duplicate_num = 1
     key_candidate = f"{their_key}_duplicate_{duplicate_num}"
 
@@ -202,7 +205,7 @@ def generate_duplicate_key_from(ours: OtaMetaData, their_key: str) -> str:
     return key_candidate
 
 
-def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
+def merge_meta_data(ours: OtaArtifactStore, theirs: OtaArtifactStore) -> None:
     """
     This function is at the core of the whole thing:
         - What meta-data does Apple consider as identity?
@@ -301,7 +304,7 @@ def set_sentry_artifact_tags(key: str, ota: OtaArtifact) -> None:
 class OtaMirror:
     def __init__(self, storage: OtaStorage) -> None:
         self.storage = storage
-        self.meta: OtaMetaData = {}
+        self.meta = OtaMetaData(artifacts={})
 
     def update_meta(self) -> None:
         logger.debug("Updating OTA meta-data")
@@ -316,7 +319,7 @@ class OtaMirror:
         with tempfile.TemporaryDirectory() as download_dir:
             key: str
             ota: OtaArtifact
-            for key, ota in self.meta.items():
+            for key, ota in self.meta.artifacts.items():
                 if int(time.time() - start) > timeout.seconds:
                     logger.info(f"Exiting OTA mirror due to elapsed timeout of {timeout}")
                     return
@@ -340,15 +343,13 @@ class OtaMirror:
 DYLD_SHARED_CACHE = "dyld_shared_cache"
 
 
-@dataclass(frozen=True)
-class DSCSearchResult:
+class DSCSearchResult(BaseModel):
     arch: Arch
     artifact: Path
     split_dir: Path
 
 
-@dataclass(frozen=True)
-class MountInfo:
+class MountInfo(BaseModel):
     dev: str
     id: str
     point: Path
@@ -378,7 +379,7 @@ def find_system_os_dmgs(search_dir: Path) -> list[Path]:
 
 def parse_hdiutil_mount_output(cmd_output: str) -> MountInfo:
     mount_info = cmd_output.splitlines().pop().split()
-    return MountInfo(mount_info[0], mount_info[1], Path(mount_info[2]))
+    return MountInfo(dev=mount_info[0], id=mount_info[1], point=Path(mount_info[2]))
 
 
 class OtaExtractError(Exception):
@@ -529,7 +530,7 @@ def iter_mirror(storage: OtaStorage) -> Iterator[tuple[str, OtaArtifact]]:
             logger.error("Could not retrieve meta-data from storage.")
             return
 
-        for key, ota in ota_meta.items():
+        for key, ota in ota_meta.artifacts.items():
             if ota.is_mirrored():
                 logger.debug(f"Found mirrored OTA: {key}")
                 mirrored_key = key
@@ -548,7 +549,7 @@ def iter_mirror(storage: OtaStorage) -> Iterator[tuple[str, OtaArtifact]]:
 class OtaExtract:
     def __init__(self, storage: OtaStorage) -> None:
         self.storage = storage
-        self.meta: OtaMetaData = {}
+        self.meta: OtaMetaData = OtaMetaData(artifacts={})
 
     def extract(self, timeout: datetime.timedelta) -> None:
         validate_shell_deps()

@@ -12,7 +12,7 @@ def migrate(storage: OtaGcsStorage) -> None:
         logger.error("Could not retrieve meta-data from storage.")
         return
 
-    for key, ota in ota_meta.items():
+    for key, ota in ota_meta.artifacts.items():
         if ota.platform == "macos" and ota.processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED:
             print(f"{key}: {ota}")
 
