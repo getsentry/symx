@@ -1,3 +1,6 @@
+# os stuff
+.DS_Store
+
 # dev tools
 __pycache__
 .mypy_cache
