@@ -1,21 +1,21 @@
 [tool.poetry]
 name = "symx"
 version = "0.1.0"
-description = ""
-authors = ["Ashley Camba Garrido <ashwoods@gmail.com>"]
+description = "Symbol collection for apple platforms."
+authors = ["Mischan Toosarani-Hausberger <mischan@abovevacant.com>", "Ashley Camba Garrido <ashwoods@gmail.com>"]
 readme = "README.md"
 license = "MIT"
 
 [tool.poetry.dependencies]
 python = "^3.12"
 typer = { version = "0.12.5", extras = ["all"] }
-sentry-sdk = "2.15.0"
+sentry-sdk = "2.16.0"
 google-cloud-storage = "2.18.2"
-pydantic = "2.8.2"
-pandas = "2.2.2"
+pydantic = "2.9.2"
+pandas = "2.2.3"
 
 [tool.poetry.group.dev.dependencies]
-pyright = "1.1.383"
+pyright = "1.1.384"
 ruff = "0.6.9"
 pytest = "8.3.3"
 
