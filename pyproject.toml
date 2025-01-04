@@ -1,30 +1,27 @@
-[tool.poetry]
+[project]
+authors = [
+    {name = "Mischan Toosarani-Hausberger", email = "mischan@abovevacant.com"},
+]
+license = {text = "MIT"}
+requires-python = "<4.0,>=3.12"
+dependencies = [
+    "typer[all]==0.12.5",
+    "sentry-sdk==2.16.0",
+    "google-cloud-storage==2.18.2",
+    "pydantic==2.9.2",
+    "pandas==2.2.3",
+]
 name = "symx"
-version = "0.1.0"
+version = "0.2.0"
 description = "Symbol collection for apple platforms."
-authors = ["Mischan Toosarani-Hausberger <mischan@abovevacant.com>", "Ashley Camba Garrido <ashwoods@gmail.com>"]
 readme = "README.md"
-license = "MIT"
 
-[tool.poetry.dependencies]
-python = "^3.12"
-typer = { version = "0.12.5", extras = ["all"] }
-sentry-sdk = "2.16.0"
-google-cloud-storage = "2.18.2"
-pydantic = "2.9.2"
-pandas = "2.2.3"
-
-[tool.poetry.group.dev.dependencies]
-pyright = "1.1.384"
-ruff = "0.6.9"
-pytest = "8.3.3"
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
-
-[tool.poetry.scripts]
-symx = "symx:app"
+[dependency-groups]
+dev = [
+    "pyright==1.1.391",
+    "ruff==0.8.4",
+    "pytest==8.3.4",
+]
 
 [tool.ruff]
 target-version = "py312"

@@ -5,19 +5,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
       - name: Install dependencies
         run: |
-          curl -sSL https://install.python-poetry.org | python3 -
-          poetry install
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "PATH=/Users/runner/.local/bin:$PATH" >> $GITHUB_ENV
+      - name: uv version
+        run: uv --version
+      - name: uv sync
+        run: uv sync
       - name: ruff
-        run: poetry run ruff check symx
+        run: uv run ruff check symx
       - name: ruff format
-        run: poetry run ruff format --check
-      - name: mypy
-        run: poetry run pyright
+        run: uv run ruff format --check
+      - name: pyright
+        run: uv run pyright
       - name: pytest
-        run: poetry run pytest
+        run: uv run pytest

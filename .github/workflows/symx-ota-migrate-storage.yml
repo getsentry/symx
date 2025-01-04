@@ -8,6 +8,6 @@ jobs:
     with:
       job_name: Migrate OTA storage
       symx_step: OTA migrate-storage
-      symx_run: symx -v ota migrate-storage -s ${{ vars.SYMX_STORE }}
+      symx_run: uv run python -m symx -v ota migrate-storage -s ${{ vars.SYMX_STORE }}
     secrets:
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}

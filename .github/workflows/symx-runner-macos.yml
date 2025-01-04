@@ -19,7 +19,7 @@ on:
 jobs:
   symx-macos-job:
     name: ${{ inputs.job_name }}
-    runs-on: "macos-14"
+    runs-on: "macos-15"
     permissions:
       contents: "read"
       id-token: "write"
@@ -39,17 +39,13 @@ jobs:
         with:
           version: ">= 363.0.0"
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Install dependencies
         run: |
-          curl -sSL https://install.python-poetry.org | python3 -
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "PATH=/Users/runner/.local/bin:$PATH" >> $GITHUB_ENV
           export PATH="/Users/runner/.local/bin:$PATH"
-          poetry --version
-          poetry install
+          uv --version
+          uv sync
           brew install blacktop/tap/ipsw
           curl -L https://github.com/getsentry/symbolicator/releases/latest/download/symsorter-Darwin-universal > symsorter
           chmod +x symsorter

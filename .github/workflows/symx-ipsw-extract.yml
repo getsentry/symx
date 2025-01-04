@@ -12,8 +12,6 @@ jobs:
     with:
       job_name: Extract IPSW symbols
       symx_step: IPSW Extract
-      symx_run: |
-          export PATH="/Users/runner/.local/bin:$PATH"
-          poetry run symx -v ipsw extract -t 315 -s ${{ vars.SYMX_STORE }}
+      symx_run: uv python run -m symx -v ipsw extract -t 315 -s ${{ vars.SYMX_STORE }}
     secrets:
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
