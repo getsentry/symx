@@ -12,6 +12,6 @@ jobs:
     with:
       job_name: Sync IPSW meta
       symx_step: IPSW meta-sync
-      symx_run: uv python run -m symx -v ipsw meta-sync -s ${{ vars.SYMX_STORE }}
+      symx_run: -v ipsw meta-sync -s ${{ vars.SYMX_STORE }}
     secrets:
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}

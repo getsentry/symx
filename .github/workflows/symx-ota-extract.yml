@@ -12,6 +12,6 @@ jobs:
     with:
       job_name: Extract OTA symbols
       symx_step: OTA Extract
-      symx_run: uv run python -m symx -v ota extract -t 330 -s ${{ vars.SYMX_STORE }}
+      symx_run: -v ota extract -t 330 -s ${{ vars.SYMX_STORE }}
     secrets:
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
