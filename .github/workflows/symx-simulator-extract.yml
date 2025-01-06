@@ -1,0 +1,51 @@
+name: Extract GHA Simulator
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron:  '0 4 * * *'
+
+concurrency:
+  group: symx-extract-gha-simulator
+  cancel-in-progress: false
+
+jobs:
+  symx-macos-job:
+    runs-on: ${{matrix.runs-on}}
+    strategy:
+      fail-fast: false
+      matrix:
+        runs-on: [ macos-13, macos-14, macos-15 ]
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/868781662168/locations/global/workloadIdentityPools/prod-github/providers/github-oidc-pool
+          service_account: symx-downloader@sac-prod-sa.iam.gserviceaccount.com
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          version: ">= 363.0.0"
+
+      - name: Install dependencies
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "PATH=/Users/runner/.local/bin:$PATH" >> $GITHUB_ENV
+          export PATH="/Users/runner/.local/bin:$PATH"
+          uv --version
+          uv sync
+          brew install blacktop/tap/ipsw
+          curl -L https://github.com/getsentry/symbolicator/releases/latest/download/symsorter-Darwin-universal > symsorter
+          chmod +x symsorter
+          pwd
+          ls -la
+
+      - name: Extract Simulator from ${{matrix.runs-on}}
+        run: uv run python -m symx -v simulator extract -s ${{ vars.SYMX_STORE }}
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
