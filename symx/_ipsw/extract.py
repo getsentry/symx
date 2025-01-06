@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 import logging
 
-from symx._common import Arch, symsort
+from symx._common import Arch, symsort, dyld_split
 from symx._ipsw.common import IpswArtifact, IpswSource, IpswPlatform
 
 logger = logging.getLogger(__name__)
@@ -129,10 +129,8 @@ class IpswExtractor:
         else:
             split_dir_arch = split_dir
 
-        result = subprocess.run(
-            ["ipsw", "dyld", "split", dsc_root_file, "--output", split_dir_arch],
-            capture_output=True,
-        )
+        result = dyld_split(dsc_root_file, split_dir_arch)
+
         # we have very limited space on the GHA runners, so get rid of processed input data
         shutil.rmtree(extract_dir)
 

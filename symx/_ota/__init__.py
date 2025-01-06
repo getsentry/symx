@@ -24,6 +24,7 @@ from symx._common import (
     list_dirs_in,
     rmdir_if_exists,
     symsort as common_symsort,
+    dyld_split,
 )
 
 logger = logging.getLogger(__name__)
@@ -401,17 +402,7 @@ def split_dsc(search_result: list[DSCSearchResult]) -> list[Path]:
     split_dirs: list[Path] = []
     for result_item in search_result:
         logger.info(f"\t\tSplitting {DYLD_SHARED_CACHE} of {result_item.artifact}")
-        result = subprocess.run(
-            [
-                "ipsw",
-                "dyld",
-                "split",
-                str(result_item.artifact),
-                "--output",
-                str(result_item.split_dir),
-            ],
-            capture_output=True,
-        )
+        result = dyld_split(result_item.artifact, result_item.split_dir)
         if result.returncode != 0:
             logger.warning(f"Split for {result_item.artifact} (arch: {result_item.arch} failed:" f" {result}")
         else:

@@ -1,17 +1,14 @@
-from pathlib import Path
-
-import typer
-
 import logging
 import os
-import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List
 
+import typer
 
-from symx._common import symsort
+from symx._common import symsort, dyld_split
 
 sim_app = typer.Typer()
 
@@ -23,7 +20,7 @@ class SimulatorRuntime:
     macos_version: str
     os_name: str
     os_version: str
-    path: str
+    path: Path
 
     @property
     def bundle_id(self) -> str:
@@ -85,7 +82,7 @@ def find_simulator_runtimes(caches_path: str) -> List[SimulatorRuntime]:
             os_info = splits[4].split("-")
             os_version = ".".join(os_info[1:3])
             os_name = os_info[0].lower()
-            path = os.path.join(caches_path, macos_version, sim_runtime_name)
+            path = Path(caches_path) / macos_version / sim_runtime_name
             for filename in os.listdir(path):
                 if not filename.startswith(_dyld_shared_cache_prefix):
                     continue
@@ -111,8 +108,11 @@ def extract_system_symbols(runtime: SimulatorRuntime, output_dir: Path) -> None:
         if os.path.splitext(filename)[1] == ".map":
             continue
         with tempfile.TemporaryDirectory(prefix="_sentry_dyld_output") as dsc_out_dir:
-            full_path = os.path.join(runtime.path, filename)
-            subprocess.check_call(["dyld-shared-cache-extractor", full_path, dsc_out_dir])
+            full_path = runtime.path / filename
+            split_result = dyld_split(full_path, Path(dsc_out_dir))
+            if split_result.returncode != 0:
+                raise RuntimeError(f"Failed to split dyld shared cache {full_path}")
+
             symsort_result = symsort(output_dir, runtime.os_name, runtime.bundle_id, Path(dsc_out_dir))
             if symsort_result.returncode == 0:
                 logging.info(f"Extracted symbols for {symsort_result.stdout.decode()}")
