@@ -23,6 +23,7 @@ from symx._common import (
     try_download_url_to_file,
     list_dirs_in,
     rmdir_if_exists,
+    symsort as common_symsort,
 )
 
 logger = logging.getLogger(__name__)
@@ -467,20 +468,7 @@ def symsort(dsc_split_dir: Path, output_dir: Path, prefix: str, bundle_id: str) 
     logger.info(f"\t\t\tSymsorting {dsc_split_dir} to {output_dir}")
 
     rmdir_if_exists(output_dir)
-    result = subprocess.run(
-        [
-            "./symsorter",
-            "-zz",
-            "-o",
-            output_dir,
-            "--prefix",
-            prefix,
-            "--bundle-id",
-            bundle_id,
-            dsc_split_dir,
-        ],
-        capture_output=True,
-    )
+    result = common_symsort(output_dir, prefix, bundle_id, dsc_split_dir)
     if result.returncode != 0:
         raise OtaExtractError(f"Symsorter failed with {result}")
 

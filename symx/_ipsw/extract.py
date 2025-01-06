@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 import logging
 
-from symx._common import Arch
+from symx._common import Arch, symsort
 from symx._ipsw.common import IpswArtifact, IpswSource, IpswPlatform
 
 logger = logging.getLogger(__name__)
@@ -145,20 +145,7 @@ class IpswExtractor:
         output_dir = self.processing_dir / "symbols"
         logger.info(f"\t\t\tSymsorting {split_dir} to {output_dir}")
 
-        result = subprocess.run(
-            [
-                "./symsorter",
-                "-zz",
-                "-o",
-                output_dir,
-                "--prefix",
-                self.prefix,
-                "--bundle-id",
-                self.bundle_id,
-                split_dir,
-            ],
-            capture_output=True,
-        )
+        result = symsort(output_dir, self.prefix, self.bundle_id, split_dir)
 
         # we have very limited space on the GHA runners, so get rid of processed input data
         shutil.rmtree(split_dir)

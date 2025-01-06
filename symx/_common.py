@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from math import floor
 from pathlib import Path
+from subprocess import CompletedProcess
 from typing import Any, List
 from urllib.parse import ParseResult, urlparse
 
@@ -387,3 +388,20 @@ def list_dirs_in(dir_path: Path) -> List[Path]:
 def rmdir_if_exists(dir_path: Path) -> None:
     if dir_path.exists() and dir_path.is_dir():
         shutil.rmtree(dir_path)
+
+
+def symsort(output_dir: Path, prefix: str, bundle_id: str, split_dir: Path) -> CompletedProcess[bytes]:
+    return subprocess.run(
+        [
+            "./symsorter",
+            "-zz",
+            "-o",
+            output_dir,
+            "--prefix",
+            prefix,
+            "--bundle-id",
+            bundle_id,
+            split_dir,
+        ],
+        capture_output=True,
+    )

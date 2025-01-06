@@ -7,12 +7,14 @@ import typer
 from ._common import github_run_id
 from ._ipsw.app import ipsw_app
 from ._ota.app import ota_app
+from ._sim.app import sim_app
 
 SENTRY_DSN = os.environ.get("SENTRY_DSN", None)
 
 app = typer.Typer()
 app.add_typer(ota_app, name="ota")
 app.add_typer(ipsw_app, name="ipsw")
+app.add_typer(sim_app, name="sim")
 
 
 @app.callback()
