@@ -48,7 +48,7 @@ jobs:
           ls -la
 
       - name: Extract Simulator from ${{matrix.runs-on}}
-        run: uv run python -m symx -v simulator extract -s ${{ vars.SYMX_STORE }}
+        run: uv run python -m symx -v sim extract -s ${{ vars.SYMX_STORE }}
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
