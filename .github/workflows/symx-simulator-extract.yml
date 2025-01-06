@@ -1,4 +1,4 @@
-name: Extract GHA Simulator
+name: Extract GHA Simulator symbols
 on:
   workflow_dispatch:
   # schedule:
@@ -11,6 +11,9 @@ concurrency:
 jobs:
   symx-macos-job:
     runs-on: ${{matrix.runs-on}}
+    permissions:
+      contents: "read"
+      id-token: "write"
     strategy:
       fail-fast: false
       matrix:
