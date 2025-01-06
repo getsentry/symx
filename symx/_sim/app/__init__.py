@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import List
 
 import typer
+from google.cloud.storage import Client, Bucket
 
-from symx._common import symsort, dyld_split
+from symx._common import symsort, dyld_split, upload_symbol_binaries, parse_gcs_url
 
 sim_app = typer.Typer()
 
@@ -24,7 +25,7 @@ class SimulatorRuntime:
 
     @property
     def bundle_id(self) -> str:
-        return f"simulator_{self.macos_version}_{self.os_version}_{self.build_number}_{self.arch}"
+        return f"sim_{self.macos_version}_{self.os_version}_{self.build_number}_{self.arch}"
 
 
 _simulator_runtime_prefix = "com.apple.CoreSimulator.SimRuntime."
@@ -44,6 +45,13 @@ def extract(
     """
     Extract symbols from Simulator images to storage
     """
+    # todo: move this out to a storage class including meta-data
+    uri = parse_gcs_url(storage)
+    if uri is None or uri.hostname is None:
+        return None
+    client: Client = Client(project=uri.username)
+    bucket: Bucket = client.bucket(uri.hostname)
+
     caches_path = os.path.expanduser("~/Library/Developer/CoreSimulator/Caches/dyld")
     if not os.path.isdir(caches_path):
         sys.exit(f"{caches_path} does not exist")
@@ -66,7 +74,7 @@ def extract(
                 )
                 extract_system_symbols(runtime, Path(output_dir))
 
-        # upload_to_gcs(output_dir)
+            upload_symbol_binaries(bucket, runtime.os_name, runtime.bundle_id, Path(output_dir))
 
 
 def find_simulator_runtimes(caches_path: str) -> List[SimulatorRuntime]:
