@@ -56,19 +56,14 @@ def extract(
     if not os.path.isdir(caches_path):
         sys.exit(f"{caches_path} does not exist")
 
-    with tempfile.TemporaryDirectory(prefix="_sentry_dyld_shared_cache_") as output_dir:
-        for runtime in find_simulator_runtimes(caches_path):
+    for runtime in find_simulator_runtimes(caches_path):
+        with tempfile.TemporaryDirectory(prefix="_sentry_dyld_shared_cache_") as output_dir:
             for filename in os.listdir(runtime.path):
                 if not filename.startswith(_dyld_shared_cache_prefix):
                     continue
-                if os.path.splitext(filename)[1] == ".map":
+                if os.path.splitext(filename)[1] in (".map", ".dylddata"):
                     continue
                 runtime.arch = filename.split(_dyld_shared_cache_prefix)[1]
-                # if has_symbols_in_cloud_storage(runtime.os_name, runtime.bundle_id):
-                #     logging.info(
-                #         f"Already have symbols for {runtime.os_name} {runtime.os_version} {runtime.arch} from macOS {runtime.macos_version}, skipping"
-                #     )
-                #     continue
                 logging.info(
                     f"Extracting symbols for macOS {runtime.macos_version}, {runtime.os_name} {runtime.os_version} {runtime.arch}"
                 )
@@ -113,7 +108,7 @@ def extract_system_symbols(runtime: SimulatorRuntime, output_dir: Path) -> None:
     for filename in os.listdir(runtime.path):
         if not filename.startswith(_dyld_shared_cache_prefix):
             continue
-        if os.path.splitext(filename)[1] == ".map":
+        if os.path.splitext(filename)[1] in (".map", ".dylddata"):
             continue
         with tempfile.TemporaryDirectory(prefix="_sentry_dyld_output") as dsc_out_dir:
             full_path = runtime.path / filename
