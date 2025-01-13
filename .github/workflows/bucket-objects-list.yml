@@ -1,0 +1,17 @@
+name: 'List bucket objects'
+
+on:
+  workflow_dispatch:
+    inputs:
+      gs_cli_parameters:
+        description: 'gcloud storage objects list parameters'
+        required: true
+        default: '"gs://sentryio-symx-symbols-0/symbols/ios/**/refs/**" --filter="_18." --format="value(name)"'
+
+jobs:
+  call-reusable-workflow:
+    uses: ./.github/workflows/bucket-runner.yml
+    with:
+      job_name: 'List bucket contents'
+      bucket_step: 'List bucket contents'
+      bucket_run: 'gcloud storage objects list ${{ github.event.inputs.gs_cli_parameters }} '
