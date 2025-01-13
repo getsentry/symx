@@ -1,8 +1,8 @@
 name: Extract GHA Simulator symbols
 on:
   workflow_dispatch:
-  # schedule:
-  #   - cron:  '0 4 * * *'
+  schedule:
+    - cron:  '0 4 * * *'
 
 concurrency:
   group: symx-extract-gha-simulator
