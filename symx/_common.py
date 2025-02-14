@@ -409,13 +409,6 @@ def symsort(output_dir: Path, prefix: str, bundle_id: str, split_dir: Path) -> C
 
 def dyld_split(dsc: Path, output_dir: Path) -> CompletedProcess[bytes]:
     return subprocess.run(
-        [
-            "ipsw",
-            "dyld",
-            "split",
-            str(dsc),
-            "--output",
-            str(output_dir),
-        ],
+        ["ipsw", "dyld", "split", str(dsc), "--output", str(output_dir)],
         capture_output=True,
     )
