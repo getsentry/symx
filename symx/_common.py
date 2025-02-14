@@ -272,11 +272,11 @@ def _fs_md5_hash(file_path: Path) -> str:
 def parse_gcs_url(storage: str) -> ParseResult | None:
     uri = urlparse(storage)
     if uri.scheme != "gs":
-        print('[bold red]Unsupported "--storage" URI-scheme used:[/bold red] currently' ' symx supports "gs://" only')
+        print('[bold red]Unsupported "--storage" URI-scheme used:[/bold red] currently symx supports "gs://" only')
         return None
 
     if not uri.hostname:
-        print("[bold red]You must supply at least a bucket-name for the GCS storage[/bold" " red]")
+        print("[bold red]You must supply at least a bucket-name for the GCS storage[/bold red]")
         return None
     return uri
 
@@ -289,7 +289,7 @@ def upload_file(local_file: Path, dest_blob_name: Path, bucket: Bucket) -> bool:
         # which contains a mismatching symbol table. this is a big assumption, and we should probably
         # cross-check the symbols between the debug-id-equal binaries of each artifact. but this if is
         # not that place.
-        logger.info(f"{local_file} exists in symbol-store at {dest_blob_name}. Continue" " with next.")
+        logger.info(f"{local_file} exists in symbol-store at {dest_blob_name}. Continue with next.")
         return False
 
     blob.upload_from_filename(str(local_file), num_retries=10)
@@ -302,7 +302,7 @@ def upload_symbol_binaries(bucket: Bucket, platform: str, bundle_id: str, binary
     bundle_index_path = dest_blob_prefix / platform / "bundles" / bundle_id
     blob = bucket.blob(str(bundle_index_path))
     if blob.exists():
-        logger.warning(f"We already have a `bundle_id` {bundle_id} for {platform} in" " the symbol store. ")
+        logger.warning(f"We already have a `bundle_id` {bundle_id} for {platform} in the symbol store. ")
 
     duplicate_count = 0
     new_count = 0

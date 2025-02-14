@@ -109,7 +109,7 @@ class IpswGcsStorage:
             # without uploading and only update meta, since that means some meta is still set to INDEXED instead
             # of MIRRORED. On the other hand, if the hashes differ, then we have a problem and should be getting out
             if not compare_md5_hash(ipsw_file, blob):
-                logger.error("Trying to upload IPSW that already exists in mirror with a" " different MD5")
+                logger.error("Trying to upload IPSW that already exists in mirror with a different MD5")
                 artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORING_FAILED
                 return artifact
         else:

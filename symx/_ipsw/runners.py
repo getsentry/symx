@@ -88,7 +88,7 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
             # 2.) Check whether source should be extracted
             sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
             if source.processing_state != ArtifactProcessingState.MIRRORED:
-                logger.info(f"Bypassing {source.link} because it isn't ready to extract or" " already extracted")
+                logger.info(f"Bypassing {source.link} because it isn't ready to extract or already extracted")
                 continue
 
             # 3.) Download IPSW from mirror. If failing update meta-data.
@@ -116,9 +116,7 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: datetime.timedelta) -> None:
                 artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
             except Exception as e:
                 sentry_sdk.capture_exception(e)
-                logger.warning(
-                    f"Symbol extraction failed, updating meta-data and continuing with" f" the next one: {e}"
-                )
+                logger.warning(f"Symbol extraction failed, updating meta-data and continuing with the next one: {e}")
                 artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
             finally:
                 artifact.sources[source_idx].update_last_run()
@@ -150,7 +148,8 @@ debug_ids = [
     "0001c0bfa2f33d9296db19bd209ac343",
     "0001d954479e3ec0aed87f73ce677049",
     "0002785259ea3a72aea32ae3b7f525a3",
-    "0003699da58e315382d002aafded16a9" "0003d1791a9830e4a9fd9757f79825a0",
+    "0003699da58e315382d002aafded16a9",
+    "0003d1791a9830e4a9fd9757f79825a0",
     "000548e4e937331c8e9110b0fb410293",
     "0006cd8495ca3423bacc5f42b99df7f7",
     "000850f64408392ebba76c8b2354e1a0",

@@ -265,9 +265,7 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
                 and their_item.hash == our_item.hash
                 and their_item.hash_algorithm == our_item.hash_algorithm
             ):
-                raise RuntimeError(
-                    "Matching keys with different value:\n\tlocal:" f" {our_item}\n\tapple: {their_item}"
-                )
+                raise RuntimeError(f"Matching keys with different value:\n\tlocal: {our_item}\n\tapple: {their_item}")
         else:
             # it is a new key, store their item in our store
             ours[their_key] = their_item
@@ -404,7 +402,7 @@ def split_dsc(search_result: list[DSCSearchResult]) -> list[Path]:
         logger.info(f"\t\tSplitting {DYLD_SHARED_CACHE} of {result_item.artifact}")
         result = dyld_split(result_item.artifact, result_item.split_dir)
         if result.returncode != 0:
-            logger.warning(f"Split for {result_item.artifact} (arch: {result_item.arch} failed:" f" {result}")
+            logger.warning(f"Split for {result_item.artifact} (arch: {result_item.arch} failed: {result}")
         else:
             logger.debug(f"\t\t\tResult from split: {result}")
             split_dirs.append(result_item.split_dir)
@@ -587,7 +585,7 @@ class OtaExtract:
             extracted_dmgs = patch_cryptex_dmg(local_ota, Path(cryptex_patch_dir))
             if len(extracted_dmgs) != 0:
                 logger.info(
-                    "\tCryptex patch successful. Mount, split, symsorting" f" {DYLD_SHARED_CACHE} for: {local_ota}"
+                    f"\tCryptex patch successful. Mount, split, symsorting {DYLD_SHARED_CACHE} for: {local_ota}"
                 )
                 self.process_cryptex_dmg(extracted_dmgs, ota_meta_key, ota_meta, work_dir)
                 # TODO: maybe instead of bool that should be a container of paths produced in work_dir

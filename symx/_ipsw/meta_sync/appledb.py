@@ -127,7 +127,7 @@ def random_user_agent() -> str:
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/604.1.38"
             " (KHTML, like Gecko) Version/11.0 Safari/604.1.38"
         ),
-        ("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:56.0) Gecko/20100101" " Firefox/56.0"),
+        ("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:56.0) Gecko/20100101 Firefox/56.0"),
         (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13) AppleWebKit/604.1.38 (KHTML,"
             " like Gecko) Version/11.0 Safari/604.1.38"
@@ -243,7 +243,7 @@ class AppleDbIpswImport:
             if response.status_code == 403 and "API rate limit exceeded" in github_response.message:
                 logger.warning(github_response.message)
             else:
-                logger.error(f"Failed github API GET-request: {response.status_code}," f" {github_response}")
+                logger.error(f"Failed github API GET-request: {response.status_code}, {github_response}")
             return None
 
         return response.content
@@ -307,7 +307,7 @@ class AppleDbIpswImport:
         response = requests.get(download_url, headers)
         self.file_request_count += 1
         if response.status_code != 200:
-            logger.error("Failed to download file contents:" f" {response.status_code}, {response.text}")
+            logger.error(f"Failed to download file contents: {response.status_code}, {response.text}")
             return
 
         try:
@@ -345,7 +345,7 @@ class AppleDbIpswImport:
             # differ... this should be easy to check with pydantic, but it might help to log
             # the diff with something like deepdiff
             logger.warning(
-                f"{artifact.key} already added\n\told =" f" {self.meta_db.get(artifact.key)}\n\tnew =" f" {artifact}"
+                f"{artifact.key} already added\n\told = {self.meta_db.get(artifact.key)}\n\tnew = {artifact}"
             )
         else:
             self.new_artifacts.append(artifact)
