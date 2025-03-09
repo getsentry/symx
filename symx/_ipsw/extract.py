@@ -139,11 +139,11 @@ class IpswExtractor:
 
         return split_dir
 
-    def _symsort(self, split_dir: Path) -> Path:
+    def _symsort(self, split_dir: Path, ignore_errors: bool = False) -> Path:
         output_dir = self.processing_dir / "symbols"
         logger.info(f"\t\t\tSymsorting {split_dir} to {output_dir}")
 
-        result = symsort(output_dir, self.prefix, self.bundle_id, split_dir)
+        result = symsort(output_dir, self.prefix, self.bundle_id, split_dir, ignore_errors)
 
         # we have very limited space on the GHA runners, so get rid of processed input data
         shutil.rmtree(split_dir)

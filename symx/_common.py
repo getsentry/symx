@@ -390,19 +390,27 @@ def rmdir_if_exists(dir_path: Path) -> None:
         shutil.rmtree(dir_path)
 
 
-def symsort(output_dir: Path, prefix: str, bundle_id: str, split_dir: Path) -> CompletedProcess[bytes]:
+def symsort(
+    output_dir: Path, prefix: str, bundle_id: str, split_dir: Path, ignore_errors: bool = False
+) -> CompletedProcess[bytes]:
+    symsorter_args = [
+        "./symsorter",
+        "-zz",
+        "-o",
+        output_dir,
+        "--prefix",
+        prefix,
+        "--bundle-id",
+        bundle_id,
+    ]
+
+    if ignore_errors:
+        symsorter_args.append("--ignore-errors")
+
+    symsorter_args.append(split_dir)
+
     return subprocess.run(
-        [
-            "./symsorter",
-            "-zz",
-            "-o",
-            output_dir,
-            "--prefix",
-            prefix,
-            "--bundle-id",
-            bundle_id,
-            split_dir,
-        ],
+        symsorter_args,
         capture_output=True,
     )
 
