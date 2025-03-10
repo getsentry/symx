@@ -153,10 +153,6 @@ def migrate(ipsw_storage: IpswGcsStorage) -> None:
         if release_span > timedelta(days=180):
             continue
 
-        # we're only interested in releases and release candidates
-        if artifact.release_status != IpswReleaseStatus.RELEASE:
-            continue
-
         logger.info(f"Processing {artifact.key}")
         sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
 
