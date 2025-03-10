@@ -123,6 +123,7 @@ class IpswExtractor:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             bufsize=1,
+            text=True,
         )
 
         # read mount-output until we get the mount-point
@@ -131,7 +132,7 @@ class IpswExtractor:
             line = mount_proc.stdout.readline()
             if not line:
                 break
-            mount_point_match = mount_point_re.match(line.decode("utf-8"))
+            mount_point_match = mount_point_re.match(line)
             if not mount_point_match:
                 continue
 
