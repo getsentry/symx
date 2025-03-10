@@ -11,7 +11,7 @@ from symx._common import (
     validate_shell_deps,
     try_download_url_to_file,
 )
-from symx._ipsw.common import IpswArtifact, IpswSource, IpswReleaseStatus
+from symx._ipsw.common import IpswArtifact, IpswSource
 from symx._ipsw.extract import IpswExtractor
 from symx._ipsw.meta_sync.appledb import AppleDbIpswImport
 from symx._ipsw.mirror import verify_download
@@ -160,8 +160,6 @@ def migrate(ipsw_storage: IpswGcsStorage) -> None:
             logger.info(f"\t{source.file_name} ({source.processing_state})")
             sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
 
-            artifact.sources[source_idx].processing_state = (
-                ArtifactProcessingState.MIRRORED
-            )
+            artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
             artifact.sources[source_idx].update_last_run()
             ipsw_storage.update_meta_item(artifact)
