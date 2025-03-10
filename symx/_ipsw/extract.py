@@ -1,4 +1,7 @@
+import os
+import re
 import shutil
+import signal
 import subprocess
 from pathlib import Path
 import logging
@@ -7,6 +10,8 @@ from symx._common import Arch, symsort, dyld_split
 from symx._ipsw.common import IpswArtifact, IpswSource, IpswPlatform
 
 logger = logging.getLogger(__name__)
+
+mount_point_re = re.compile(r".*Press Ctrl\+C to unmount '(.*)'")
 
 
 # TODO: there is good chance that we should split the extractor into separate classes based on at least platform
@@ -34,7 +39,10 @@ class IpswExtractor:
 
         self.ipsw_path = ipsw_path
 
-    def _ipsw_extract(self, arch: Arch | None = None) -> Path | None:
+    def symbols_dir(self) -> Path:
+        return self.processing_dir / "symbols"
+
+    def _ipsw_extract_dsc(self, arch: Arch | None = None) -> Path | None:
         command: list[str] = [
             "ipsw",
             "extract",
@@ -62,11 +70,6 @@ class IpswExtractor:
                 ipsw_output = stdout.decode("utf-8")
                 logger.debug(f"ipsw output: {ipsw_output}")
                 raise TimeoutError("IPSW extraction timed out and was terminated.")
-            finally:
-                # we have very limited space on the GHA runners, so get rid of the source artifact ASAP,
-                # but we have to keep the IPSW in case we are extracting multiple architectures
-                if arch is None:
-                    self.ipsw_path.unlink()
 
             if process.returncode != 0:
                 error_msg = stderr.decode("utf-8")
@@ -83,34 +86,65 @@ class IpswExtractor:
         return None
 
     def run(self) -> Path:
+        self._symsort_dsc()
+        self._symsort_sys_image()
+        self.ipsw_path.unlink()
+        _log_directory_contents(self.symbols_dir())
+
+        return self.symbols_dir()
+
+    def _symsort_dsc(self):
         split_dir = self.processing_dir / "split_out"
         if self.artifact.platform == IpswPlatform.MACOS:
             # all macOS IPSWs have dyld_shared_caches for both architectures
-            # TODO: figure out from which version this starts to be true
             for arch in [Arch.ARM64E, Arch.X86_64]:
-                extract_dir = self._ipsw_extract(arch)
+                extract_dir = self._ipsw_extract_dsc(arch)
                 if extract_dir is None:
                     raise IpswExtractError("Couldn't find IPSW dyld_shared_cache extraction directory")
                 _log_directory_contents(extract_dir)
                 split_dir = self._ipsw_split(extract_dir, arch)
                 _log_directory_contents(split_dir)
 
-            # after all architectures have been extracted, we can delete the IPSW to free up some space
-            self.ipsw_path.unlink()
-
             # We accumulate each architecture as a sub-dir in split_dir and let symsorter process them together
         else:
-            extract_dir = self._ipsw_extract()
+            extract_dir = self._ipsw_extract_dsc()
             if extract_dir is None:
                 raise IpswExtractError("Couldn't find IPSW dyld_shared_cache extraction directory")
             _log_directory_contents(extract_dir)
             split_dir = self._ipsw_split(extract_dir)
             _log_directory_contents(split_dir)
+        self._symsort(split_dir)
+        # we have very limited space on the GHA runners, so get rid of processed input data
+        shutil.rmtree(split_dir)
 
-        symbols_dir = self._symsort(split_dir)
-        _log_directory_contents(symbols_dir)
+    def _symsort_sys_image(self):
+        # mount the sys image (the process waits for sigint)
+        mount_proc = subprocess.Popen(
+            ["ipsw", "mount", "sys", str(self.ipsw_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+        )
 
-        return symbols_dir
+        # read mount-output until we get the mount-point
+        mount_point = None
+        while mount_proc.stdout:
+            line = mount_proc.stdout.readline()
+            if not line:
+                break
+            mount_point_match = mount_point_re.match(line.decode("utf-8"))
+            if not mount_point_match:
+                continue
+
+            mount_point = Path(mount_point_match.group(1))
+            break
+
+        # symsort the entire sys mount-point
+        if mount_point:
+            self._symsort(mount_point, ignore_errors=True)
+
+        # SIGINT the mount process
+        os.kill(mount_proc.pid, signal.SIGINT)
 
     def _ipsw_split(self, extract_dir: Path, arch: Arch | None = None) -> Path:
         dsc_root_file = None
@@ -139,19 +173,14 @@ class IpswExtractor:
 
         return split_dir
 
-    def _symsort(self, split_dir: Path, ignore_errors: bool = False) -> Path:
-        output_dir = self.processing_dir / "symbols"
+    def _symsort(self, split_dir: Path, ignore_errors: bool = False):
+        output_dir = self.symbols_dir()
         logger.info(f"\t\t\tSymsorting {split_dir} to {output_dir}")
 
         result = symsort(output_dir, self.prefix, self.bundle_id, split_dir, ignore_errors)
 
-        # we have very limited space on the GHA runners, so get rid of processed input data
-        shutil.rmtree(split_dir)
-
         if result.returncode != 0:
             raise IpswExtractError(f"Symsorter failed with {result}")
-
-        return output_dir
 
 
 class IpswExtractError(Exception):
