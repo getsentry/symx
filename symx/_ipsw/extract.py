@@ -1,4 +1,3 @@
-import os
 import re
 import shutil
 import signal
@@ -144,7 +143,7 @@ class IpswExtractor:
             self._symsort(mount_point, ignore_errors=True)
 
         # SIGINT the mount process
-        os.kill(mount_proc.pid, signal.SIGINT)
+        mount_proc.send_signal(signal.SIGINT)
 
     def _ipsw_split(self, extract_dir: Path, arch: Arch | None = None) -> Path:
         dsc_root_file = None
