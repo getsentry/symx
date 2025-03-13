@@ -1,7 +1,7 @@
 import logging
 import shutil
 import time
-from datetime import datetime, UTC, timedelta
+from datetime import timedelta
 from typing import Iterable, Sequence
 
 import sentry_sdk
@@ -142,24 +142,69 @@ def _post_mirrored_filter(  # pyright: ignore [reportUnusedFunction]
     ]
 
 
+sources = [
+    "UniversalMac_13.5_22G5072a_Restore.ipsw",
+    "UniversalMac_13.5_22G5059d_Restore.ipsw",
+    "UniversalMac_13.5_22G5048d_Restore.ipsw",
+    "UniversalMac_13.5_22G5038d_Restore.ipsw",
+    "UniversalMac_13.5_22G5027e_Restore.ipsw",
+    "UniversalMac_13.4.1_22F82_Restore.ipsw",
+    "UniversalMac_13.4_22F66_Restore.ipsw",
+    "UniversalMac_13.4_22F63_Restore.ipsw",
+    "UniversalMac_13.4_22F62_Restore.ipsw",
+    "UniversalMac_13.4_22F5059b_Restore.ipsw",
+    "UniversalMac_13.4_22F5049e_Restore.ipsw",
+    "UniversalMac_13.4_22F5037d_Restore.ipsw",
+    "UniversalMac_13.4_22F5027f_Restore.ipsw",
+    "UniversalMac_13.4.1_22F2083_Restore.ipsw",
+    "UniversalMac_13.4_22F2073_Restore.ipsw",
+    "UniversalMac_13.3_22E5246b_Restore.ipsw",
+    "UniversalMac_13.3_22E5236f_Restore.ipsw",
+    "UniversalMac_13.3_22E5230e_Restore.ipsw",
+    "UniversalMac_13.3_22E5219e_Restore.ipsw",
+    "UniversalMac_13.3.1_22E261_Restore.ipsw",
+    "UniversalMac_13.3_22E252_Restore.ipsw",
+    "UniversalMac_13.2.1_22D68_Restore.ipsw",
+    "UniversalMac_13.2_22D5038i_Restore.ipsw",
+    "UniversalMac_13.2_22D5027d_Restore.ipsw",
+    "UniversalMac_13.2_22D49_Restore.ipsw",
+    "UniversalMac_13.1_22C65_Restore.ipsw",
+    "UniversalMac_13.1_22C5059b_Restore.ipsw",
+    "UniversalMac_13.1_22C5050e_Restore.ipsw",
+    "UniversalMac_13.1_22C5044e_Restore.ipsw",
+    "UniversalMac_13.1_22C5033e_Restore.ipsw",
+    "UniversalMac_13.0_22A5373b_Restore.ipsw",
+    "UniversalMac_13.0_22A5365d_Restore.ipsw",
+    "UniversalMac_13.0_22A5358e_Restore.ipsw",
+    "UniversalMac_13.0_22A5352e_Restore.ipsw",
+    "UniversalMac_13.0_22A5342f_Restore.ipsw",
+    "UniversalMac_13.0_22A5331f_Restore.ipsw",
+    "UniversalMac_13.0_22A5321d_Restore.ipsw",
+    "UniversalMac_13.0_22A5311f_Restore.ipsw",
+    "UniversalMac_13.0_22A5295i_Restore.ipsw",
+    "UniversalMac_13.0_22A5295h_Restore.ipsw",
+    "UniversalMac_13.0_22A5286j_Restore.ipsw",
+    "UniversalMac_13.0_22A5266r_Restore.ipsw",
+    "UniversalMac_13.0.1_22A400_Restore.ipsw",
+    "UniversalMac_13.0_22A380_Restore.ipsw",
+    "UniversalMac_13.0_22A379_Restore.ipsw",
+    "UniversalMac_13.5_22G74_Restore.ipsw",
+    "UniversalMac_13.5_22G74_Restore.ipsw",
+    "UniversalMac_13.5.1_22G90_Restore.ipsw",
+    "UniversalMac_13.5.2_22G91_Restore.ipsw",
+    "UniversalMac_13.6_22G120_Restore.ipsw",
+]
+
+
 def migrate(ipsw_storage: IpswGcsStorage) -> None:
     _, meta_db, _ = ipsw_storage.refresh_artifacts_db()
 
     for artifact in meta_db.artifacts.values():
-        # was the artifact release within the last 180 days?
-        if artifact.released is None:
-            continue
-        release_span = datetime.now(UTC).date() - artifact.released
-        if release_span > timedelta(days=180):
-            continue
-
-        logger.info(f"Processing {artifact.key}")
-        sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
-
         for _, source in enumerate(artifact.sources):
-            logger.info(f"\t{source.file_name} ({source.processing_state})")
-            sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
+            if source.file_name in sources:
+                logger.info(f"\t{source.file_name} ({source.processing_state})")
+                sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
 
-            # artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
-            # artifact.sources[source_idx].update_last_run()
-            # ipsw_storage.update_meta_item(artifact)
+                # artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
+                # artifact.sources[source_idx].update_last_run()
+                # ipsw_storage.update_meta_item(artifact)
