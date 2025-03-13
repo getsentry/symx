@@ -143,7 +143,62 @@ def _post_mirrored_filter(  # pyright: ignore [reportUnusedFunction]
 
 
 sources = [
-    "UniversalMac_14.0_23A5257q_Restore.ipsw"
+    "UniversalMac_14.0_23A5286i_Restore.ipsw",
+    "UniversalMac_14.0_23A5286g_Restore.ipsw",
+    "UniversalMac_14.0_23A5276g_Restore.ipsw",
+    "UniversalMac_14.0_23A5301g_Restore.ipsw",
+    "UniversalMac_14.0_23A5301h_Restore.ipsw",
+    "UniversalMac_14.0_23A5312d_Restore.ipsw",
+    "UniversalMac_14.0_23A5328b_Restore.ipsw",
+    "UniversalMac_14.0_23A5337a_Restore.ipsw",
+    "UniversalMac_14.0_23A339_Restore.ipsw",
+    "UniversalMac_14.0_23A344_Restore.ipsw",
+    "UniversalMac_14.1_23B5046f_Restore.ipsw",
+    "UniversalMac_14.0_23A344_Restore.ipsw",
+    "UniversalMac_14.1_23B5056e_Restore.ipsw",
+    "UniversalMac_14.1_23B5067a_Restore.ipsw",
+    "UniversalMac_14.1_23B73_Restore.ipsw",
+    "UniversalMac_14.2_23C5030f_Restore.ipsw",
+    "UniversalMac_14.1_23B74_Restore.ipsw",
+    "UniversalMac_14.1_23B2077_Restore.ipsw",
+    "UniversalMac_14.1.1_23B81_Restore.ipsw",
+    "UniversalMac_14.1.1_23B2082_Restore.ipsw",
+    "UniversalMac_14.2_23C5041e_Restore.ipsw",
+    "UniversalMac_14.2_23C5047e_Restore.ipsw",
+    "UniversalMac_14.2_23C5055b_Restore.ipsw",
+    "UniversalMac_14.1.2_23B92_Restore.ipsw",
+    "UniversalMac_14.1.2_23B2091_Restore.ipsw",
+    "UniversalMac_14.2_23C63_Restore.ipsw",
+    "UniversalMac_14.2_23C64_Restore.ipsw",
+    "UniversalMac_14.2_23C64_Restore.ipsw",
+    "UniversalMac_14.3_23D5033f_Restore.ipsw",
+    "UniversalMac_14.2.1_23C71_Restore.ipsw",
+    "UniversalMac_14.3_23D5043d_Restore.ipsw",
+    "UniversalMac_14.3_23D5051b_Restore.ipsw",
+    "UniversalMac_14.3_23D56_Restore.ipsw",
+    "UniversalMac_14.3_23D56_Restore.ipsw",
+    "UniversalMac_14.4_23E5180j_Restore.ipsw",
+    "UniversalMac_14.4_23E5191e_Restore.ipsw",
+    "UniversalMac_14.3.1_23D60_Restore.ipsw",
+    "UniversalMac_14.4_23E5196e_Restore.ipsw",
+    "UniversalMac_14.4_23E5205c_Restore.ipsw",
+    "UniversalMac_14.4_23E5211a_Restore.ipsw",
+    "UniversalMac_14.4_23E214_Restore.ipsw",
+    "UniversalMac_14.4_23E214_Restore.ipsw",
+    "UniversalMac_14.5_23F5049f_Restore.ipsw",
+    "UniversalMac_14.4.1_23E224_Restore.ipsw",
+    "UniversalMac_14.5_23F5059e_Restore.ipsw",
+    "UniversalMac_14.5_23F5064f_Restore.ipsw",
+    "UniversalMac_14.5_23F5074a_Restore.ipsw",
+    "UniversalMac_14.5_23F79_Restore.ipsw",
+    "UniversalMac_14.5_23F79_Restore.ipsw",
+    "UniversalMac_14.6_23G5052d_Restore.ipsw",
+    "UniversalMac_14.6_23G5061b_Restore.ipsw",
+    "UniversalMac_14.6_23G5066c_Restore.ipsw",
+    "UniversalMac_14.6_23G5075b_Restore.ipsw",
+    "UniversalMac_14.6_23G80_Restore.ipsw",
+    "UniversalMac_14.6_23G80_Restore.ipsw",
+    "UniversalMac_14.6.1_23G93_Restore.ipsw",
 ]
 
 
@@ -156,7 +211,6 @@ def migrate(ipsw_storage: IpswGcsStorage) -> None:
                 logger.info(f"\t{source.file_name} ({source.processing_state})")
                 sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
 
-                # artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
-                artifact.sources[source_idx].processing_state = ArtifactProcessingState.INDEXED
+                artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
                 artifact.sources[source_idx].update_last_run()
                 ipsw_storage.update_meta_item(artifact)
