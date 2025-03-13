@@ -143,34 +143,7 @@ def _post_mirrored_filter(  # pyright: ignore [reportUnusedFunction]
 
 
 sources = [
-    "UniversalMac_12.5.1_21G83_Restore.ipsw",
-    "UniversalMac_12.5_21G72_Restore.ipsw",
-    "UniversalMac_12.5_21G69_Restore.ipsw",
-    "UniversalMac_12.5_21G5063a_Restore.ipsw",
-    "UniversalMac_12.5_21G5056b_Restore.ipsw",
-    "UniversalMac_12.5_21G5046c_Restore.ipsw",
-    "UniversalMac_12.5_21G5037d_Restore.ipsw",
-    "UniversalMac_12.5_21G5027d_Restore.ipsw",
-    "UniversalMac_12.6.1_21G217_Restore.ipsw",
-    "UniversalMac_12.6_21G115_Restore.ipsw",
-    "UniversalMac_12.4_21F79_Restore.ipsw",
-    "UniversalMac_12.4_21F5071b_Restore.ipsw",
-    "UniversalMac_12.4_21F5063e_Restore.ipsw",
-    "UniversalMac_12.4_21F5058e_Restore.ipsw",
-    "UniversalMac_12.4_21F5048e_Restore.ipsw",
-    "UniversalMac_12.4_21F2092_Restore.ipsw",
-    "UniversalMac_12.4_21F2081_Restore.ipsw",
-    "UniversalMac_12.3_21E5227a_Restore.ipsw",
-    "UniversalMac_12.3_21E5222a_Restore.ipsw",
-    "UniversalMac_12.3_21E5212f_Restore.ipsw",
-    "UniversalMac_12.3_21E5206e_Restore.ipsw",
-    "UniversalMac_12.3_21E5196i_Restore.ipsw",
-    "UniversalMac_12.3.1_21E258_Restore.ipsw",
-    "UniversalMac_12.3_21E230_Restore.ipsw",
-    "UniversalMac_12.2.1_21D62_Restore.ipsw",
-    "UniversalMac_12.2_21D5039d_Restore.ipsw",
-    "UniversalMac_12.2_21D49_Restore.ipsw",
-    "UniversalMac_12.2_21D48_Restore.ipsw",
+    "UniversalMac_14.0_23A5257q_Restore.ipsw"
 ]
 
 
@@ -183,6 +156,7 @@ def migrate(ipsw_storage: IpswGcsStorage) -> None:
                 logger.info(f"\t{source.file_name} ({source.processing_state})")
                 sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
 
-                artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
+                # artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
+                artifact.sources[source_idx].processing_state = ArtifactProcessingState.INDEXED
                 artifact.sources[source_idx].update_last_run()
                 ipsw_storage.update_meta_item(artifact)
