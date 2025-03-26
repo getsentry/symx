@@ -54,10 +54,7 @@ def mirror_filter(
         artifact
         for artifact in artifacts
         if artifact.released is not None
-        and (
-            artifact.released.year >= datetime.date.today().year - 1
-            or any(source.file_name == "AppleTV53_16.0_20J5299n_Restore.ipsw" for source in artifact.sources)
-        )
+        and artifact.released.year >= datetime.date.today().year - 1
         and any(source.processing_state == ArtifactProcessingState.INDEXED for source in artifact.sources)
     ]
 

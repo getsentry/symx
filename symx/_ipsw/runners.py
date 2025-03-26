@@ -142,7 +142,7 @@ def _post_mirrored_filter(  # pyright: ignore [reportUnusedFunction]
     ]
 
 
-sources = ["AppleTV53_16.0_20J5299n_Restore.ipsw"]
+sources = []
 
 
 def migrate(ipsw_storage: IpswGcsStorage) -> None:
@@ -154,6 +154,6 @@ def migrate(ipsw_storage: IpswGcsStorage) -> None:
                 logger.info(f"\t{source.file_name} ({source.processing_state})")
                 sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
                 assert artifact.sources[source_idx].processing_state == ArtifactProcessingState.MIRRORING_FAILED
-                artifact.sources[source_idx].processing_state = ArtifactProcessingState.INDEXED
-                artifact.sources[source_idx].update_last_run()
-                ipsw_storage.update_meta_item(artifact)
+                # artifact.sources[source_idx].processing_state = ArtifactProcessingState.INDEXED
+                # artifact.sources[source_idx].update_last_run()
+                # ipsw_storage.update_meta_item(artifact)
