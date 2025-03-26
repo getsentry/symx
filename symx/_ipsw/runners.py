@@ -126,14 +126,14 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: timedelta) -> None:
 
 def _source_post_mirror_condition(source: IpswSource) -> bool:
     return (
-        source.processing_state == ArtifactProcessingState.MIRRORED
-        or source.processing_state == ArtifactProcessingState.INDEXED
-        or source.processing_state == ArtifactProcessingState.MIRRORING_FAILED
+            source.processing_state == ArtifactProcessingState.MIRRORED
+            or source.processing_state == ArtifactProcessingState.INDEXED
+            or source.processing_state == ArtifactProcessingState.MIRRORING_FAILED
     )
 
 
 def _post_mirrored_filter(  # pyright: ignore [reportUnusedFunction]
-    artifacts: Iterable[IpswArtifact],
+        artifacts: Iterable[IpswArtifact],
 ) -> Sequence[IpswArtifact]:
     return [
         artifact
@@ -143,99 +143,7 @@ def _post_mirrored_filter(  # pyright: ignore [reportUnusedFunction]
 
 
 sources = [
-    "AppleTV5,3_17.0_21J5303h_Restore.ipsw",
-    "AppleTV5,3_17.0_21J5303f_Restore.ipsw",
-    "AppleTV5,3_17.0_21J5293g_Restore.ipsw",
-    "AppleTV5,3_16.6_20M5571a_Restore.ipsw",
-    "AppleTV5,3_16.6_20M5559c_Restore.ipsw",
-    "AppleTV5,3_16.6_20M5548b_Restore.ipsw",
-    "AppleTV5,3_16.6_20M5538d_Restore.ipsw",
-    "AppleTV5,3_16.6_20M5527e_Restore.ipsw",
-    "AppleTV5,3_16.5_20L563_Restore.ipsw",
-    "AppleTV5,3_16.5_20L562_Restore.ipsw",
-    "AppleTV5,3_16.5_20L5559a_Restore.ipsw",
-    "AppleTV5,3_16.5_20L5549e_Restore.ipsw",
-    "AppleTV5,3_16.5_20L5538d_Restore.ipsw",
-    "AppleTV5,3_16.5_20L5527d_Restore.ipsw",
-    "AppleTV5,3_16.4_20L5490a_Restore.ipsw",
-    "AppleTV5,3_16.4_20L5480g_Restore.ipsw",
-    "AppleTV5,3_16.4_20L5474e_Restore.ipsw",
-    "AppleTV5,3_16.4_20L5463g_Restore.ipsw",
-    "AppleTV5,3_16.4.1_20L498_Restore.ipsw",
-    "AppleTV5,3_16.4_20L497_Restore.ipsw",
-    "AppleTV5,3_16.1_20K71_Restore.ipsw",
-    "AppleTV5,3_16.3.2_20K672_Restore.ipsw",
-    "AppleTV5,3_16.3.1_20K661_Restore.ipsw",
-    "AppleTV5,3_16.3_20K650_Restore.ipsw",
-    "AppleTV5,3_16.3_20K5637g_Restore.ipsw",
-    "AppleTV5,3_16.3_20K5626c_Restore.ipsw",
-    "AppleTV5,3_16.2_20K5357b_Restore.ipsw",
-    "AppleTV5,3_16.2_20K5348d_Restore.ipsw",
-    "AppleTV5,3_16.2_20K5342d_Restore.ipsw",
-    "AppleTV5,3_16.2_20K5331f_Restore.ipsw",
-    "AppleTV5,3_16.1_20K5068a_Restore.ipsw",
-    "AppleTV5,3_16.1_20K5062a_Restore.ipsw",
-    "AppleTV5,3_16.1_20K5052c_Restore.ipsw",
-    "AppleTV5,3_16.1_20K5046d_Restore.ipsw",
-    "AppleTV5,3_16.1_20K5041d_Restore.ipsw",
-    "AppleTV5,3_16.2_20K362_Restore.ipsw",
-    "AppleTV5,3_16.0_20J5371a_Restore.ipsw",
-    "AppleTV5,3_16.0_20J5366a_Restore.ipsw",
-    "AppleTV5,3_16.0_20J5355f_Restore.ipsw",
-    "AppleTV5,3_16.0_20J5344f_Restore.ipsw",
-    "AppleTV5,3_16.0_20J5328g_Restore.ipsw",
-    "AppleTV5,3_16.0_20J5319h_Restore.ipsw",
-    "AppleTV5,3_16.0_20J373_Restore.ipsw",
-    "AppleTV5,3_15.6_19M65_Restore.ipsw",
-    "AppleTV5,3_15.6_19M63_Restore.ipsw",
-    "AppleTV5,3_15.6_19M5062a_Restore.ipsw",
-    "AppleTV5,3_15.6_19M5056c_Restore.ipsw",
-    "AppleTV5,3_15.6_19M5046c_Restore.ipsw",
-    "AppleTV5,3_15.6_19M5037c_Restore.ipsw",
-    "AppleTV5,3_15.6_19M5027c_Restore.ipsw",
-    "AppleTV5,3_15.5.1_19L580_Restore.ipsw",
-    "AppleTV5,3_15.5_19L570_Restore.ipsw",
-    "AppleTV5,3_15.5_19L570_Restore.ipsw",
-    "AppleTV5,3_15.5_19L5569a_Restore.ipsw",
-    "AppleTV5,3_15.5_19L5562e_Restore.ipsw",
-    "AppleTV5,3_15.5_19L5557d_Restore.ipsw",
-    "AppleTV5,3_15.5_19L5547e_Restore.ipsw",
-    "AppleTV5,3_15.4_19L5440a_Restore.ipsw",
-    "AppleTV5,3_15.4_19L5436a_Restore.ipsw",
-    "AppleTV5,3_15.4_19L5425e_Restore.ipsw",
-    "AppleTV5,3_15.4_19L5419e_Restore.ipsw",
-    "AppleTV5,3_15.4_19L5409j_Restore.ipsw",
-    "AppleTV5,3_15.4.1_19L452_Restore.ipsw",
-    "AppleTV5,3_15.4_19L440_Restore.ipsw",
-    "AppleTV5,3_15.4_19L440_Restore.ipsw",
-    "AppleTV5,3_15.3_19K5541d_Restore.ipsw",
-    "AppleTV5,3_15.3_19K547_Restore.ipsw",
-    "AppleTV5,3_15.3_19K545_Restore.ipsw",
-    "AppleTV3,2_8.4.3_12H1006_Restore.ipsw",
-    "AppleTV5,3_16.6_20M73_Restore.ipsw",
-    "AppleTV5,3_16.6_20M73_Restore.ipsw",
-    "AppleTV5,3_17.0_21J5318f_Restore.ipsw",
-    "AppleTV5,3_17.0_21J5330e_Restore.ipsw",
-    "AppleTV5,3_17.0_21J5339b_Restore.ipsw",
-    "AppleTV5,3_17.0_21J5353a_Restore.ipsw",
-    "AppleTV5,3_17.0_21J5347a_Restore.ipsw",
-    "AppleTV5,3_17.0_21J5354a_Restore.ipsw",
-    "AppleTV5,3_17.0_21J354_Restore.ipsw",
-    "AppleTV5,3_17.0_21J354_Restore.ipsw",
-    "AppleTV5,3_17.1_21K5043e_Restore.ipsw",
-    "AppleTV5,3_17.1_21K5054e_Restore.ipsw",
-    "AppleTV5,3_17.1_21K5064b_Restore.ipsw",
-    "AppleTV5,3_17.1_21K69_Restore.ipsw",
-    "AppleTV5,3_17.1_21K69_Restore.ipsw",
-    "AppleTV5,3_17.2_21K5330g_Restore.ipsw",
-    "AppleTV5,3_17.2_21K5341f_Restore.ipsw",
-    "AppleTV5,3_17.2_21K5348f_Restore.ipsw",
-    "AppleTV5,3_17.2_21K5356c_Restore.ipsw",
-    "AppleTV5,3_17.2_21K364_Restore.ipsw",
-    "AppleTV5,3_17.2_21K365_Restore.ipsw",
-    "AppleTV5,3_17.2_21K365_Restore.ipsw",
-    "AppleTV5,3_17.3_21K5625e_Restore.ipsw",
-    "AppleTV5,3_17.3_21K5635c_Restore.ipsw",
+    "AppleTV53_16.0_20J5299n_Restore.ipsw"
 ]
 
 
@@ -247,7 +155,7 @@ def migrate(ipsw_storage: IpswGcsStorage) -> None:
             if source.file_name in sources:
                 logger.info(f"\t{source.file_name} ({source.processing_state})")
                 sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
-                assert artifact.sources[source_idx].processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
-                # artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
-                # artifact.sources[source_idx].update_last_run()
-                # ipsw_storage.update_meta_item(artifact)
+                assert artifact.sources[source_idx].processing_state == ArtifactProcessingState.MIRRORING_FAILED
+                artifact.sources[source_idx].processing_state = ArtifactProcessingState.INDEXED
+                artifact.sources[source_idx].update_last_run()
+                ipsw_storage.update_meta_item(artifact)
