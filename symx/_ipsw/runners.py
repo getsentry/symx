@@ -126,14 +126,14 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: timedelta) -> None:
 
 def _source_post_mirror_condition(source: IpswSource) -> bool:
     return (
-            source.processing_state == ArtifactProcessingState.MIRRORED
-            or source.processing_state == ArtifactProcessingState.INDEXED
-            or source.processing_state == ArtifactProcessingState.MIRRORING_FAILED
+        source.processing_state == ArtifactProcessingState.MIRRORED
+        or source.processing_state == ArtifactProcessingState.INDEXED
+        or source.processing_state == ArtifactProcessingState.MIRRORING_FAILED
     )
 
 
 def _post_mirrored_filter(  # pyright: ignore [reportUnusedFunction]
-        artifacts: Iterable[IpswArtifact],
+    artifacts: Iterable[IpswArtifact],
 ) -> Sequence[IpswArtifact]:
     return [
         artifact
@@ -142,9 +142,7 @@ def _post_mirrored_filter(  # pyright: ignore [reportUnusedFunction]
     ]
 
 
-sources = [
-    "AppleTV53_16.0_20J5299n_Restore.ipsw"
-]
+sources = ["AppleTV53_16.0_20J5299n_Restore.ipsw"]
 
 
 def migrate(ipsw_storage: IpswGcsStorage) -> None:
