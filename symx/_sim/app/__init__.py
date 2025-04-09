@@ -28,6 +28,7 @@ class SimulatorRuntime:
 
 _simulator_runtime_prefix = "com.apple.CoreSimulator.SimRuntime."
 _dyld_shared_cache_prefix = "dyld_sim_shared_cache_"
+_ignored_dyld_file_suffixes = (".map", ".dylddata", ".atlas")
 
 
 @sim_app.command()
@@ -57,7 +58,10 @@ def extract(
     for runtime in find_simulator_runtimes(caches_path):
         with tempfile.TemporaryDirectory(prefix="_sentry_dyld_shared_cache_") as output_dir:
             for filename in runtime.path.iterdir():
-                if not filename.name.startswith(_dyld_shared_cache_prefix) or filename.suffix in (".map", ".dylddata"):
+                if (
+                    not filename.name.startswith(_dyld_shared_cache_prefix)
+                    or filename.suffix in _ignored_dyld_file_suffixes
+                ):
                     continue
                 runtime.arch = filename.name.split(_dyld_shared_cache_prefix)[1]
                 logging.info(
@@ -103,7 +107,7 @@ def find_simulator_runtimes(caches_path: Path) -> List[SimulatorRuntime]:
 
 def extract_system_symbols(runtime: SimulatorRuntime, output_dir: Path) -> None:
     for dsc_file in runtime.path.iterdir():
-        if not dsc_file.name.startswith(_dyld_shared_cache_prefix) or dsc_file.suffix in (".map", ".dylddata"):
+        if not dsc_file.name.startswith(_dyld_shared_cache_prefix) or dsc_file.suffix in _ignored_dyld_file_suffixes:
             continue
         with tempfile.TemporaryDirectory(prefix="_sentry_dyld_output") as dsc_out_dir:
             split_result = dyld_split(dsc_file, Path(dsc_out_dir))
