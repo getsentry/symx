@@ -1,4 +1,8 @@
 name: Migrate IPSW storage
+permissions:
+  contents: read
+  id-token: write
+
 on:
   workflow_dispatch:
 

@@ -1,4 +1,6 @@
 name: Extract GHA Simulator symbols
+permissions: {}
+
 on:
   workflow_dispatch:
   schedule:

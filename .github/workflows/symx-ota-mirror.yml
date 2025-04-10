@@ -1,4 +1,8 @@
 name: Mirror OTA images
+permissions:
+  contents: read
+  id-token: write
+
 on:
   workflow_dispatch:
   schedule:

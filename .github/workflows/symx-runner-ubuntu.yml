@@ -1,4 +1,6 @@
 name: symx on Ubuntu
+permissions:
+  contents: read
 
 on:
   workflow_call:
@@ -21,7 +23,6 @@ jobs:
     name: ${{ inputs.job_name }}
     runs-on: "ubuntu-24.04"
     permissions:
-      contents: "read"
       id-token: "write"
 
     steps:

@@ -1,4 +1,6 @@
 name: symx on macOS
+permissions:
+  contents: read
 
 on:
   workflow_call:
@@ -21,7 +23,6 @@ jobs:
     name: ${{ inputs.job_name }}
     runs-on: "macos-15"
     permissions:
-      contents: "read"
       id-token: "write"
 
     steps:
