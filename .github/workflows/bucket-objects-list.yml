@@ -1,5 +1,7 @@
 name: 'List bucket objects'
-permissions: {}
+permissions:
+  contents: read
+  id-token: write
 
 on:
   workflow_dispatch:

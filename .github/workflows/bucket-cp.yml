@@ -1,5 +1,7 @@
 name: 'Copy bucket contents'
-permissions: {}
+permissions:
+  contents: read
+  id-token: write
 
 on:
   workflow_dispatch:

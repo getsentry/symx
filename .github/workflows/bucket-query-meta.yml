@@ -1,5 +1,7 @@
 name: 'Query meta-data'
-permissions: {}
+permissions:
+  contents: read
+  id-token: write
 
 on:
   workflow_dispatch:
