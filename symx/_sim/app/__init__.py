@@ -31,6 +31,10 @@ _dyld_shared_cache_prefix = "dyld_sim_shared_cache_"
 _ignored_dyld_file_suffixes = (".map", ".dylddata", ".atlas")
 
 
+def _is_ignored_dsc_file(file: Path) -> bool:
+    return not file.name.startswith(_dyld_shared_cache_prefix) or file.suffix in _ignored_dyld_file_suffixes
+
+
 @sim_app.command()
 def extract(
     storage: str = typer.Option(..., "--storage", "-s", help="URI to a supported storage backend"),
@@ -57,13 +61,10 @@ def extract(
 
     for runtime in find_simulator_runtimes(caches_path):
         with tempfile.TemporaryDirectory(prefix="_sentry_dyld_shared_cache_") as output_dir:
-            for filename in runtime.path.iterdir():
-                if (
-                    not filename.name.startswith(_dyld_shared_cache_prefix)
-                    or filename.suffix in _ignored_dyld_file_suffixes
-                ):
+            for dsc_file in runtime.path.iterdir():
+                if _is_ignored_dsc_file(dsc_file):
                     continue
-                runtime.arch = filename.name.split(_dyld_shared_cache_prefix)[1]
+                runtime.arch = dsc_file.name.split(_dyld_shared_cache_prefix)[1]
                 logging.info(
                     f"Extracting symbols for macOS {runtime.macos_version}, {runtime.os_name} {runtime.os_version} {runtime.arch}"
                 )
@@ -107,7 +108,7 @@ def find_simulator_runtimes(caches_path: Path) -> List[SimulatorRuntime]:
 
 def extract_system_symbols(runtime: SimulatorRuntime, output_dir: Path) -> None:
     for dsc_file in runtime.path.iterdir():
-        if not dsc_file.name.startswith(_dyld_shared_cache_prefix) or dsc_file.suffix in _ignored_dyld_file_suffixes:
+        if _is_ignored_dsc_file(dsc_file):
             continue
         with tempfile.TemporaryDirectory(prefix="_sentry_dyld_output") as dsc_out_dir:
             split_result = dyld_split(dsc_file, Path(dsc_out_dir))
