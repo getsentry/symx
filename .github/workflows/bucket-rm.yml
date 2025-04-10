@@ -1,4 +1,5 @@
 name: 'Remove bucket contents'
+permissions: {}
 
 on:
   workflow_dispatch:

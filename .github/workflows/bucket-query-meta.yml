@@ -1,4 +1,5 @@
 name: 'Query meta-data'
+permissions: {}
 
 on:
   workflow_dispatch:

@@ -1,4 +1,5 @@
 name: 'Copy bucket contents'
+permissions: {}
 
 on:
   workflow_dispatch:
