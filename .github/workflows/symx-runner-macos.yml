@@ -47,6 +47,7 @@ jobs:
           export PATH="/Users/runner/.local/bin:$PATH"
           uv --version
           uv sync
+          brew upgrade libheif
           brew install blacktop/tap/ipsw
           curl -L https://github.com/getsentry/symbolicator/releases/latest/download/symsorter-Darwin-universal > symsorter
           chmod +x symsorter
