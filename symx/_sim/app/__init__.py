@@ -55,11 +55,7 @@ def extract(
     client: Client = Client(project=uri.username)
     bucket: Bucket = client.bucket(uri.hostname)
 
-    caches_path = Path("~/Library/Developer/CoreSimulator/Caches/dyld").expanduser()
-    if not caches_path.is_dir():
-        raise RuntimeError(f"{caches_path} does not exist")
-
-    for runtime in find_simulator_runtimes(caches_path):
+    for runtime in find_simulator_runtimes(retrieve_caches_path()):
         with tempfile.TemporaryDirectory(prefix="_sentry_dyld_shared_cache_") as output_dir:
             for dsc_file in runtime.path.iterdir():
                 if _is_ignored_dsc_file(dsc_file):
@@ -71,6 +67,23 @@ def extract(
                 extract_system_symbols(runtime, Path(output_dir))
 
             upload_symbol_binaries(bucket, runtime.os_name, runtime.bundle_id, Path(output_dir))
+            return None
+    return None
+
+
+def retrieve_caches_path() -> Path:
+    root_caches_path = Path("/Library/Developer/CoreSimulator/Caches/dyld")
+    user_caches_path = root_caches_path.expanduser()
+    # starting with Xcode 16 simulator image caches are store in the root Library folder
+    if not root_caches_path.is_dir():
+        # up to Xcode 16 simulator image caches were stored per user
+        if not user_caches_path.is_dir():
+            raise RuntimeError(f"Neither {root_caches_path} nor {user_caches_path} do exist")
+        else:
+            caches_path = user_caches_path
+    else:
+        caches_path = root_caches_path
+    return caches_path
 
 
 def find_simulator_runtimes(caches_path: Path) -> List[SimulatorRuntime]:
