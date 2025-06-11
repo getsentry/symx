@@ -72,8 +72,9 @@ def extract(
 
 
 def retrieve_caches_path() -> Path:
-    root_caches_path = Path("/Library/Developer/CoreSimulator/Caches/dyld")
-    user_caches_path = root_caches_path.expanduser()
+    core_path_str = "/Library/Developer/CoreSimulator/Caches/dyld"
+    root_caches_path = Path(core_path_str)
+    user_caches_path = Path(f"~{core_path_str}").expanduser()
     # starting with Xcode 16 simulator image caches are store in the root Library folder
     if not root_caches_path.is_dir():
         # up to Xcode 16 simulator image caches were stored per user
