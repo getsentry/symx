@@ -50,6 +50,12 @@ jobs:
           pwd
           ls -la
 
+      - name: List User CoreSimulator tree
+        run: tree /Users/runner/Library/Developer/CoreSimulator
+
+      - name: List Root CoreSimulator tree
+        run: tree /Library/Developer/CoreSimulator
+
       - name: Extract Simulator from ${{matrix.runs-on}}
         run: uv run python -m symx -v sim extract -s ${{ vars.SYMX_STORE }}
         env:
