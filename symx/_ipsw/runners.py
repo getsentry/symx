@@ -143,11 +143,6 @@ def _post_mirrored_filter(  # pyright: ignore [reportUnusedFunction]
 
 
 sources = [
-    "iPhone16,2_26.0_23A5260n_Restore.ipsw",
-    "iPhone17,1_26.0_23A5260n_Restore.ipsw",
-    "iPhone17,2_26.0_23A5260n_Restore.ipsw",
-    "iPhone17,3_26.0_23A5260n_Restore.ipsw",
-    "iPhone17,4_26.0_23A5260n_Restore.ipsw",
     "Apple_Vision_Pro_26.0_23M5263m_Restore.ipsw",
     "UniversalMac_26.0_25A5279m_Restore.ipsw",
 ]
@@ -161,7 +156,7 @@ def migrate(ipsw_storage: IpswGcsStorage) -> None:
             if source.file_name in sources:
                 logger.info(f"\t{source.file_name} ({source.processing_state})")
                 sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
-                # assert artifact.sources[source_idx].processing_state == ArtifactProcessingState.MIRRORED
-                # artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
-                # artifact.sources[source_idx].update_last_run()
-                # ipsw_storage.update_meta_item(artifact)
+                assert artifact.sources[source_idx].processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
+                artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
+                artifact.sources[source_idx].update_last_run()
+                ipsw_storage.update_meta_item(artifact)

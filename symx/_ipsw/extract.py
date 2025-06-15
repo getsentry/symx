@@ -49,6 +49,7 @@ class IpswExtractor:
             "-d",
             "-o",
             str(self.processing_dir),
+            "-V",
         ]
 
         if arch is not None:
@@ -119,7 +120,7 @@ class IpswExtractor:
     def _symsort_sys_image(self):
         # mount the sys image (the process waits for sigint)
         mount_proc = subprocess.Popen(
-            ["ipsw", "mount", "sys", str(self.ipsw_path)],
+            ["ipsw", "mount", "sys", str(self.ipsw_path), "-V"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             bufsize=1,
