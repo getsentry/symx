@@ -61,4 +61,4 @@ jobs:
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SYMX_STEP: ${{ inputs.symx_run}}
+          SYMX_STEP: ${{ inputs.symx_run }}
