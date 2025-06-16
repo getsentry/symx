@@ -57,7 +57,8 @@ jobs:
           sudo update-ca-certificates
 
       - name: ${{ inputs.symx_step }}
-        run: uv run python -m symx ${{ inputs.symx_run }}
+        run: uv run python -m symx "$SYMX_STEP"
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SYMX_STEP: ${{ inputs.symx_run}}
