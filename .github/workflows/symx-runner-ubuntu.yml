@@ -62,7 +62,7 @@ jobs:
           echo "SYMX_RUN length: ${#SYMX_RUN}"
           printenv | grep SYMX || echo "No SYMX variables found"
           echo "Shell: $0"
-          uv run python -m symx $SYMX_RUN
+          uv run python -m symx "$SYMX_RUN"
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
