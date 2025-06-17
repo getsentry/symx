@@ -57,8 +57,13 @@ jobs:
           sudo update-ca-certificates
 
       - name: ${{ inputs.symx_step }}
-        run: uv run python -m symx "$SYMX_STEP"
+        run: |
+          echo "SYMX_RUN is: '$SYMX_RUN'"
+          echo "SYMX_RUN length: ${#SYMX_RUN}"
+          printenv | grep SYMX || echo "No SYMX variables found"
+          echo "Shell: $0"
+          uv run python -m symx $SYMX_RUN"
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SYMX_STEP: ${{ inputs.symx_run }}
+          SYMX_RUN: ${{ inputs.symx_run }}
