@@ -10,6 +10,7 @@ dependencies = [
     "google-cloud-storage==2.19.0",
     "pydantic==2.11.5",
     "pandas==2.3.0",
+    "protobuf==5.29.5", # bump for semgrep until the Google SDK updates its dependency
 ]
 name = "symx"
 version = "0.2.0"
