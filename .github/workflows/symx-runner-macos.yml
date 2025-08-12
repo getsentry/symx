@@ -49,6 +49,7 @@ jobs:
           uv sync
           brew install libheif
           brew install blacktop/tap/ipsw
+          brew install tree
           curl -L https://github.com/getsentry/symbolicator/releases/latest/download/symsorter-Darwin-universal > symsorter
           chmod +x symsorter
           pwd
