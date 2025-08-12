@@ -54,6 +54,12 @@ jobs:
           pwd
           ls -la
 
+      - run: df -h
+      - run: brew cleanup
+      - run: df -h
+      - run: brew list
+      - run: du -sh /opt/homebrew
+
       - name: ${{ inputs.symx_step }}
         run: uv run python -m symx ${{ inputs.symx_run }}
         env:
