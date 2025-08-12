@@ -98,6 +98,7 @@ class IpswExtractor:
         if self.artifact.platform == IpswPlatform.MACOS:
             # all macOS IPSWs have dyld_shared_caches for both architectures
             for arch in [Arch.ARM64E, Arch.X86_64]:
+                logger.debug(subprocess.check_output(["tree", "--du", self.processing_dir]))
                 extract_dir = self._ipsw_extract_dsc(arch)
                 if extract_dir is None:
                     raise IpswExtractError("Couldn't find IPSW dyld_shared_cache extraction directory")
