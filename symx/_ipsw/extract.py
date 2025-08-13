@@ -86,9 +86,8 @@ class IpswExtractor:
         return None
 
     def run(self) -> Path:
-        self._symsort_dsc()
         self._symsort_sys_image()
-        self.ipsw_path.unlink()
+        self._symsort_dsc()
         _log_directory_contents(self.symbols_dir())
 
         return self.symbols_dir()
@@ -97,16 +96,33 @@ class IpswExtractor:
         split_dir = self.processing_dir / "split_out"
         if self.artifact.platform == IpswPlatform.MACOS:
             # all macOS IPSWs have dyld_shared_caches for both architectures
+            compressed_archives: list[tuple[Path, str]] = []
+
             for arch in [Arch.ARM64E, Arch.X86_64]:
-                # TODO: stop this from flooding overnight runs: but it looks like we must restructure this...
-                #       let us extract the architectures first so we can delete the IPSW before we split the DSC
-                # logger.debug(subprocess.check_output(["tree", "--du", self.processing_dir]).decode("utf-8"))
+                logger.info(f"Extracting and processing architecture: {arch}")
                 extract_dir = self._ipsw_extract_dsc(arch)
                 if extract_dir is None:
-                    raise IpswExtractError("Couldn't find IPSW dyld_shared_cache extraction directory")
+                    raise IpswExtractError(f"Couldn't find IPSW dyld_shared_cache extraction directory for {arch}")
                 _log_directory_contents(extract_dir)
+
                 split_dir = self._ipsw_split(extract_dir, arch)
                 _log_directory_contents(split_dir)
+
+                arch_split_dir = split_dir / str(arch)
+                if arch_split_dir.exists():
+                    archive_path = self._compress_directory(arch_split_dir)
+                    compressed_archives.append((archive_path, arch))
+                    logger.info(f"Compressed {arch} split output to {archive_path}")
+
+            # Delete IPSW file now that both architectures are extracted and compressed
+            if self.ipsw_path.exists():
+                logger.info(f"Deleting IPSW file to save space: {self.ipsw_path}")
+                self.ipsw_path.unlink()
+
+            # Decompress all archives before final symsort processing
+            for archive_path, arch in compressed_archives:
+                self._decompress_archive(archive_path, split_dir / str(arch))
+                archive_path.unlink()  # Remove the compressed archive after extraction
 
             # We accumulate each architecture as a sub-dir in split_dir and let symsorter process them together
         else:
@@ -114,6 +130,12 @@ class IpswExtractor:
             if extract_dir is None:
                 raise IpswExtractError("Couldn't find IPSW dyld_shared_cache extraction directory")
             _log_directory_contents(extract_dir)
+
+            # Delete IPSW also in the non-macOS path since this is our contract to the caller
+            if self.ipsw_path.exists():
+                logger.info(f"Deleting IPSW file to save space: {self.ipsw_path}")
+                self.ipsw_path.unlink()
+
             split_dir = self._ipsw_split(extract_dir)
             _log_directory_contents(split_dir)
         self._symsort(split_dir)
@@ -176,6 +198,56 @@ class IpswExtractor:
             raise IpswExtractError(f"ipsw dyld split failed with {result}")
 
         return split_dir
+
+    def _compress_directory(self, directory: Path) -> Path:
+        archive_path = directory.parent / f"{directory.name}.tar.zst"
+
+        with subprocess.Popen(
+            ["tar", "-cf", "-", "-C", str(directory.parent), str(directory.name)], stdout=subprocess.PIPE
+        ) as tar_proc:
+            with subprocess.Popen(
+                ["zstd", "-", "-o", str(archive_path)],
+                stdin=tar_proc.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            ) as zstd_proc:
+                if tar_proc.stdout:
+                    tar_proc.stdout.close()  # Allow tar_proc to receive SIGPIPE if zstd_proc exits
+                _, stderr = zstd_proc.communicate()
+
+                if zstd_proc.returncode != 0:
+                    error_msg = stderr.decode("utf-8") if stderr else "Unknown error"
+                    raise IpswExtractError(f"zstd compression failed: {error_msg}")
+
+        if tar_proc.returncode != 0:
+            raise IpswExtractError(f"tar archiving failed with return code {tar_proc.returncode}")
+
+        # Remove the original directory after compression
+        shutil.rmtree(directory)
+
+        return archive_path
+
+    def _decompress_archive(self, archive_path: Path, target_dir: Path) -> None:
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        # Use subprocess to pipe zstd output to tar for decompression
+        with subprocess.Popen(["zstd", "-d", str(archive_path), "-c"], stdout=subprocess.PIPE) as zstd_proc:
+            with subprocess.Popen(
+                ["tar", "-xf", "-", "-C", str(target_dir.parent)],
+                stdin=zstd_proc.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            ) as tar_proc:
+                if zstd_proc.stdout:
+                    zstd_proc.stdout.close()
+                _, stderr = tar_proc.communicate()
+
+                if tar_proc.returncode != 0:
+                    error_msg = stderr.decode("utf-8") if stderr else "Unknown error"
+                    raise IpswExtractError(f"tar extraction failed: {error_msg}")
+
+        if zstd_proc.returncode != 0:
+            raise IpswExtractError(f"zstd decompression failed with return code {zstd_proc.returncode}")
 
     def _symsort(self, split_dir: Path, ignore_errors: bool = False):
         output_dir = self.symbols_dir()
