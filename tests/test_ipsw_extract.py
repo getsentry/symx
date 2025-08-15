@@ -10,6 +10,12 @@ from symx._ipsw.common import IpswArtifact, IpswSource, IpswPlatform, IpswReleas
 from symx._ipsw.extract import IpswExtractor
 
 
+def require_sha1(hashes: IpswArtifactHashes | None) -> str:
+    assert hashes is not None, "Test data: hashes missing"
+    assert hashes.sha1 is not None, "Test data: sha1 missing"
+    return hashes.sha1
+
+
 def test_ipsw_extract_run_watchos():
     source = IpswSource(
         devices=["Watch6,11"],
@@ -128,6 +134,6 @@ def test_ipsw_extract_run_macos():
     with tempfile.TemporaryDirectory() as tmpdir:
         processing_dir = Path(tmpdir)
         assert ipsw_path.stat().st_size == source.size
-        assert check_sha1(source.hashes.sha1, ipsw_path)
+        assert check_sha1(require_sha1(source.hashes), ipsw_path)
         extractor = IpswExtractor(artifact, source, processing_dir, ipsw_path)
         extractor.run()
