@@ -16,3 +16,10 @@ wiki_db.json
 
 # cli tools that currently are accessed via CWD rather than PATH
 symsorter
+
+# temporary dev artifacts
+*.dmg
+ipsw_meta*.json
+ota_image_meta*.json
+*.ipsw
+*.zip
