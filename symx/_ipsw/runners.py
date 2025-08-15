@@ -142,15 +142,21 @@ def _post_mirrored_filter(  # pyright: ignore [reportUnusedFunction]
     ]
 
 
+# sources = [
+#     "Apple_Vision_Pro_26.0_23M5263m_Restore.ipsw",
+# ]
+
 sources = [
     "UniversalMac_15.0_24A5279h_Restore.ipsw",
-    # "UniversalMac_26.0_25A5279m_Restore.ipsw",
-    # "UniversalMac_26.0_25A5295e_Restore.ipsw",
-    # "UniversalMac_26.0_25A5306g_Restore.ipsw",
-    # "UniversalMac_26.0_25A5316i_Restore.ipsw",
-    # "UniversalMac_26.0_25A5327h_Restore.ipsw",
-    # "UniversalMac_26.0_25A5338b_Restore.ipsw",
-    # "Apple_Vision_Pro_26.0_23M5263m_Restore.ipsw",
+    "UniversalMac_26.0_25A5279m_Restore.ipsw",
+    "UniversalMac_15.6_24G5054d_Restore.ipsw",
+    "UniversalMac_26.0_25A5295e_Restore.ipsw",
+    "UniversalMac_15.6_24G5065c_Restore.ipsw",
+    "UniversalMac_26.0_25A5306g_Restore.ipsw",
+    "UniversalMac_15.6_24G5074c_Restore.ipsw",
+    "UniversalMac_26.0_25A5316i_Restore.ipsw",
+    "UniversalMac_26.0_25A5327h_Restore.ipsw",
+    "UniversalMac_26.0_25A5338b_Restore.ipsw",
 ]
 
 
@@ -162,7 +168,7 @@ def migrate(ipsw_storage: IpswGcsStorage) -> None:
             if source.file_name in sources:
                 logger.info(f"\t{source.file_name} ({source.processing_state})")
                 sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
-                assert artifact.sources[source_idx].processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
+                # assert artifact.sources[source_idx].processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
                 artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
                 artifact.sources[source_idx].update_last_run()
                 ipsw_storage.update_meta_item(artifact)
