@@ -162,6 +162,7 @@ def migrate(ipsw_storage: IpswGcsStorage) -> None:
                 logger.info(f"\t{source.file_name} ({source.processing_state})")
                 sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
                 if artifact.sources[source_idx].processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED:
+                    logger.info(f"\tChanging {source.file_name} to {ArtifactProcessingState.MIRRORED}")
                     artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
                     artifact.sources[source_idx].update_last_run()
                     ipsw_storage.update_meta_item(artifact)
