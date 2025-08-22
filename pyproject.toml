@@ -7,10 +7,9 @@ requires-python = "<4.0,>=3.12"
 dependencies = [
     "typer==0.16.0",
     "sentry-sdk==2.29.1",
-    "google-cloud-storage==2.19.0",
+    "google-cloud-storage==3.3.0",
     "pydantic==2.11.5",
     "pandas==2.3.0",
-    "protobuf==5.29.5", # bump for semgrep until the Google SDK updates its dependency
 ]
 name = "symx"
 version = "0.2.0"
