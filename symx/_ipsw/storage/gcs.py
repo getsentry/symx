@@ -13,6 +13,7 @@ from symx._common import (
     compare_md5_hash,
     upload_symbol_binaries,
     try_download_to_filename,
+    SYMX_GCS_RETRY,
 )
 from symx._ipsw.common import (
     ARTIFACTS_META_JSON,
@@ -114,7 +115,7 @@ class IpswGcsStorage:
                 return artifact
         else:
             # this file will be split into considerable chunks: set timeout to something high
-            blob.upload_from_filename(str(ipsw_file), timeout=3600, num_retries=10)
+            blob.upload_from_filename(str(ipsw_file), timeout=3600, retry=SYMX_GCS_RETRY)
             logger.info("Upload finished. Updating IPSW meta-data.")
 
         artifact.sources[source_idx].mirror_path = mirror_filename

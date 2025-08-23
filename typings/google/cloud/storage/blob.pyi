@@ -1126,7 +1126,12 @@ class Blob(_PropertyMixin):
         ...
 
     def upload_from_filename(
-        self, filename: str, num_retries: int = ..., timeout: int = ..., if_generation_match: int | None = ...
+        self,
+        filename: str,
+        num_retries: int = ...,
+        timeout: int = ...,
+        if_generation_match: int | None = ...,
+        retry: Retry | None = ...,
     ) -> None:
         """Upload this blob's contents from the content of a named file.
 

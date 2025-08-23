@@ -21,12 +21,16 @@ from urllib.parse import ParseResult, urlparse
 import requests
 import sentry_sdk
 from google.cloud.storage import Blob, Bucket
+from google.cloud.storage.retry import DEFAULT_RETRY
 
 logger = logging.getLogger(__name__)
 
 HASH_BLOCK_SIZE = 2**16
 
 MiB = 1024 * 1024
+
+# we use the default policy (initial_wait=1s, wait_mult=2x, max_wait=60s). 300s retry timeout gives us 10 retries.
+SYMX_GCS_RETRY = DEFAULT_RETRY.with_timeout(300.0)
 
 
 class Arch(StrEnum):
@@ -292,7 +296,7 @@ def upload_file(local_file: Path, dest_blob_name: Path, bucket: Bucket) -> bool:
         logger.info(f"{local_file} exists in symbol-store at {dest_blob_name}. Continue with next.")
         return False
 
-    blob.upload_from_filename(str(local_file), num_retries=10)
+    blob.upload_from_filename(str(local_file), retry=SYMX_GCS_RETRY)
     return True
 
 
