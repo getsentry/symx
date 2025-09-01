@@ -63,7 +63,7 @@ jobs:
           sudo mkdir -p /usr/local/homebrew/opt/libheif/lib
       
           # symlink the lib to the fake path
-          sudo ln -sf "$LIBDIR/libheif.1.dylib" /usr/local/homebrew/opt/libheif/lib/libheif.1.dylib
+          sudo ln -sf "$LIBHEIF_LIBDIR/libheif.1.dylib" /usr/local/homebrew/opt/libheif/lib/libheif.1.dylib
 
           echo "DYLD_PRINT_LIBRARIES=1" >> "$GITHUB_ENV"
 
