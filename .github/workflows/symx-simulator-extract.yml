@@ -65,8 +65,6 @@ jobs:
           # symlink the lib to the fake path
           sudo ln -sf "$LIBHEIF_LIBDIR/libheif.1.dylib" /usr/local/homebrew/opt/libheif/lib/libheif.1.dylib
 
-          echo "DYLD_PRINT_LIBRARIES=1" >> "$GITHUB_ENV"
-
       - name: Extract Simulator from ${{matrix.runs-on}}
         run: uv run python -m symx -v sim extract -s ${{ vars.SYMX_STORE }}
         env:
