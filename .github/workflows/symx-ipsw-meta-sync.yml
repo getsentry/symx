@@ -6,7 +6,7 @@ permissions:
 on:
   workflow_dispatch:
   schedule:
-    - cron: "45 4 * * *"
+    - cron: "45 * * * *"
 
 concurrency: ipsw_meta_sync
 
