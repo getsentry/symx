@@ -5,10 +5,10 @@ authors = [
 license = {text = "MIT"}
 requires-python = "<3.14,>=3.12"
 dependencies = [
-    "typer==0.16.0",
-    "sentry-sdk==2.29.1",
-    "google-cloud-storage==3.3.0",
-    "pydantic==2.11.5",
+    "typer==0.19.2",
+    "sentry-sdk==2.42.0",
+    "google-cloud-storage==3.4.1",
+    "pydantic==2.12.3",
     "pandas==2.3.0",
     "deepdiff==8.6.1",
 ]
