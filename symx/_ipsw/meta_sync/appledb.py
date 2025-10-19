@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import sentry_sdk
+from deepdiff import DeepDiff  # type: ignore
 from pydantic import (
     BaseModel,
     computed_field,
@@ -125,6 +126,67 @@ def clone_or_update_appledb_repo(target_dir: Path) -> Path:
     return repo_dir
 
 
+def compare_artifacts_with_diff(existing: IpswArtifact, new: IpswArtifact) -> tuple[bool, str]:
+    """
+    Compare two artifacts and return (has_significant_changes, diff_summary).
+
+    "Significant" changes include:
+    - artifact fields: released, release_status, version, build, platform
+    - source fields: devices, file_name, hashes, link, size
+    - addition/removal of sources
+
+    Ignores processing-related fields that change during workflow execution.
+    """
+    existing_dict = existing.model_dump()
+    new_dict = new.model_dump()
+
+    # we expect these to change during processing
+    ignore_paths = [
+        "root['sources'][*]['processing_state']",
+        "root['sources'][*]['mirror_path']",
+        "root['sources'][*]['last_run']",
+        "root['sources'][*]['last_modified']",
+    ]
+
+    diff = DeepDiff(existing_dict, new_dict, exclude_regex_paths=ignore_paths, ignore_order=True)
+
+    if not diff:
+        return False, "No meaningful differences found"
+
+    significant_changes: list[str] = []
+
+    for change_type, changes in diff.items():  # type: ignore
+        if change_type in ["values_changed", "type_changes"]:
+            if hasattr(changes, "items"):  # type: ignore
+                for path, change in changes.items():  # type: ignore
+                    significant_fields = [
+                        "released",
+                        "release_status",
+                        "version",
+                        "build",
+                        "platform",  # artifact fields
+                        "devices",
+                        "file_name",
+                        "hashes",
+                        "link",
+                        "size",  # source fields
+                    ]
+                    if any(field in str(path) for field in significant_fields):  # type: ignore
+                        significant_changes.append(f"{change_type}: {path} = {change}")
+        elif change_type in ["iterable_item_added", "iterable_item_removed"]:
+            significant_changes.append(f"{change_type}: {changes}")
+
+    has_significant = len(significant_changes) > 0
+
+    summary_parts: list[str] = []
+    if significant_changes:
+        summary_parts.append(f"Significant changes: {'; '.join(significant_changes[:3])}")
+        if len(significant_changes) > 3:
+            summary_parts.append(f"... and {len(significant_changes) - 3} more significant changes")
+
+    return has_significant, " | ".join(summary_parts)
+
+
 class AppleDbIpswImport:
     def __init__(self, processing_dir: Path) -> None:
         self._processing_dir = processing_dir
@@ -209,7 +271,6 @@ class AppleDbIpswImport:
             self._process_file(file_path)
 
     def _process_file(self, file_path: Path) -> None:
-        logger.info(f"About to process {file_path} in {self.current_platform} folder {self.current_folder_name}")
         self.processed_file_count += 1
 
         try:
@@ -227,7 +288,6 @@ class AppleDbIpswImport:
         # either the artifact has no sources at all...
         if len(src_artifact.sources) == 0:
             self.artifact_wo_sources_count += 1
-            logger.warning("IPSW artifact has no sources and won't be imported")
             return
 
         ipsw_sources: list[IpswSource] = []
@@ -237,7 +297,6 @@ class AppleDbIpswImport:
         # ...or it has no usable sources (e.g. URLs that are no longer active, non-IPSW source, etc.)
         if len(ipsw_sources) == 0:
             self.artifact_wo_sources_count += 1
-            logger.warning("IPSW artifact has no usable sources and won't be imported")
             return
 
         src_dump = src_artifact.model_dump(exclude={"rc", "beta", "sources"})
@@ -245,11 +304,10 @@ class AppleDbIpswImport:
         src_dump["sources"] = ipsw_sources
         artifact = IpswArtifact(**src_dump)
         if self.meta_db.contains(artifact.key):
-            # this only checks if we already have that id, but it doesn't ask whether they
-            # differ... this should be easy to check with pydantic, but it might help to log
-            # the diff with something like deepdiff
-            logger.warning(
-                f"{artifact.key} already added\n\told = {self.meta_db.get(artifact.key)}\n\tnew = {artifact}"
-            )
+            existing_artifact = self.meta_db.get(artifact.key)
+            assert existing_artifact is not None  # We just checked contains()
+            has_significant_changes, diff_summary = compare_artifacts_with_diff(existing_artifact, artifact)
+            if has_significant_changes:
+                logger.warning(f"Artifact {artifact.key} has significant changes from AppleDB: {diff_summary}")
         else:
             self.new_artifacts.append(artifact)
