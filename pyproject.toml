@@ -19,9 +19,9 @@ readme = "README.md"
 
 [dependency-groups]
 dev = [
-    "pyright==1.1.404",
-    "ruff==0.12.9",
-    "pytest==8.4.1",
+    "pyright==1.1.406",
+    "ruff==0.14.1",
+    "pytest==8.4.2",
 ]
 
 [tool.ruff]
