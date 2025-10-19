@@ -1,14 +1,11 @@
-import json
 import logging
-import os
-import random
-from dataclasses import dataclass
+import shutil
+import subprocess
+import tempfile
 from datetime import date
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlparse
 
-import requests
 import sentry_sdk
 from pydantic import (
     BaseModel,
@@ -29,11 +26,9 @@ from symx._ipsw.common import (
     ARTIFACTS_META_JSON,
 )
 
-IMPORT_STATE_JSON = "appledb_import_state.json"
+APPLEDB_REPO_URL = "https://github.com/littlebyteorg/appledb.git"
 
 logger = logging.getLogger(__name__)
-
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", None)
 
 
 class AppleDbSourceLink(BaseModel):
@@ -92,9 +87,9 @@ class AppleDbArtifact(BaseModel):
     @computed_field  # type: ignore[misc]
     @property
     def release_status(self) -> IpswReleaseStatus:
-        if self.rc is True:
+        if self.rc:
             return IpswReleaseStatus.RELEASE_CANDIDATE
-        elif self.beta is True:
+        elif self.beta:
             return IpswReleaseStatus.BETA
 
         return IpswReleaseStatus.RELEASE
@@ -106,107 +101,62 @@ def ipsw_filename_from_url(url: str) -> str:
     return path.split("/")[-1][:-5]
 
 
-API_CONTENTS_URL = "https://api.github.com/repos/littlebyteorg/appledb/contents/"
+def clone_or_update_appledb_repo(target_dir: Path) -> Path:
+    """Clone or update the appledb repository to the target directory."""
+    repo_dir = target_dir / "appledb"
 
+    if repo_dir.exists():
+        logger.info(f"Updating existing appledb repository at {repo_dir}")
+        try:
+            subprocess.run(["git", "pull", "--ff-only"], cwd=repo_dir, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"Git pull failed, removing and re-cloning: {e}")
+            shutil.rmtree(repo_dir)
+            return clone_or_update_appledb_repo(target_dir)
+    else:
+        logger.info(f"Cloning appledb repository to {repo_dir}")
+        subprocess.run(
+            ["git", "clone", "--depth", "1", APPLEDB_REPO_URL, str(repo_dir)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
-def random_user_agent() -> str:
-    user_agents = [
-        (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like"
-            " Gecko) Chrome/61.0.3163.100 Safari/537.36"
-        ),
-        (
-            "Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like"
-            " Gecko) Chrome/61.0.3163.100 Safari/537.36"
-        ),
-        (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/537.36 (KHTML,"
-            " like Gecko) Chrome/61.0.3163.100 Safari/537.36"
-        ),
-        (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/604.1.38"
-            " (KHTML, like Gecko) Version/11.0 Safari/604.1.38"
-        ),
-        ("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:56.0) Gecko/20100101 Firefox/56.0"),
-        (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13) AppleWebKit/604.1.38 (KHTML,"
-            " like Gecko) Version/11.0 Safari/604.1.38"
-        ),
-    ]
-    return random.choice(user_agents)
-
-
-@dataclass
-class AppleDbIpswImportState:
-    platform: str | None = None
-    folder_hash: str | None = None
-    file_hash: str | None = None
-
-
-def _folder_sort_key(item: dict[str, str]) -> int:
-    folder_name: str = item["name"]
-    x_idx = folder_name.find("x")
-    try:
-        sort_key = int(folder_name[0:x_idx])
-    except ValueError:
-        sort_key = -1
-
-    return sort_key
-
-
-def _file_sort_key(item: dict[str, str]) -> str:
-    file_name: str = item["name"]
-    return file_name
-
-
-class GithubAPIResponse(BaseModel):
-    message: str
-    documentation_url: HttpUrl
+    return repo_dir
 
 
 class AppleDbIpswImport:
     def __init__(self, processing_dir: Path) -> None:
         self._processing_dir = processing_dir
-        self._load_appledb_indexed()
         self._load_meta_db()
-        self.api_request_count = 0
-        self.file_request_count = 0
         self.processed_file_count = 0
-        self.already_imported_count = 0
         self.artifact_wo_sources_count = 0
-        self.state = AppleDbIpswImportState()
         self.new_artifacts: list[IpswArtifact] = []
+        self._repo_dir: Path | None = None
 
     def run(self) -> None:
         try:
-            platforms = list(IpswPlatform)
+            # Clone or update the appledb repository
+            with tempfile.TemporaryDirectory() as temp_dir:
+                self._repo_dir = clone_or_update_appledb_repo(Path(temp_dir))
 
-            # ignore IPod IPSWs when syncing
-            platforms.remove(IpswPlatform.IPODOS)
+                platforms = list(IpswPlatform)
 
-            # there is no particular reason to iterate by any order through the platforms so let's shuffle (#rate-limit)
-            random.shuffle(platforms)
-            for platform in platforms:
-                self._process_platform(platform)
+                # ignore IPod IPSWs when syncing
+                platforms.remove(IpswPlatform.IPODOS)
+
+                for platform in platforms:
+                    self._process_platform(platform)
         except Exception as e:
             sentry_sdk.capture_exception(e)
             logger.warning(f"Failed to sync IPSW meta-data: {e}")
         finally:
-            logger.info(f"Number of github API requests = {self.api_request_count}")
-            logger.info(f"Number of github file requests = {self.file_request_count}")
             logger.info(f"Number of processed files = {self.processed_file_count}")
-            logger.info(f"Number of already imported files = {self.already_imported_count}")
             logger.info(f"Number of artifacts w/o sources = {self.artifact_wo_sources_count}")
-
-            self._store_appledb_indexed()
 
     def _store_ipsw_meta(self) -> None:
         with open(self._processing_dir / ARTIFACTS_META_JSON, "w") as fp:
             fp.write(self.meta_db.model_dump_json())
-
-    def _store_appledb_indexed(self) -> None:
-        with open(self._processing_dir / IMPORT_STATE_JSON, "w") as fp:
-            json.dump(self.apple_db_import_state, fp)
 
     def _load_meta_db(self) -> None:
         try:
@@ -216,111 +166,66 @@ class AppleDbIpswImport:
         else:
             with fp:
                 self.meta_db = IpswArtifactDb.model_validate_json(fp.read())
-
-    def _load_appledb_indexed(self) -> None:
-        try:
-            fp = open(self._processing_dir / IMPORT_STATE_JSON)
-        except IOError:
-            self.apple_db_import_state: dict[str, list[str]] = {}
-        else:
-            with fp:
-                self.apple_db_import_state = json.load(fp)
-
-    def _github_api_request(self, url: str) -> bytes | None:
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": random_user_agent(),
-        }
-        if GITHUB_TOKEN:
-            headers["Authorization"] = f"token {GITHUB_TOKEN}"
-
-        response = requests.get(url, headers)
-        self.api_request_count += 1
-        if response.status_code != 200:
-            github_response = GithubAPIResponse.model_validate_json(response.text)
-            # we are not interested in rate-limit error notifications only log a warning
-            if response.status_code == 403 and "API rate limit exceeded" in github_response.message:
-                logger.warning(github_response.message)
-            else:
-                logger.error(f"Failed github API GET-request: {response.status_code}, {github_response}")
-            return None
-
-        return response.content
+                logger.info(
+                    f"Loaded IPSW meta-data from {self._processing_dir} with {len(self.meta_db.artifacts)} artifacts"
+                )
 
     def _process_platform(self, platform: str) -> None:
-        self.state.platform = platform
+        self.current_platform = platform
         sentry_sdk.set_tag("ipsw.import.appledb.platform", platform)
-        platform_url = f"{API_CONTENTS_URL}osFiles/{platform}"
-        response = self._github_api_request(platform_url)
-        if not response:
+
+        assert self._repo_dir is not None, "Repository directory must be set"
+        platform_dir = self._repo_dir / "osFiles" / platform
+
+        if not platform_dir.exists():
+            logger.warning(f"Platform directory {platform_dir} does not exist")
             return
 
-        platform_items: list[dict[str, Any]] = json.loads(response)
+        # Get all items in the platform directory
+        platform_items = list(platform_dir.iterdir())
 
-        # iterate platform_items starting with the latest releases
-        for item in sorted(platform_items, key=_folder_sort_key, reverse=True):
-            if item["type"] == "dir":
-                folder_name = item["name"]
-                if folder_name in ["0x - Classic"]:
-                    continue
-                self.state.folder_hash = item["sha"]
-                sentry_sdk.set_tag("ipsw.import.appledb.folder_hash", self.state.folder_hash)
-                sentry_sdk.set_tag("ipsw.import.appledb.folder_name", folder_name)
-                folder_url = f"{platform_url}/{folder_name}"
-                self._process_folder(folder_url)
-            elif item["type"] == "file":
-                self.state.file_hash = item["sha"]
-                download_url = item["download_url"]
-                sentry_sdk.set_tag("ipsw.import.appledb.download_url", download_url)
-                sentry_sdk.set_tag("ipsw.import.appledb.file_hash", self.state.file_hash)
-                self._process_file(download_url)
+        # Separate folders and files
+        folders = [item for item in platform_items if item.is_dir()]
+        files = [item for item in platform_items if item.is_file() and item.suffix == ".json"]
 
-    def _process_folder(self, folder_url: str) -> None:
-        response = self._github_api_request(folder_url)
-        if not response:
-            return
+        # Process folders (version directories)
+        for folder_path in folders:
+            folder_name = folder_path.name
+            if folder_name in ["0x - Classic"]:
+                continue
+            self.current_folder_name = folder_name
+            sentry_sdk.set_tag("ipsw.import.appledb.folder_name", folder_name)
+            self._process_folder(folder_path)
 
-        files = json.loads(response)
-        for file in sorted(files, key=_file_sort_key, reverse=True):
-            self.state.file_hash = file["sha"]
-            download_url = file["download_url"]
-            sentry_sdk.set_tag("ipsw.import.appledb.download_url", download_url)
-            sentry_sdk.set_tag("ipsw.import.appledb.file_hash", self.state.file_hash)
-            self._process_file(download_url)
+        # Process any files directly in the platform directory
+        for file_path in files:
+            self._process_file(file_path)
 
-    def _process_file(self, download_url: str) -> None:
-        logger.info(
-            f"About to process {download_url} (file-hash: {self.state.file_hash}) in"
-            f" {self.state.platform} folder {self.state.folder_hash}"
-        )
+    def _process_folder(self, folder_path: Path) -> None:
+        # Get all JSON files in the folder
+        json_files = [f for f in folder_path.iterdir() if f.is_file() and f.suffix == ".json"]
+
+        for file_path in json_files:
+            self._process_file(file_path)
+
+    def _process_file(self, file_path: Path) -> None:
+        logger.info(f"About to process {file_path} in {self.current_platform} folder {self.current_folder_name}")
         self.processed_file_count += 1
-        if self.file_in_import_state_log():
-            self.already_imported_count += 1
-            logger.info(f"{download_url} already processed continue with next")
-            return
-
-        headers = {
-            "Accept": "application/json",
-            "User-Agent": random_user_agent(),
-        }
-        response = requests.get(download_url, headers)
-        self.file_request_count += 1
-        if response.status_code != 200:
-            logger.error(f"Failed to download file contents: {response.status_code}, {response.text}")
-            return
 
         try:
-            src_artifact = AppleDbArtifact.model_validate_json(response.content)
+            with open(file_path, "r", encoding="utf-8") as f:
+                file_content = f.read()
+            src_artifact = AppleDbArtifact.model_validate_json(file_content)
+        except (IOError, OSError) as e:
+            logger.error(f"Failed to read file {file_path}: {e}")
+            return
         except ValidationError as e:
             sentry_sdk.capture_exception(e)
             logger.warning(f"Failed to validate AppleDb Artifact: {e}")
-            self.update_import_state_log()
             return
 
         # either the artifact has no sources at all...
         if len(src_artifact.sources) == 0:
-            self.update_import_state_log()
             self.artifact_wo_sources_count += 1
             logger.warning("IPSW artifact has no sources and won't be imported")
             return
@@ -331,13 +236,12 @@ class AppleDbIpswImport:
                 ipsw_sources.append(IpswSource(**source.model_dump(exclude={"type", "links"})))
         # ...or it has no usable sources (e.g. URLs that are no longer active, non-IPSW source, etc.)
         if len(ipsw_sources) == 0:
-            self.update_import_state_log()
             self.artifact_wo_sources_count += 1
             logger.warning("IPSW artifact has no usable sources and won't be imported")
             return
 
         src_dump = src_artifact.model_dump(exclude={"rc", "beta", "sources"})
-        src_dump["platform"] = self.state.platform
+        src_dump["platform"] = self.current_platform
         src_dump["sources"] = ipsw_sources
         artifact = IpswArtifact(**src_dump)
         if self.meta_db.contains(artifact.key):
@@ -349,22 +253,3 @@ class AppleDbIpswImport:
             )
         else:
             self.new_artifacts.append(artifact)
-
-        self.update_import_state_log()
-
-    def file_in_import_state_log(self) -> bool:
-        return (
-            self.state.folder_hash in self.apple_db_import_state
-            and self.state.file_hash in self.apple_db_import_state[self.state.folder_hash]
-        )
-
-    def update_import_state_log(self) -> None:
-        assert self.state.file_hash is not None
-        folder_hash = self.state.folder_hash if self.state.folder_hash is not None else self.state.file_hash
-
-        if folder_hash in self.apple_db_import_state:
-            if self.state.file_hash not in self.apple_db_import_state[folder_hash]:
-                self.apple_db_import_state[folder_hash].append(self.state.file_hash)
-        else:
-            self.apple_db_import_state[folder_hash] = []
-            self.apple_db_import_state[folder_hash].append(self.state.file_hash)

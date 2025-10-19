@@ -21,7 +21,6 @@ from symx._ipsw.common import (
     IpswArtifact,
     IpswSource,
 )
-from symx._ipsw.meta_sync.appledb import IMPORT_STATE_JSON
 from symx._ipsw.mirror import verify_download
 
 logger = logging.getLogger(__name__)
@@ -64,7 +63,6 @@ class IpswGcsStorage:
     def __init__(self, local_dir: Path, project: str | None, bucket: str) -> None:
         self.local_dir = local_dir
         self.local_artifacts_meta = self.local_dir / ARTIFACTS_META_JSON
-        self.local_import_state = self.local_dir / IMPORT_STATE_JSON
         self.project = project
         self.client: Client = Client(project=self.project)
         self.bucket: Bucket = self.client.bucket(bucket)
@@ -75,22 +73,10 @@ class IpswGcsStorage:
             artifacts_meta_blob.download_to_filename(str(self.local_artifacts_meta))
         return artifacts_meta_blob
 
-    def load_import_state(self) -> Blob:
-        import_state_blob = self.bucket.blob(IMPORT_STATE_JSON)
-        if import_state_blob.exists():
-            import_state_blob.download_to_filename(str(self.local_import_state))
-        return import_state_blob
-
     def store_artifacts_meta(self, artifacts_meta_blob: Blob) -> None:
         artifacts_meta_blob.upload_from_filename(
             str(self.local_artifacts_meta),
             if_generation_match=artifacts_meta_blob.generation,
-        )
-
-    def store_import_state(self, import_state_blob: Blob) -> None:
-        import_state_blob.upload_from_filename(
-            str(self.local_import_state),
-            if_generation_match=import_state_blob.generation,
         )
 
     def upload_ipsw(self, artifact: IpswArtifact, downloaded_source: tuple[Path, IpswSource]) -> IpswArtifact:
