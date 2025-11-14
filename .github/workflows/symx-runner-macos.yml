@@ -21,7 +21,7 @@ on:
 jobs:
   symx-macos-job:
     name: ${{ inputs.job_name }}
-    runs-on: ["ghcr.io/cirruslabs/macos-runner:${{ matrix.macos-version }}", "runner_group_id:3"]
+    runs-on: ["ghcr.io/cirruslabs/macos-runner:Tahoe", "runner_group_id:3"]
     permissions:
       id-token: "write"
 
