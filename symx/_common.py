@@ -421,6 +421,6 @@ def symsort(
 
 def dyld_split(dsc: Path, output_dir: Path) -> CompletedProcess[bytes]:
     return subprocess.run(
-        ["ipsw", "dyld", "split", str(dsc), "--output", str(output_dir), "--xcode-path", "/Applications/Xcode.app"],
+        ["ipsw", "dyld", "split", str(dsc), "--output", str(output_dir)],
         capture_output=True,
     )
