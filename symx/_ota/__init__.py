@@ -315,12 +315,12 @@ class OtaMirror:
         self.meta: OtaMetaData = {}
 
     def update_meta(self) -> None:
-        logger.debug("Updating OTA meta-data")
+        logger.info("Updating OTA meta-data")
         apple_meta = retrieve_current_meta()
         self.meta = self.storage.save_meta(apple_meta)
 
     def mirror(self, timeout: datetime.timedelta) -> None:
-        logger.debug(f"Mirroring OTA images to {self.storage.name()}")
+        logger.info(f"Mirroring OTA images to {self.storage.name()}")
 
         start = time.time()
         self.update_meta()
@@ -404,7 +404,7 @@ def split_dsc(search_result: list[DSCSearchResult]) -> list[Path]:
         if result.returncode != 0:
             logger.warning(f"Split for {result_item.artifact} (arch: {result_item.arch} failed: {result}")
         else:
-            logger.debug(f"\t\t\tResult from split: {result}")
+            logger.info(f"\t\t\tResult from split: {result}")
             split_dirs.append(result_item.split_dir)
 
     # If none of the split attempts were successful the OTA extraction failed
@@ -519,7 +519,7 @@ def iter_mirror(storage: OtaStorage) -> Iterator[tuple[str, OtaArtifact]]:
 
         for key, ota in ota_meta.items():
             if ota.is_mirrored():
-                logger.debug(f"Found mirrored OTA: {key}")
+                logger.info(f"Found mirrored OTA: {key}")
                 mirrored_key = key
                 mirrored_ota = ota
                 break
@@ -529,7 +529,7 @@ def iter_mirror(storage: OtaStorage) -> Iterator[tuple[str, OtaArtifact]]:
             logger.info("No more mirrored OTAs available exiting iter_mirror().")
             return
         else:
-            logger.debug(f"Yielding mirrored OTA for further processing: {mirrored_ota}")
+            logger.info(f"Yielding mirrored OTA for further processing: {mirrored_ota}")
             yield mirrored_key, mirrored_ota
 
 
@@ -541,7 +541,7 @@ class OtaExtract:
     def extract(self, timeout: datetime.timedelta) -> None:
         validate_shell_deps()
 
-        logger.debug(f"Extracting symbols from OTA images in {self.storage.name()}")
+        logger.info(f"Extracting symbols from OTA images in {self.storage.name()}")
         start = time.time()
         key: str
         ota: OtaArtifact
@@ -554,7 +554,7 @@ class OtaExtract:
 
             with tempfile.TemporaryDirectory() as ota_work_dir:
                 work_dir_path = Path(ota_work_dir)
-                logger.debug(f"Download mirrored {key} to {work_dir_path}")
+                logger.info(f"Download mirrored {key} to {work_dir_path}")
                 local_ota_path = self.storage.load_ota(ota, work_dir_path)
                 if local_ota_path is None:
                     # means there is no OTA at the specified OTA location, although this was defined as MIRRORED

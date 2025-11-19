@@ -66,7 +66,7 @@ jobs:
           sudo ln -sf "$LIBHEIF_LIBDIR/libheif.1.dylib" /usr/local/homebrew/opt/libheif/lib/libheif.1.dylib
 
       - name: Extract Simulator from ${{matrix.runs-on}}
-        run: uv run python -m symx -v sim extract -s ${{ vars.SYMX_STORE }}
+        run: uv run python -m symx sim extract -s ${{ vars.SYMX_STORE }}
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

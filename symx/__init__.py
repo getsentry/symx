@@ -19,16 +19,25 @@ app.add_typer(sim_app, name="sim")
 
 @app.callback()
 def main(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
+    setup_logs(verbose)
+    setup_sentry()
+
+
+def setup_sentry():
+    if not SENTRY_DSN:
+        return
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        traces_sample_rate=1.0,
+        enable_logs=True,
+    )
+    sentry_sdk.set_tag("github.run.id", github_run_id())
+
+
+def setup_logs(verbose: bool):
     lvl = logging.INFO
     fmt = "[%(levelname)s] %(asctime)s | %(name)s - - %(message)s"
     if verbose:
         lvl = logging.DEBUG
     logging.basicConfig(level=lvl, format=fmt)
-
-    sentry_sdk.set_tag("github.run.id", github_run_id())
-
-    if SENTRY_DSN:
-        sentry_sdk.init(
-            dsn=SENTRY_DSN,
-            traces_sample_rate=1.0,
-        )

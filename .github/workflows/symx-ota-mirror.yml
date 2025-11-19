@@ -16,6 +16,6 @@ jobs:
     with:
       job_name: Mirror OTA images
       symx_step: OTA Mirror
-      symx_run: -v ota mirror -s ${{ vars.SYMX_STORE }}
+      symx_run: ota mirror -s ${{ vars.SYMX_STORE }}
     secrets:
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}

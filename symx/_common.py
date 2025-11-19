@@ -191,7 +191,7 @@ def check_sha1(hash_sum: str, filepath: Path) -> bool:
             block = f.read(HASH_BLOCK_SIZE)
 
     sha1sum_result = sha1sum.hexdigest()
-    logger.debug(f"Calculated sha1 = {sha1sum_result}, expected sha1 = {hash_sum}")
+    logger.info(f"Calculated sha1 = {sha1sum_result}, expected sha1 = {hash_sum}")
     return sha1sum_result == hash_sum
 
 
@@ -216,7 +216,7 @@ def download_url_to_file(url: str, filepath: Path) -> None:
     else:
         total = int(content_length)
         total_mib = total / MiB
-        logger.debug(f"Filesize: {floor(total_mib)} MiB")
+        logger.info(f"Filesize: {floor(total_mib)} MiB")
 
     with open(filepath, "wb") as f:
         actual = 0
@@ -228,10 +228,10 @@ def download_url_to_file(url: str, filepath: Path) -> None:
 
             actual_mib = actual / MiB
             if actual_mib - last_print > 100.0:
-                logger.debug(f"{floor(actual_mib)} MiB")
+                logger.info(f"{floor(actual_mib)} MiB")
                 last_print = actual_mib
 
-        logger.debug(f"{floor(actual_mib)} MiB")
+        logger.info(f"{floor(actual_mib)} MiB")
 
 
 def compare_md5_hash(local_file: Path, remote_blob: Blob) -> bool:

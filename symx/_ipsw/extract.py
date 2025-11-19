@@ -68,7 +68,7 @@ class IpswExtractor:
                 # consume and log remaining output from stdout and stderr
                 stdout, _ = process.communicate()
                 ipsw_output = stdout.decode("utf-8")
-                logger.debug(f"ipsw output: {ipsw_output}")
+                logger.info(f"ipsw output: {ipsw_output}")
                 raise TimeoutError("IPSW extraction timed out and was terminated.")
 
             if process.returncode != 0:
@@ -80,7 +80,7 @@ class IpswExtractor:
             # there should only be IPSW extraction directories or the "split_out" directory if we accumulate over
             # multiple architectures. We shouldn't detect the latter as an input directory to the split function
             if item.is_dir() and str(item.name) not in ["split_out", "symbols"]:
-                logger.debug(f"Found {item} in processing directory after IPSW extraction")
+                logger.warning(f"Found {item} in processing directory after IPSW extraction")
                 return item
 
         return None
