@@ -3,6 +3,7 @@ import os
 
 import sentry_sdk
 import typer
+from sentry_sdk.integrations.logging import SentryLogsHandler
 
 from ._common import github_run_id
 from ._ipsw.app import ipsw_app
@@ -58,6 +59,8 @@ class AppendExtrasFormatter(logging.Formatter):
         "threadName",
         "processName",
         "process",
+        "asctime",
+        "message",
     }
 
     def format(self, record: logging.LogRecord):
@@ -75,8 +78,8 @@ class AppendExtrasFormatter(logging.Formatter):
 def setup_logs(verbose: bool):
     lvl = logging.INFO
     fmt = "[%(levelname)s] %(asctime)s | %(name)s - - %(message)s%(extra_str)s"
-    handler = logging.StreamHandler()
-    handler.setFormatter(AppendExtrasFormatter(fmt=fmt))
+    extra_std_out = logging.StreamHandler()
+    extra_std_out.setFormatter(AppendExtrasFormatter(fmt=fmt))
     if verbose:
         lvl = logging.DEBUG
-    logging.basicConfig(level=lvl, format=fmt, handlers=[handler])
+    logging.basicConfig(level=lvl, format=fmt, handlers=[SentryLogsHandler(level=logging.INFO), extra_std_out])
