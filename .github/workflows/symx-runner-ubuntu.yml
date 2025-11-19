@@ -58,17 +58,11 @@ jobs:
 
       - name: Cleanup runner-image
         run: |
-          ls -la /usr/local/lib/android
-          rm -rf /usr/local/lib/android || true
-          ls -la /usr/share/swift
-          rm -rf /usr/share/swift || true
-          ls -la /usr/share/dotnet
-          rm -rf /usr/share/dotnet || true
-          ls -la /usr/lib/jvm
-          rm -rf /usr/lib/jvm || true
-          ls -la /home/linuxbrew/.linuxbrew
-          rm -rf /home/linuxbrew/.linuxbrew || true
-          ls -la /usr/share
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/share/swift || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/lib/jvm || true
+          sudo rm -rf /home/linuxbrew/.linuxbrew || true
 
       - name: ${{ inputs.symx_step }}
         run: uv run python -m symx ${{ env.SYMX_RUN }}
