@@ -56,6 +56,15 @@ jobs:
           sudo cp AppleIncRootCertificate.crt /usr/local/share/ca-certificates
           sudo update-ca-certificates
 
+      - name: Cleanup runner-image
+        run: |
+          rm -rf /usr/local/lib/android
+          rm -rf /usr/share/swift
+          rm -rf /usr/share/dotnet
+          rm -rf /usr/lib/jvm
+          rm -rf /home/linuxbrew/.linuxbrew
+          ls -la /usr/share
+
       - name: ${{ inputs.symx_step }}
         run: uv run python -m symx ${{ env.SYMX_RUN }}
         env:
