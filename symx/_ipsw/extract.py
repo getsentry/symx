@@ -77,15 +77,6 @@ class IpswExtractor:
                 raise IpswExtractError(f"ipsw extract failed with {error_msg}")
 
         _log_directory_contents(self.processing_dir)
-        for item in self.processing_dir.iterdir():
-            # there should only be IPSW extraction directories or the "split_out" directory if we accumulate over
-            # multiple architectures. We shouldn't detect the latter as an input directory to the split function
-            if item.is_dir() and str(item.name) not in ["split_out", "symbols"]:
-                logger.warning(
-                    "Found unexpected directory in processing directory after IPSW extraction",
-                    extra={"directory": item},
-                )
-                return item
 
         return None
 
@@ -273,7 +264,7 @@ def _log_directory_contents(directory: Path) -> None:
     if not directory.is_dir():
         return
     dir_contents = "\n".join(str(item.name) for item in directory.iterdir())
-    logger.debug("Contents of directory.", extra={"directory": directory, "contents": dir_contents})
+    logger.info("Contents of directory.", extra={"directory": directory, "contents": dir_contents})
 
 
 def _map_platform_to_prefix(ipsw_platform: IpswPlatform) -> str:

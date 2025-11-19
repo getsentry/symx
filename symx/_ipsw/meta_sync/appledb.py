@@ -309,7 +309,7 @@ class AppleDbIpswImport:
             assert existing_artifact is not None  # We just checked contains()
             has_significant_changes, diff_summary = compare_artifacts_with_diff(existing_artifact, artifact)
             if has_significant_changes:
-                logger.warning(
+                logger.debug(
                     "Artifact has significant changes from AppleDB.",
                     extra={
                         "appledb_artifact": artifact,

@@ -292,7 +292,7 @@ def upload_file(local_file: Path, dest_blob_name: Path, bucket: Bucket) -> bool:
     try:
         blob.upload_from_filename(str(local_file), retry=SYMX_GCS_RETRY, if_generation_match=0)
     except PreconditionFailed:
-        logger.info(
+        logger.debug(
             "Local file exists in symbol-store. Continue with next.",
             extra={"local_file": local_file, "dest_blob_name": dest_blob_name},
         )
