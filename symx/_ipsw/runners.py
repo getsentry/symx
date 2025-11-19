@@ -148,6 +148,11 @@ def _post_mirrored_filter(  # pyright: ignore [reportUnusedFunction]
 
 
 sources = [
+    "AppleTV3,2_8.4.3_12H1006_Restore.ipsw",
+    "AppleTV5,3_26.1_23J5543j_Restore.ipsw",
+    "Apple_Vision_Pro_26.0.1_23M341_Restore.ipsw",
+    "Apple_Vision_Pro_26.1_23N5028e_Restore.ipsw",
+    "Apple_Vision_Pro_26.2_23N5285d_Restore.ipsw",
     "iPhone12,1_26.2_23C5044b_Restore.ipsw",
 ]
 
