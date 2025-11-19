@@ -107,15 +107,15 @@ def clone_or_update_appledb_repo(target_dir: Path) -> Path:
     repo_dir = target_dir / "appledb"
 
     if repo_dir.exists():
-        logger.info(f"Updating existing appledb repository at {repo_dir}")
+        logger.info("Updating existing appledb repository.", extra={"repo_dir": repo_dir})
         try:
             subprocess.run(["git", "pull", "--ff-only"], cwd=repo_dir, check=True, capture_output=True, text=True)
         except subprocess.CalledProcessError as e:
-            logger.warning(f"Git pull failed, removing and re-cloning: {e}")
+            logger.warning("Git pull failed, removing and re-cloning.", extra={"exception": e})
             shutil.rmtree(repo_dir)
             return clone_or_update_appledb_repo(target_dir)
     else:
-        logger.info(f"Cloning appledb repository to {repo_dir}")
+        logger.info("Cloning appledb repository.", extra={"repo_dir": repo_dir})
         subprocess.run(
             ["git", "clone", "--depth", "1", APPLEDB_REPO_URL, str(repo_dir)],
             check=True,
@@ -211,10 +211,10 @@ class AppleDbIpswImport:
                     self._process_platform(platform)
         except Exception as e:
             sentry_sdk.capture_exception(e)
-            logger.warning(f"Failed to sync IPSW meta-data: {e}")
+            logger.warning("Failed to sync IPSW meta-data.", extra={"exception": e})
         finally:
-            logger.info(f"Number of processed files = {self.processed_file_count}")
-            logger.info(f"Number of artifacts w/o sources = {self.artifact_wo_sources_count}")
+            logger.info("Number of processed files = %d" % self.processed_file_count)
+            logger.info("Number of artifacts w/o sources = %d" % self.artifact_wo_sources_count)
 
     def _store_ipsw_meta(self) -> None:
         with open(self._processing_dir / ARTIFACTS_META_JSON, "w") as fp:
@@ -229,7 +229,8 @@ class AppleDbIpswImport:
             with fp:
                 self.meta_db = IpswArtifactDb.model_validate_json(fp.read())
                 logger.info(
-                    f"Loaded IPSW meta-data from {self._processing_dir} with {len(self.meta_db.artifacts)} artifacts"
+                    "Loaded IPSW meta-data from processing directory.",
+                    extra={"processing_dir": self._processing_dir, "num_artifacts": len(self.meta_db.artifacts)},
                 )
 
     def _process_platform(self, platform: str) -> None:
@@ -240,7 +241,7 @@ class AppleDbIpswImport:
         platform_dir = self._repo_dir / "osFiles" / platform
 
         if not platform_dir.exists():
-            logger.warning(f"Platform directory {platform_dir} does not exist")
+            logger.warning("Platform directory does not exist.", extra={"platform_dir": platform_dir})
             return
 
         # Get all items in the platform directory
@@ -278,11 +279,11 @@ class AppleDbIpswImport:
                 file_content = f.read()
             src_artifact = AppleDbArtifact.model_validate_json(file_content)
         except (IOError, OSError) as e:
-            logger.error(f"Failed to read file {file_path}: {e}")
+            logger.error("Failed to read AppleDb artifact file.", extra={"file_path": file_path, "exception": e})
             return
         except ValidationError as e:
             sentry_sdk.capture_exception(e)
-            logger.warning(f"Failed to validate AppleDb Artifact: {e}")
+            logger.warning("Failed to validate AppleDb Artifact.", extra={"file_path": file_path, "exception": e})
             return
 
         # either the artifact has no sources at all...
@@ -308,6 +309,13 @@ class AppleDbIpswImport:
             assert existing_artifact is not None  # We just checked contains()
             has_significant_changes, diff_summary = compare_artifacts_with_diff(existing_artifact, artifact)
             if has_significant_changes:
-                logger.warning(f"Artifact {artifact.key} has significant changes from AppleDB: {diff_summary}")
+                logger.warning(
+                    "Artifact has significant changes from AppleDB.",
+                    extra={
+                        "appledb_artifact": artifact,
+                        "our_artifact": existing_artifact,
+                        "diff_summary": diff_summary,
+                    },
+                )
         else:
             self.new_artifacts.append(artifact)

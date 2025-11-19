@@ -35,9 +35,48 @@ def setup_sentry():
     sentry_sdk.set_tag("github.run.id", github_run_id())
 
 
+class AppendExtrasFormatter(logging.Formatter):
+    RESERVED = {
+        "name",
+        "msg",
+        "args",
+        "levelname",
+        "levelno",
+        "pathname",
+        "filename",
+        "module",
+        "exc_info",
+        "exc_text",
+        "stack_info",
+        "lineno",
+        "funcName",
+        "created",
+        "msecs",
+        "relativeCreated",
+        "taskName",
+        "thread",
+        "threadName",
+        "processName",
+        "process",
+    }
+
+    def format(self, record: logging.LogRecord):
+        # Extract non-standard attributes
+        extras = {k: v for k, v in record.__dict__.items() if k not in self.RESERVED}
+
+        if extras:
+            record.extra_str = f" {{{' '.join(f'{k}={v!r}' for k, v in extras.items())}}}"
+        else:
+            record.extra_str = ""
+
+        return super().format(record)
+
+
 def setup_logs(verbose: bool):
     lvl = logging.INFO
-    fmt = "[%(levelname)s] %(asctime)s | %(name)s - - %(message)s"
+    fmt = "[%(levelname)s] %(asctime)s | %(name)s - - %(message)s%(extra_str)s"
+    handler = logging.StreamHandler()
+    handler.setFormatter(AppendExtrasFormatter(fmt=fmt))
     if verbose:
         lvl = logging.DEBUG
-    logging.basicConfig(level=lvl, format=fmt)
+    logging.basicConfig(level=lvl, format=fmt, handlers=[handler])

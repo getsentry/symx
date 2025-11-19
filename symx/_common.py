@@ -20,6 +20,7 @@ from urllib.parse import ParseResult, urlparse
 
 import requests
 import sentry_sdk
+from google.api_core.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Bucket
 from google.cloud.storage.retry import DEFAULT_RETRY
 
@@ -191,7 +192,7 @@ def check_sha1(hash_sum: str, filepath: Path) -> bool:
             block = f.read(HASH_BLOCK_SIZE)
 
     sha1sum_result = sha1sum.hexdigest()
-    logger.info(f"Calculated sha1 = {sha1sum_result}, expected sha1 = {hash_sum}")
+    logger.info("Calculated sha1", extra={"sha1": sha1sum_result, "expected_sha1": hash_sum})
     return sha1sum_result == hash_sum
 
 
@@ -205,7 +206,7 @@ def try_download_url_to_file(url: str, filepath: Path, num_retries: int = 5) -> 
                 num_retries = num_retries - 1
             else:
                 sentry_sdk.capture_exception(e)
-                logger.warning(f"Failed to download URL {url} after {num_retries} retries: {e}")
+                logger.warning("Failed to download URL", extra={"url": url, "retries": num_retries, "exception": e})
 
 
 def download_url_to_file(url: str, filepath: Path) -> None:
@@ -216,7 +217,7 @@ def download_url_to_file(url: str, filepath: Path) -> None:
     else:
         total = int(content_length)
         total_mib = total / MiB
-        logger.info(f"Filesize: {floor(total_mib)} MiB")
+        logger.info("Filesize: %dMiB", floor(total_mib))
 
     with open(filepath, "wb") as f:
         actual = 0
@@ -228,10 +229,10 @@ def download_url_to_file(url: str, filepath: Path) -> None:
 
             actual_mib = actual / MiB
             if actual_mib - last_print > 100.0:
-                logger.info(f"{floor(actual_mib)} MiB")
+                logger.info("%dMiB", floor(actual_mib))
                 last_print = actual_mib
 
-        logger.info(f"{floor(actual_mib)} MiB")
+        logger.info("%dMiB", floor(actual_mib))
 
 
 def compare_md5_hash(local_file: Path, remote_blob: Blob) -> bool:
@@ -245,12 +246,12 @@ def compare_md5_hash(local_file: Path, remote_blob: Blob) -> bool:
     remote_hash = remote_blob.md5_hash
     local_hash = _fs_md5_hash(local_file)
     if remote_hash == local_hash:
-        logger.info(f'"{remote_blob.name}" was already uploaded with matching MD5 hash.')
+        logger.info("Blob was already uploaded with matching MD5 hash.", extra={"blob_name": remote_blob.name})
         return True
     else:
         logger.error(
-            f'"{remote_blob.name}" was already uploaded but MD5 hash differs from the'
-            f" one uploaded (remote = {remote_hash}, local = {local_hash}). "
+            "Blob was already uploaded but MD5 hash differs from the one uploaded",
+            extra={"blob_name": remote_blob.name, "remote_hash": {remote_hash}, "local_hash": {local_hash}},
         )
         return False
 
@@ -288,25 +289,24 @@ def parse_gcs_url(storage: str) -> ParseResult | None:
 def upload_file(local_file: Path, dest_blob_name: Path, bucket: Bucket) -> bool:
     blob = bucket.blob(str(dest_blob_name))
 
-    if blob.exists():
-        # If the blob exists we can continue with the next file because there should be no duplicate
-        # which contains a mismatching symbol table. this is a big assumption, and we should probably
-        # cross-check the symbols between the debug-id-equal binaries of each artifact. but this if is
-        # not that place.
-        logger.info(f"{local_file} exists in symbol-store at {dest_blob_name}. Continue with next.")
+    try:
+        blob.upload_from_filename(str(local_file), retry=SYMX_GCS_RETRY, if_generation_match=0)
+    except PreconditionFailed:
+        logger.info(
+            "Local file exists in symbol-store. Continue with next.",
+            extra={"local_file": local_file, "dest_blob_name": dest_blob_name},
+        )
         return False
-
-    blob.upload_from_filename(str(local_file), retry=SYMX_GCS_RETRY)
     return True
 
 
 def upload_symbol_binaries(bucket: Bucket, platform: str, bundle_id: str, binary_dir: Path) -> None:
-    logger.info(f"Uploading symbol binaries for {platform} and {bundle_id}")
+    logger.info("Uploading symbol binaries.", extra={"platform": platform, "bundle_id": bundle_id})
     dest_blob_prefix = Path("symbols")
     bundle_index_path = dest_blob_prefix / platform / "bundles" / bundle_id
     blob = bucket.blob(str(bundle_index_path))
     if blob.exists():
-        logger.warning(f"We already have a `bundle_id` {bundle_id} for {platform} in the symbol store. ")
+        logger.warning("Bundle already exists in symbol store.", extra={"bundle_id": bundle_id, "platform": platform})
 
     duplicate_count = 0
     new_count = 0
@@ -330,14 +330,14 @@ def upload_symbol_binaries(bucket: Bucket, platform: str, bundle_id: str, binary
             else:
                 new_count += 1
 
-    logger.info(f"New files uploaded = {new_count}")
-    logger.info(f"Ignored duplicates = {duplicate_count}")
+    logger.info("New files uploaded =", extra={"new_files_count": new_count})
+    logger.info("Ignored duplicates =", extra={"duplicate_count": duplicate_count})
 
 
 def validate_shell_deps() -> None:
     version = ipsw_version()
     if version:
-        logger.info(f"Using ipsw {version}")
+        logger.info("Using ipsw %s" % version)
         sentry_sdk.set_tag("ipsw.version", version)
     else:
         logger.error("ipsw not installed")
@@ -345,17 +345,18 @@ def validate_shell_deps() -> None:
 
     result = subprocess.run(["./symsorter", "--version"], capture_output=True)
     if result.returncode == 0:
-        symsorter_version_parts = result.stdout.decode("utf-8").splitlines()
+        symsorter_stdout = result.stdout.decode("utf-8")
+        symsorter_version_parts = symsorter_stdout.splitlines()
         if len(symsorter_version_parts) < 1:
-            logger.error("Cannot parse symsorter version")
+            logger.error("Cannot parse symsorter version: %s" % symsorter_stdout)
             sys.exit(1)
 
         symsorter_version = symsorter_version_parts[0].split(" ").pop()
-        logger.info(f"Using symsorter {symsorter_version}")
+        logger.info("Using symsorter %s" % symsorter_version)
         sentry_sdk.set_tag("symsorter.version", symsorter_version)
     else:
         symsorter_stderr = result.stderr.decode("utf-8")
-        logger.error(f"symsorter failed: {symsorter_stderr}")
+        logger.error("symsorter failed: %s" % symsorter_stderr)
         sys.exit(1)
 
 
@@ -369,7 +370,9 @@ def try_download_to_filename(blob: Blob, local_file_path: Path, num_retries: int
                 num_retries = num_retries - 1
             else:
                 sentry_sdk.capture_exception(e)
-                logger.warning(f"Failed to download blob {blob.name} after {num_retries} retries: {e}")
+                logger.warning(
+                    "Failed to download blob.", extra={"blob_name": blob.name, "retries": num_retries, "exception": e}
+                )
                 return False
 
     return True
@@ -424,3 +427,13 @@ def dyld_split(dsc: Path, output_dir: Path) -> CompletedProcess[bytes]:
         ["ipsw", "dyld", "split", str(dsc), "--output", str(output_dir)],
         capture_output=True,
     )
+
+
+def log_disk_usage(prefix: str = "") -> None:
+    total, used, free = shutil.disk_usage("/")
+    if prefix:
+        fmt_str = f"disk_usage ({prefix})"
+    else:
+        fmt_str = "disk_usage"
+
+    logger.info(fmt_str, extra={"total": total, "used": used, "free": free})

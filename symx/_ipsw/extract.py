@@ -66,9 +66,10 @@ class IpswExtractor:
                 # the timeout above doesn't kill the process, so make sure it is gone
                 process.kill()
                 # consume and log remaining output from stdout and stderr
-                stdout, _ = process.communicate()
-                ipsw_output = stdout.decode("utf-8")
-                logger.info(f"ipsw output: {ipsw_output}")
+                stdout, stderr = process.communicate()
+                ipsw_stdout = stdout.decode("utf-8")
+                ipsw_stderr = stdout.decode("utf-8")
+                logger.warning("ipsw timed out", extra={"ipsw_stdout": ipsw_stdout, "ipsw_stderr": ipsw_stderr})
                 raise TimeoutError("IPSW extraction timed out and was terminated.")
 
             if process.returncode != 0:
@@ -80,7 +81,10 @@ class IpswExtractor:
             # there should only be IPSW extraction directories or the "split_out" directory if we accumulate over
             # multiple architectures. We shouldn't detect the latter as an input directory to the split function
             if item.is_dir() and str(item.name) not in ["split_out", "symbols"]:
-                logger.warning(f"Found {item} in processing directory after IPSW extraction")
+                logger.warning(
+                    "Found unexpected directory in processing directory after IPSW extraction",
+                    extra={"directory": item},
+                )
                 return item
 
         return None
@@ -99,7 +103,7 @@ class IpswExtractor:
             compressed_archives: list[tuple[Path, str]] = []
 
             for arch in [Arch.ARM64E, Arch.X86_64]:
-                logger.info(f"Extracting and processing architecture: {arch}")
+                logger.info("Extracting and processing DSC architecture.", extra={"arch": arch})
                 extract_dir = self._ipsw_extract_dsc(arch)
                 if extract_dir is None:
                     raise IpswExtractError(f"Couldn't find IPSW dyld_shared_cache extraction directory for {arch}")
@@ -112,11 +116,13 @@ class IpswExtractor:
                 if arch_split_dir.exists():
                     archive_path = self._compress_directory(arch_split_dir)
                     compressed_archives.append((archive_path, arch))
-                    logger.info(f"Compressed {arch} split output to {archive_path}")
+                    logger.info(
+                        "Finished compressing architecture split.", extra={"arch": arch, "archive_path": archive_path}
+                    )
 
             # Delete IPSW file now that both architectures are extracted and compressed
             if self.ipsw_path.exists():
-                logger.info(f"Deleting IPSW file to save space: {self.ipsw_path}")
+                logger.info("Deleting IPSW file to save space.", extra={"ipsw_path": self.ipsw_path})
                 self.ipsw_path.unlink()
 
             # Decompress all archives before final symsort processing
@@ -133,7 +139,7 @@ class IpswExtractor:
 
             # Delete IPSW also in the non-macOS path since this is our contract to the caller
             if self.ipsw_path.exists():
-                logger.info(f"Deleting IPSW file to save space: {self.ipsw_path}")
+                logger.info("Deleting IPSW file to save space.", extra={"ipsw_path": self.ipsw_path})
                 self.ipsw_path.unlink()
 
             split_dir = self._ipsw_split(extract_dir)
@@ -251,7 +257,7 @@ class IpswExtractor:
 
     def _symsort(self, split_dir: Path, ignore_errors: bool = False):
         output_dir = self.symbols_dir()
-        logger.info(f"\t\t\tSymsorting {split_dir} to {output_dir}")
+        logger.info("Symsorting.", extra={"split_dir": split_dir, "output_dir": output_dir})
 
         result = symsort(output_dir, self.prefix, self.bundle_id, split_dir, ignore_errors)
 
@@ -267,7 +273,7 @@ def _log_directory_contents(directory: Path) -> None:
     if not directory.is_dir():
         return
     dir_contents = "\n".join(str(item.name) for item in directory.iterdir())
-    logger.debug(f"Contents of {directory}: \n\n{dir_contents}")
+    logger.debug("Contents of directory.", extra={"directory": directory, "contents": dir_contents})
 
 
 def _map_platform_to_prefix(ipsw_platform: IpswPlatform) -> str:

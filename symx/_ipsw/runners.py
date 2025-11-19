@@ -10,6 +10,7 @@ from symx._common import (
     ArtifactProcessingState,
     validate_shell_deps,
     try_download_url_to_file,
+    log_disk_usage,
 )
 from symx._ipsw.common import IpswArtifact, IpswSource
 from symx._ipsw.extract import IpswExtractor
@@ -30,7 +31,7 @@ def import_meta_from_appledb(ipsw_storage: IpswGcsStorage) -> None:
     importer = AppleDbIpswImport(ipsw_storage.local_dir)
     importer.run()
 
-    logger.info(f"Updating IPSW meta with {len(importer.new_artifacts)} new artifacts")
+    logger.info("Updating IPSW meta with new artifacts", extra={"num_new_items": len(importer.new_artifacts)})
 
     # the meta store could be updated concurrently by both mirror- and extract-workflows, this means we cannot just
     # write the blob with a generation check, because it will fail in that case without chance for recovery or retry.
@@ -43,20 +44,21 @@ def import_meta_from_appledb(ipsw_storage: IpswGcsStorage) -> None:
 def mirror(ipsw_storage: IpswGcsStorage, timeout: timedelta) -> None:
     start = time.time()
     for artifact in ipsw_storage.artifact_iter(mirror_filter):
-        logger.info(f"Downloading {artifact}")
+        logger.info("Downloading artifact.", extra={"artifact": artifact})
         sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
         for source_idx, source in enumerate(artifact.sources):
             if int(time.time() - start) > timeout.seconds:
-                logger.warning(f"Exiting IPSW mirror due to elapsed timeout of {timeout}")
+                logger.warning("Exiting IPSW mirror due to elapsed timeout.", extra={"timeout": timeout})
                 return
 
             sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
             if source.processing_state not in {
                 ArtifactProcessingState.INDEXED,
             }:
-                logger.info(f"Bypassing {source.link} because it was already mirrored")
+                logger.info("Bypassing source because it was already mirrored.", extra={"source": source})
                 continue
 
+            log_disk_usage()
             filepath = ipsw_storage.local_dir / source.file_name
             try_download_url_to_file(str(source.link), filepath)
             if not verify_download(filepath, source):
@@ -74,21 +76,24 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: timedelta) -> None:
     validate_shell_deps()
     start = time.time()
     for artifact in ipsw_storage.artifact_iter(extract_filter):
-        logger.info(f"Processing {artifact.key} for extraction")
+        logger.info("Processing artifact for extraction", extra={"artifact": artifact})
         sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
         for source_idx, source in enumerate(artifact.sources):
             # 1.) Check timeout
             if int(time.time() - start) > timeout.seconds:
-                logger.warning(f"Exiting IPSW extract due to elapsed timeout of {timeout}")
+                logger.warning("Exiting IPSW extract due to elapsed timeout.", extra={"timeout": timeout})
                 return
 
             # 2.) Check whether source should be extracted
             sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
             if source.processing_state != ArtifactProcessingState.MIRRORED:
-                logger.info(f"Bypassing {source.link} because it isn't ready to extract or already extracted")
+                logger.info(
+                    "Bypassing source because it isn't ready to extract or already extracted", extra={"source": source}
+                )
                 continue
 
             # 3.) Download IPSW from mirror. If failing update meta-data.
+            log_disk_usage()
             local_path = ipsw_storage.download_ipsw(source)
             if local_path is None:
                 # we haven't been able to download the artifact from the mirror
@@ -113,7 +118,10 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: timedelta) -> None:
                 artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
             except Exception as e:
                 sentry_sdk.capture_exception(e)
-                logger.warning(f"Symbol extraction failed, updating meta-data and continuing with the next one: {e}")
+                logger.warning(
+                    "Symbol extraction failed, updating meta-data and continuing with the next one.",
+                    extra={"artifact": artifact, "source": source, "exception": e},
+                )
                 artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
             finally:
                 artifact.sources[source_idx].update_last_run()
@@ -150,10 +158,10 @@ def migrate(ipsw_storage: IpswGcsStorage) -> None:
     for artifact in meta_db.artifacts.values():
         for source_idx, source in enumerate(artifact.sources):
             if source.file_name in sources:
-                logger.info(f"\t{source.file_name} ({source.processing_state})")
+                logger.info("\t%s (%s)" % (source.file_name, source.processing_state))
                 sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
                 if artifact.sources[source_idx].processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED:
-                    logger.info(f"\tChanging {source.file_name} to {ArtifactProcessingState.MIRRORED}")
+                    logger.info("\tChanging %s to %s" % (source.file_name, ArtifactProcessingState.MIRRORED))
                     artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
                     artifact.sources[source_idx].update_last_run()
                     ipsw_storage.update_meta_item(artifact)

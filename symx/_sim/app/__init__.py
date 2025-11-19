@@ -9,6 +9,7 @@ from google.cloud.storage import Client, Bucket
 
 from symx._common import symsort, dyld_split, upload_symbol_binaries, parse_gcs_url
 
+logger = logging.getLogger(__name__)
 sim_app = typer.Typer()
 
 
@@ -61,9 +62,7 @@ def extract(
                 if _is_ignored_dsc_file(dsc_file):
                     continue
                 runtime.arch = dsc_file.name.split(_dyld_shared_cache_prefix)[1]
-                logging.info(
-                    f"Extracting symbols for macOS {runtime.macos_version}, {runtime.os_name} {runtime.os_version} {runtime.arch}"
-                )
+                logger.info("Extracting symbols for macOS", extra={"runtime": runtime})
                 extract_system_symbols(runtime, Path(output_dir))
 
             upload_symbol_binaries(bucket, runtime.os_name, runtime.bundle_id, Path(output_dir))
@@ -131,4 +130,4 @@ def extract_system_symbols(runtime: SimulatorRuntime, output_dir: Path) -> None:
 
             symsort_result = symsort(output_dir, runtime.os_name, runtime.bundle_id, Path(dsc_out_dir))
             if symsort_result.returncode == 0:
-                logging.info(f"Extracted symbols for {symsort_result.stdout.decode()}")
+                logger.info("Symsorted symbols.", extra={"symsorter_output": symsort_result.stdout.decode()})

@@ -123,7 +123,7 @@ def parse_download_meta_output(
         # We regularly get 403 errors on the apple endpoint. These seem to be intermittent
         # availability issues and do not warrant error notification noise.
         if "api returned status: 403 Forbidden" not in ipsw_stderr:
-            logger.error(f"Download meta failed: {ipsw_stderr}")
+            logger.error("Download OTA meta failed.", extra={"ota": meta_data, "ipsw_stderr": ipsw_stderr})
     else:
         platform_meta = json.loads(result.stdout)
         for meta_item in platform_meta:
@@ -165,7 +165,7 @@ def parse_download_meta_output(
 def retrieve_current_meta() -> OtaMetaData:
     meta: OtaMetaData = {}
     for platform in PLATFORMS:
-        logger.info(f"Downloading meta for {platform}")
+        logger.info("Downloading OTA meta.", extra={"platform": platform})
         cmd = [
             "ipsw",
             "download",
@@ -291,12 +291,12 @@ def check_ota_hash(ota_meta: OtaArtifact, filepath: Path) -> bool:
 
 
 def download_ota_from_apple(ota_meta: OtaArtifact, download_dir: Path) -> Path:
-    logger.info(f"Downloading {ota_meta}")
+    logger.info("Downloading OTA from Apple.", extra={"ota": ota_meta, "download_dir": download_dir})
 
     filepath = download_dir / f"{ota_meta.platform}_{ota_meta.version}_{ota_meta.build}_{ota_meta.id}.zip"
     try_download_url_to_file(ota_meta.url, filepath)
     if check_ota_hash(ota_meta, filepath):
-        logger.info(f"Downloading {ota_meta} completed")
+        logger.info("OTA download completed.", extra={"ota": ota_meta, "download_dir": download_dir})
         return filepath
 
     raise RuntimeError(f"Failed to download {ota_meta.url}")
@@ -320,7 +320,7 @@ class OtaMirror:
         self.meta = self.storage.save_meta(apple_meta)
 
     def mirror(self, timeout: datetime.timedelta) -> None:
-        logger.info(f"Mirroring OTA images to {self.storage.name()}")
+        logger.info("Mirroring OTA images.", extra={"storage": self.storage.name()})
 
         start = time.time()
         self.update_meta()
@@ -329,7 +329,7 @@ class OtaMirror:
             ota: OtaArtifact
             for key, ota in self.meta.items():
                 if int(time.time() - start) > timeout.seconds:
-                    logger.info(f"Exiting OTA mirror due to elapsed timeout of {timeout}")
+                    logger.info("Exiting OTA mirror due to elapsed timeout.", extra={"timeout": timeout})
                     return
 
                 if not ota.is_indexed():
@@ -399,12 +399,18 @@ class OtaExtractError(Exception):
 def split_dsc(search_result: list[DSCSearchResult]) -> list[Path]:
     split_dirs: list[Path] = []
     for result_item in search_result:
-        logger.info(f"\t\tSplitting {DYLD_SHARED_CACHE} of {result_item.artifact}")
+        logger.info("\t\tSplitting DSC.", extra={"artifact": result_item.artifact})
         result = dyld_split(result_item.artifact, result_item.split_dir)
         if result.returncode != 0:
-            logger.warning(f"Split for {result_item.artifact} (arch: {result_item.arch} failed: {result}")
+            logger.warning(
+                "DSC Split failed.",
+                extra={"artifact": result_item.artifact, "arch": result_item.arch, "split_result": result},
+            )
         else:
-            logger.info(f"\t\t\tResult from split: {result}")
+            logger.info(
+                "\t\t\tDSC split successful.",
+                extra={"artifact": result_item.artifact, "arch": result_item.arch, "split_result": result},
+            )
             split_dirs.append(result_item.split_dir)
 
     # If none of the split attempts were successful the OTA extraction failed
@@ -454,7 +460,7 @@ def find_dsc(input_dir: Path, ota_meta: OtaArtifact, output_dir: Path) -> list[D
 
 
 def symsort(dsc_split_dir: Path, output_dir: Path, prefix: str, bundle_id: str) -> None:
-    logger.info(f"\t\t\tSymsorting {dsc_split_dir} to {output_dir}")
+    logger.info("\t\t\tSymsorting...", extra={"dsc_split_dir": dsc_split_dir, "symsort_output_dir": output_dir})
 
     rmdir_if_exists(output_dir)
     result = common_symsort(output_dir, prefix, bundle_id, dsc_split_dir)
@@ -464,7 +470,7 @@ def symsort(dsc_split_dir: Path, output_dir: Path, prefix: str, bundle_id: str) 
 
 def detach_dev(dev: str) -> None:
     result = subprocess.run(["hdiutil", "detach", dev], capture_output=True, check=True)
-    logger.debug(f"\t\t\tResult from detach: {result}")
+    logger.debug("\t\t\tDetached DMG.", extra={"detach_result": result})
 
 
 def mount_dmg(dmg: Path) -> MountInfo:
@@ -498,7 +504,7 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
         extract_dirs_output = "\n".join([str(dir_path) for dir_path in extract_dirs])
         raise OtaExtractError(f"Found more than one image directory in {artifact}:\n{extract_dirs_output}")
 
-    logger.info(f"\t\tSuccessfully extracted {DYLD_SHARED_CACHE} from: {artifact}")
+    logger.info("\t\tSuccessfully extracted DSC.", extra={"artifact": artifact})
 
     return extract_dirs[0]
 
@@ -519,7 +525,7 @@ def iter_mirror(storage: OtaStorage) -> Iterator[tuple[str, OtaArtifact]]:
 
         for key, ota in ota_meta.items():
             if ota.is_mirrored():
-                logger.info(f"Found mirrored OTA: {key}")
+                logger.info("Found mirrored OTA.", extra={"ota_key": key})
                 mirrored_key = key
                 mirrored_ota = ota
                 break
@@ -529,7 +535,7 @@ def iter_mirror(storage: OtaStorage) -> Iterator[tuple[str, OtaArtifact]]:
             logger.info("No more mirrored OTAs available exiting iter_mirror().")
             return
         else:
-            logger.info(f"Yielding mirrored OTA for further processing: {mirrored_ota}")
+            logger.info("Yielding mirrored OTA for further processing.", extra={"ota": mirrored_ota})
             yield mirrored_key, mirrored_ota
 
 
@@ -541,20 +547,20 @@ class OtaExtract:
     def extract(self, timeout: datetime.timedelta) -> None:
         validate_shell_deps()
 
-        logger.info(f"Extracting symbols from OTA images in {self.storage.name()}")
+        logger.info("Extracting symbols from OTA images.", extra={"storage": self.storage.name()})
         start = time.time()
         key: str
         ota: OtaArtifact
         for key, ota in iter_mirror(self.storage):
             if int(time.time() - start) > timeout.seconds:
-                logger.warning(f"Exiting OTA extract due to elapsed timeout of {timeout}")
+                logger.warning("Exiting OTA extract due to elapsed timeout", extra={"timeout": timeout})
                 return
 
             set_sentry_artifact_tags(key, ota)
 
             with tempfile.TemporaryDirectory() as ota_work_dir:
                 work_dir_path = Path(ota_work_dir)
-                logger.info(f"Download mirrored {key} to {work_dir_path}")
+                logger.info("Downloading mirrored OTA...", extra={"ota": ota, "local_path": work_dir_path})
                 local_ota_path = self.storage.load_ota(ota, work_dir_path)
                 if local_ota_path is None:
                     # means there is no OTA at the specified OTA location, although this was defined as MIRRORED
@@ -571,7 +577,7 @@ class OtaExtract:
                     # we only "handle" OtaExtractError as something where we can go on, all
                     # other exceptions should just stop the symbol-extraction process.
                     sentry_sdk.capture_exception(e)
-                    logger.warning(f"Failed to extract symbols from {ota}: {e}")
+                    logger.warning("Failed to extract symbols from OTA.", extra={"ota": ota, "exception": e})
                     # also need to mark failing cases, because otherwise they will fail again
                     ota.processing_state = ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
                     ota.update_last_run()
@@ -581,11 +587,12 @@ class OtaExtract:
         self, local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path
     ) -> bool:
         with tempfile.TemporaryDirectory(suffix="_cryptex_dmg") as cryptex_patch_dir:
-            logger.info(f"Trying patch_cryptex_dmg with {local_ota}")
+            logger.info("Trying patch_cryptex_dmg...", extra={"ota": ota_meta, "local_path": local_ota})
             extracted_dmgs = patch_cryptex_dmg(local_ota, Path(cryptex_patch_dir))
             if len(extracted_dmgs) != 0:
                 logger.info(
-                    f"\tCryptex patch successful. Mount, split, symsorting {DYLD_SHARED_CACHE} for: {local_ota}"
+                    "\tCryptex patch successful. Mount, split, symsorting DSC...",
+                    extra={"ota": ota_meta, "local_path": local_ota},
                 )
                 self.process_cryptex_dmg(extracted_dmgs, ota_meta_key, ota_meta, work_dir)
                 # TODO: maybe instead of bool that should be a container of paths produced in work_dir
@@ -596,7 +603,7 @@ class OtaExtract:
     def process_ota_directly(self, local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path) -> None:
         with tempfile.TemporaryDirectory(suffix="_dsc_extract") as extract_dsc_tmp_dir:
             extracted_dsc_dir = extract_ota(local_ota, Path(extract_dsc_tmp_dir))
-            logger.info(f"\t\tSplitting & symsorting {DYLD_SHARED_CACHE} for: {local_ota}")
+            logger.info("\t\tSplitting & symsorting DSC", extra={"ota": ota_meta, "local_path": local_ota})
 
             if extracted_dsc_dir:
                 self.split_and_symsort_dsc(extracted_dsc_dir, ota_meta_key, ota_meta, work_dir)
@@ -605,7 +612,7 @@ class OtaExtract:
         self, local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path
     ) -> None:
         if not self.try_processing_ota_as_cryptex(local_ota, ota_meta_key, ota_meta, work_dir):
-            logger.info(f"\tNot a cryptex, so extracting OTA {DYLD_SHARED_CACHE} directly")
+            logger.info("\tNot a cryptex, so extracting OTA DSC directly")
             self.process_ota_directly(local_ota, ota_meta_key, ota_meta, work_dir)
 
     def split_and_symsort_dsc(

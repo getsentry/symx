@@ -89,7 +89,9 @@ class OtaGcsStorage(OtaStorage):
         if not ota_file.is_file():
             raise RuntimeError("Path to upload must be a file")
 
-        logger.info(f"Start uploading {ota_file.name} to {self.bucket.name}")
+        logger.info(
+            "Uploading OTA.", extra={"ota": ota_meta, "ota_file": ota_file.name, "bucket_name": self.bucket.name}
+        )
         mirror_filename = convert_image_name_to_path(ota_file.name)
         blob = self.bucket.blob(mirror_filename)
         if blob.exists():

@@ -87,7 +87,7 @@ class IpswGcsStorage:
         if not ipsw_file.is_file():
             raise RuntimeError("Path to upload must be a file")
 
-        logger.info(f"Start uploading {ipsw_file.name} to {self.bucket.name}")
+        logger.info("Uploading IPSW.", extra={"ipsw": ipsw_file.name, "bucket": self.bucket.name})
 
         mirror_filename = f"mirror/ipsw/{artifact.platform}/{artifact.version}/{artifact.build}/{source.file_name}"
         blob = self.bucket.blob(mirror_filename)
@@ -167,7 +167,7 @@ class IpswGcsStorage:
                 return
 
             filtered_artifacts = filter_fun(meta_db.artifacts.values())
-            logger.info(f"Number of filtered artifacts = {len(filtered_artifacts)}")
+            logger.info("Number of filtered artifacts:", extra={"filtered_artifacts": len(filtered_artifacts)})
             sorted_by_age_descending = sorted(filtered_artifacts, key=_ipsw_artifact_sort_by_released, reverse=True)
 
             if len(sorted_by_age_descending) == 0:
@@ -176,7 +176,7 @@ class IpswGcsStorage:
             yield sorted_by_age_descending[0]
 
     def download_ipsw(self, ipsw_source: IpswSource) -> Path | None:
-        logger.info(f"Downloading source {ipsw_source.file_name}")
+        logger.info("Downloading IPSW source.", extra={"ipsw_source": ipsw_source})
         if ipsw_source.mirror_path is None:
             logger.error("Attempting to download IPSW without mirror path.")
             return None
@@ -210,12 +210,12 @@ class IpswGcsStorage:
             if item.is_dir():
                 try:
                     shutil.rmtree(item)
-                    logger.info(f"Removed directory {item} as part of local storage cleanup")
+                    logger.info("Removed directory as part of local storage cleanup", extra={"directory": item})
                 except Exception as e:
-                    logger.error(f"Error occurred while removing directory: {item}, Error: {e}")
+                    logger.error("Error occurred while removing directory.", extra={"directory": item, "exception": e})
             elif item.is_file() and item.suffix == ".ipsw":
                 try:
                     item.unlink()
-                    logger.info(f"Removed {item} as part of local storage cleanup")
+                    logger.info("Removed file as part of local storage cleanup.", extra={"file": item})
                 except Exception as e:
-                    logger.error(f"Error occurred while removing directory: {item}, Error: {e}")
+                    logger.error("Error occurred while removing file.", extra={"file": item, "exception": e})
