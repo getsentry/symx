@@ -77,6 +77,16 @@ class IpswExtractor:
                 raise IpswExtractError(f"ipsw extract failed with {error_msg}")
 
         _log_directory_contents(self.processing_dir)
+        for item in self.processing_dir.iterdir():
+            # we don't know the top-level directory name of the IPSW extraction so let's search for the only directory
+            # that isn't named "split_out" or "symbols" and return it as the DSC extraction top-level directory.
+            if item.is_dir() and str(item.name) not in ["split_out", "symbols"]:
+                logger.info(
+                    "Returning %s as the IPSW dyld extraction top-level directory",
+                    item,
+                    extra={"directory": item},
+                )
+                return item
 
         return None
 
