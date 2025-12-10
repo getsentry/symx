@@ -43,27 +43,12 @@ jobs:
           export PATH="/Users/runner/.local/bin:$PATH"
           uv --version
           uv sync
-          brew install libheif
           brew install blacktop/tap/ipsw
           brew install tree
           curl -L https://github.com/getsentry/symbolicator/releases/latest/download/symsorter-Darwin-universal > symsorter
           chmod +x symsorter
           pwd
           ls -la
-          
-      - name: macOS 13 compat path for libheif
-        if: matrix.runs-on == 'macos-13'
-        shell: bash
-        run: |
-          set -euo pipefail
-          
-          LIBHEIF_LIBDIR="$(brew --prefix libheif)/lib"
-      
-          # Re-create the hardcoded root rpath that ipsw tries to load
-          sudo mkdir -p /usr/local/homebrew/opt/libheif/lib
-      
-          # symlink the lib to the fake path
-          sudo ln -sf "$LIBHEIF_LIBDIR/libheif.1.dylib" /usr/local/homebrew/opt/libheif/lib/libheif.1.dylib
 
       - name: Extract Simulator from ${{matrix.runs-on}}
         run: uv run python -m symx sim extract -s ${{ vars.SYMX_STORE }}
