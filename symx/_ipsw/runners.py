@@ -148,12 +148,8 @@ def _post_mirrored_filter(  # pyright: ignore [reportUnusedFunction]
 
 
 sources = [
-    "Apple_Vision_Pro_26.2_23N301_Restore.ipsw",
-    "Apple_Vision_Pro_M5_26.2_23N301_Restore.ipsw",
-    "UniversalMac_26.2_25C56_Restore.ipsw",
-    "Apple_Vision_Pro_26.2_23N301_Restore.ipsw",
-    "UniversalMac_26.3_25D5087f_Restore.ipsw",
-    "Apple_Vision_Pro_26.3_23N5588c_Restore.ipsw",
+    "UniversalMac_26.3_25D5101c_Restore.ipsw",
+    "Apple_Vision_Pro_26.3_23N5602d_Restore.ipsw",
 ]
 
 
