@@ -8,7 +8,7 @@ dependencies = [
     "typer==0.21.1",
     "sentry-sdk==2.49.0",
     "google-cloud-storage==3.8.0",
-    "pydantic==2.12.3",
+    "pydantic==2.12.5",
     "pandas==2.3.0",
     "deepdiff==8.6.1",
 ]
