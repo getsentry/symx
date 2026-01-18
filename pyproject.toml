@@ -7,7 +7,7 @@ requires-python = "<3.14,>=3.12"
 dependencies = [
     "typer==0.19.2",
     "sentry-sdk==2.49.0",
-    "google-cloud-storage==3.5.0",
+    "google-cloud-storage==3.8.0",
     "pydantic==2.12.3",
     "pandas==2.3.0",
     "deepdiff==8.6.1",
