@@ -1,8 +1,6 @@
 import argparse
 import base64
-import dataclasses
 import hashlib
-import json
 import logging
 import os
 import re
@@ -10,12 +8,11 @@ import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 from enum import StrEnum
 from math import floor
 from pathlib import Path
 from subprocess import CompletedProcess
-from typing import Any, List
+from typing import List
 from urllib.parse import ParseResult, urlparse
 
 import requests
@@ -23,6 +20,7 @@ import sentry_sdk
 from google.api_core.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Bucket
 from google.cloud.storage.retry import DEFAULT_RETRY
+from pydantic import BaseModel, computed_field
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +84,9 @@ class ArtifactProcessingState(StrEnum):
     IGNORED = "ignored"
 
 
-@dataclass(frozen=True)
-class Device:
+class Device(BaseModel):
+    model_config = {"frozen": True}
+
     product: str
     model: str
     description: str
@@ -95,19 +94,13 @@ class Device:
     arch: Arch
     mem_class: int
 
+    @computed_field  # type: ignore[misc]
     @property
     def search_name(self) -> str:
         if self.product.endswith("-A") or self.product.endswith("-B"):
             return self.product[:-2]
 
         return self.product
-
-
-class DataClassJSONEncoder(json.JSONEncoder):
-    def default(self, o: Any) -> Any:
-        if dataclasses.is_dataclass(o) and not isinstance(o, type):
-            return dataclasses.asdict(o)
-        return super().default(o)
 
 
 def directory_arg_type(path: str) -> Path:

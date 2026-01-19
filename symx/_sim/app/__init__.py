@@ -1,11 +1,11 @@
 import logging
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
 import typer
 from google.cloud.storage import Client, Bucket
+from pydantic import BaseModel, computed_field
 
 from symx._common import symsort, dyld_split, upload_symbol_binaries, parse_gcs_url
 
@@ -13,8 +13,7 @@ logger = logging.getLogger(__name__)
 sim_app = typer.Typer()
 
 
-@dataclass
-class SimulatorRuntime:
+class SimulatorRuntime(BaseModel):
     arch: str
     build_number: str
     macos_version: str
@@ -22,6 +21,7 @@ class SimulatorRuntime:
     os_version: str
     path: Path
 
+    @computed_field  # type: ignore[misc]
     @property
     def bundle_id(self) -> str:
         return f"sim_{self.macos_version}_{self.os_version}_{self.build_number}_{self.arch}"

@@ -7,7 +7,6 @@ from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Client, Bucket
 
 from symx._common import (
-    DataClassJSONEncoder,
     ArtifactProcessingState,
     compare_md5_hash,
     parse_gcs_url,
@@ -65,8 +64,10 @@ class OtaGcsStorage(OtaStorage):
 
             merge_meta_data(ours, theirs)
             try:
+                # Convert Pydantic models to dict for JSON serialization
+                serializable_data = {k: v.model_dump() for k, v in ours.items()}
                 blob.upload_from_string(
-                    json.dumps(ours, cls=DataClassJSONEncoder),
+                    json.dumps(serializable_data),
                     if_generation_match=generation_match_precondition,
                 )
                 return ours
@@ -142,8 +143,10 @@ class OtaGcsStorage(OtaStorage):
 
             ours[ota_meta_key] = ota_meta
             try:
+                # Convert Pydantic models to dict for JSON serialization
+                serializable_data = {k: v.model_dump() for k, v in ours.items()}
                 blob.upload_from_string(
-                    json.dumps(ours, cls=DataClassJSONEncoder),
+                    json.dumps(serializable_data),
                     if_generation_match=generation_match_precondition,
                 )
                 return ours

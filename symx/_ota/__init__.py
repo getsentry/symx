@@ -8,11 +8,11 @@ import subprocess
 import tempfile
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
 import sentry_sdk
+from pydantic import BaseModel
 
 from symx._common import (
     Arch,
@@ -43,8 +43,7 @@ PLATFORMS = [
 ARTIFACTS_META_JSON = "ota_image_meta.json"
 
 
-@dataclass
-class OtaArtifact:
+class OtaArtifact(BaseModel):
     build: str
     description: list[str]
     version: str
@@ -351,15 +350,17 @@ class OtaMirror:
 DYLD_SHARED_CACHE = "dyld_shared_cache"
 
 
-@dataclass(frozen=True)
-class DSCSearchResult:
+class DSCSearchResult(BaseModel):
+    model_config = {"frozen": True}
+
     arch: Arch
     artifact: Path
     split_dir: Path
 
 
-@dataclass(frozen=True)
-class MountInfo:
+class MountInfo(BaseModel):
+    model_config = {"frozen": True}
+
     dev: str
     id: str
     point: Path
@@ -389,7 +390,7 @@ def find_system_os_dmgs(search_dir: Path) -> list[Path]:
 
 def parse_hdiutil_mount_output(cmd_output: str) -> MountInfo:
     mount_info = cmd_output.splitlines().pop().split()
-    return MountInfo(mount_info[0], mount_info[1], Path(mount_info[2]))
+    return MountInfo(dev=mount_info[0], id=mount_info[1], point=Path(mount_info[2]))
 
 
 class OtaExtractError(Exception):
