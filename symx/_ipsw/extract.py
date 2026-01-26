@@ -23,8 +23,7 @@ class IpswExtractor:
         processing_dir: Path,
         ipsw_path: Path,
     ):
-        bundle_clean_file_name = source.file_name[:-5].replace(",", "_")
-        self.bundle_id = f"ipsw_{bundle_clean_file_name}"
+        self.bundle_id = generate_bundle_id(source.file_name)
         self.prefix = _map_platform_to_prefix(artifact.platform)
         self.artifact = artifact
         self.source = source
@@ -77,18 +76,7 @@ class IpswExtractor:
                 raise IpswExtractError(f"ipsw extract failed with {error_msg}")
 
         _log_directory_contents(self.processing_dir)
-        for item in self.processing_dir.iterdir():
-            # we don't know the top-level directory name of the IPSW extraction so let's search for the only directory
-            # that isn't named "split_out" or "symbols" and return it as the DSC extraction top-level directory.
-            if item.is_dir() and str(item.name) not in ["split_out", "symbols"]:
-                logger.info(
-                    "Returning %s as the IPSW dyld extraction top-level directory",
-                    item,
-                    extra={"directory": item},
-                )
-                return item
-
-        return None
+        return find_extraction_dir(self.processing_dir)
 
     def run(self) -> Path:
         self._symsort_sys_image()
@@ -268,6 +256,31 @@ class IpswExtractor:
 
 class IpswExtractError(Exception):
     pass
+
+
+def find_extraction_dir(processing_dir: Path) -> Path | None:
+    """
+    Find the DSC extraction directory in the processing directory.
+
+    After ipsw extract, the DSC ends up in a directory with an unpredictable name.
+    We find it by looking for the only directory that isn't "split_out" or "symbols".
+    """
+    for item in processing_dir.iterdir():
+        if item.is_dir() and item.name not in ["split_out", "symbols"]:
+            logger.info(
+                "Found IPSW dyld extraction directory",
+                item,
+                extra={"directory": item},
+            )
+            return item
+    return None
+
+
+def generate_bundle_id(file_name: str) -> str:
+    """Generate bundle ID from IPSW filename."""
+    # Remove .ipsw extension and replace commas with underscores
+    clean_name = file_name[:-5].replace(",", "_")
+    return f"ipsw_{clean_name}"
 
 
 def _log_directory_contents(directory: Path) -> None:

@@ -10,6 +10,8 @@ import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Iterator
+from typing import Callable
+from subprocess import CompletedProcess
 
 import sentry_sdk
 from pydantic import BaseModel
@@ -366,19 +368,24 @@ class MountInfo(BaseModel):
     point: Path
 
 
-def patch_cryptex_dmg(artifact: Path, output_dir: Path) -> dict[str, Path]:
+def parse_cryptex_patch_output(stderr: str) -> dict[str, Path]:
+    """Parse ipsw ota patch stderr to extract DMG file mappings."""
     dmg_files: dict[str, Path] = {}
+    for line in stderr.splitlines():
+        match = re.search(r"Patching (.*) to (.*)", line)
+        if match:
+            dmg_files[match.group(1)] = Path(match.group(2))
+    return dmg_files
+
+
+def patch_cryptex_dmg(artifact: Path, output_dir: Path) -> dict[str, Path]:
     result = subprocess.run(
         ["ipsw", "ota", "patch", str(artifact), "--output", str(output_dir)],
         capture_output=True,
     )
-    if result.returncode == 0 and result.stderr != b"":
-        for line in result.stderr.decode("utf-8").splitlines():
-            re_match = re.search("Patching (.*) to (.*)", line)
-            if re_match:
-                dmg_files[re_match.group(1)] = Path(re_match.group(2))
-
-    return dmg_files
+    if result.returncode == 0 and result.stderr:
+        return parse_cryptex_patch_output(result.stderr.decode("utf-8"))
+    return {}
 
 
 def find_system_os_dmgs(search_dir: Path) -> list[Path]:
@@ -399,11 +406,30 @@ class OtaExtractError(Exception):
     pass
 
 
-def split_dsc(search_result: list[DSCSearchResult]) -> list[Path]:
+DscSplitter = Callable[[Path, Path], CompletedProcess[bytes]]
+
+
+def split_dsc(
+    search_result: list[DSCSearchResult],
+    splitter: DscSplitter = dyld_split,
+) -> list[Path]:
+    """
+    Split DSC files into individual binaries.
+
+    Args:
+        search_result: List of DSC files to split with their target directories.
+        splitter: Function to perform the split (defaults to dyld_split, injectable for testing).
+
+    Returns:
+        List of directories containing split binaries.
+
+    Raises:
+        OtaExtractError: If all split attempts fail.
+    """
     split_dirs: list[Path] = []
     for result_item in search_result:
         logger.info("\t\tSplitting DSC.", extra={"artifact": result_item.artifact})
-        result = dyld_split(result_item.artifact, result_item.split_dir)
+        result = splitter(result_item.artifact, result_item.split_dir)
         if result.returncode != 0:
             logger.warning(
                 "DSC Split failed.",
@@ -416,7 +442,6 @@ def split_dsc(search_result: list[DSCSearchResult]) -> list[Path]:
             )
             split_dirs.append(result_item.split_dir)
 
-    # If none of the split attempts were successful the OTA extraction failed
     if len(split_dirs) == 0:
         artifacts = "\n".join([f"{result_item.artifact}_{result_item.arch}" for result_item in search_result])
         raise OtaExtractError(f"Split failed for all of:\n{artifacts}")
