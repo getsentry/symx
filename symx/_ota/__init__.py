@@ -389,8 +389,10 @@ def find_system_os_dmgs(search_dir: Path) -> list[Path]:
 
 
 def parse_hdiutil_mount_output(cmd_output: str) -> MountInfo:
-    mount_info = cmd_output.splitlines().pop().split()
-    return MountInfo(dev=mount_info[0], id=mount_info[1], point=Path(mount_info[2]))
+    # hdiutil output uses tabs as delimiters with space padding, handle both
+    last_line = cmd_output.splitlines().pop()
+    parts = [p.strip() for p in last_line.split("\t")]
+    return MountInfo(dev=parts[0], id=parts[1], point=Path(parts[2]))
 
 
 class OtaExtractError(Exception):
