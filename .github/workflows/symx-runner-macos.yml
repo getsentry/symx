@@ -57,7 +57,8 @@ jobs:
           ls -la
 
       - name: ${{ inputs.symx_step }}
-        run: uv run python -m symx ${{ inputs.symx_run }}
+        run: uv run python scripts/run_symx_gha.py
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SYMX_RUN: ${{ inputs.symx_run }}

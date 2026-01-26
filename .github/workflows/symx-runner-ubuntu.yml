@@ -65,7 +65,7 @@ jobs:
           sudo rm -rf /home/linuxbrew/.linuxbrew || true
 
       - name: ${{ inputs.symx_step }}
-        run: uv run python -m symx ${{ env.SYMX_RUN }}
+        run: uv run python scripts/run_symx_gha.py
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
