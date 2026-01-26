@@ -58,6 +58,7 @@ def make_ipsw_artifact(
 
 # --- Significant changes (should be flagged) ---
 
+
 def test_identical_artifacts_no_changes() -> None:
     artifact = make_ipsw_artifact()
     has_changes, _ = compare_artifacts_with_diff(artifact, artifact)
@@ -99,26 +100,31 @@ def test_different_source_hashes_is_significant() -> None:
 def test_added_source_is_significant() -> None:
     has_changes, _ = compare_artifacts_with_diff(
         make_ipsw_artifact(sources=[make_ipsw_source()]),
-        make_ipsw_artifact(sources=[
-            make_ipsw_source(),
-            make_ipsw_source(devices=["iPhone15,2"], link="https://example.com/other.ipsw"),
-        ]),
+        make_ipsw_artifact(
+            sources=[
+                make_ipsw_source(),
+                make_ipsw_source(devices=["iPhone15,2"], link="https://example.com/other.ipsw"),
+            ]
+        ),
     )
     assert has_changes
 
 
 def test_removed_source_is_significant() -> None:
     has_changes, _ = compare_artifacts_with_diff(
-        make_ipsw_artifact(sources=[
-            make_ipsw_source(),
-            make_ipsw_source(devices=["iPhone15,2"], link="https://example.com/other.ipsw"),
-        ]),
+        make_ipsw_artifact(
+            sources=[
+                make_ipsw_source(),
+                make_ipsw_source(devices=["iPhone15,2"], link="https://example.com/other.ipsw"),
+            ]
+        ),
         make_ipsw_artifact(sources=[make_ipsw_source()]),
     )
     assert has_changes
 
 
 # --- Ignored changes (workflow state, not AppleDB data) ---
+
 
 def test_processing_state_change_is_ignored() -> None:
     has_changes, _ = compare_artifacts_with_diff(

@@ -122,12 +122,8 @@ def test_different_build_same_hash_creates_duplicate() -> None:
 
 def test_different_url_same_hash_creates_duplicate() -> None:
     """Same file (same hash) from different URL = duplicate."""
-    ours: OtaMetaData = {
-        "key1": make_ota_artifact(id="key1", url="https://example.com/old/key1.zip", hash="abc123")
-    }
-    theirs: OtaMetaData = {
-        "key1": make_ota_artifact(id="key1", url="https://example.com/new/key1.zip", hash="abc123")
-    }
+    ours: OtaMetaData = {"key1": make_ota_artifact(id="key1", url="https://example.com/old/key1.zip", hash="abc123")}
+    theirs: OtaMetaData = {"key1": make_ota_artifact(id="key1", url="https://example.com/new/key1.zip", hash="abc123")}
 
     merge_meta_data(ours, theirs)
 
@@ -137,12 +133,8 @@ def test_different_url_same_hash_creates_duplicate() -> None:
 
 def test_beta_and_release_same_hash_marks_duplicate() -> None:
     """Beta release with same hash as GA release = duplicate (common scenario)."""
-    ours: OtaMetaData = {
-        "abc123": make_ota_artifact(id="abc123", build="21A100", hash="samehash")
-    }
-    theirs: OtaMetaData = {
-        "abc123_beta": make_ota_artifact(id="abc123", build="21A99", hash="samehash")
-    }
+    ours: OtaMetaData = {"abc123": make_ota_artifact(id="abc123", build="21A100", hash="samehash")}
+    theirs: OtaMetaData = {"abc123_beta": make_ota_artifact(id="abc123", build="21A99", hash="samehash")}
 
     merge_meta_data(ours, theirs)
 
