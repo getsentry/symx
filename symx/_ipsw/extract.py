@@ -160,12 +160,30 @@ class IpswExtractor:
             mount_point = Path(mount_point_match.group(1))
             break
 
-        # symsort the entire sys mount-point
-        if mount_point:
-            self._symsort(mount_point, ignore_errors=True)
+        try:
+            # symsort the entire sys mount-point
+            if mount_point:
+                self._symsort(mount_point, ignore_errors=True)
+        finally:
+            # SIGINT the mount process and wait for it to unmount
+            mount_proc.send_signal(signal.SIGINT)
+            try:
+                # Wait for process to cleanly unmount (timeout after 60 seconds)
+                mount_proc.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                logger.warning("Mount process did not terminate after SIGINT, killing it")
+                mount_proc.kill()
+                mount_proc.wait()
 
-        # SIGINT the mount process
-        mount_proc.send_signal(signal.SIGINT)
+            # Clean up mount point directory if it still exists (in case unmount failed)
+            if mount_point and mount_point.exists():
+                logger.warning(
+                    "Mount point still exists after unmount, attempting cleanup", extra={"mount_point": mount_point}
+                )
+                try:
+                    shutil.rmtree(mount_point)
+                except Exception as e:
+                    logger.error("Failed to clean up mount point", extra={"mount_point": mount_point, "exception": e})
 
     def _ipsw_split(self, extract_dir: Path, arch: Arch | None = None) -> Path:
         dsc_root_file = None
