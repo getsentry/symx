@@ -269,7 +269,6 @@ def find_extraction_dir(processing_dir: Path) -> Path | None:
         if item.is_dir() and item.name not in ["split_out", "symbols"]:
             logger.info(
                 "Found IPSW dyld extraction directory",
-                item,
                 extra={"directory": item},
             )
             return item
