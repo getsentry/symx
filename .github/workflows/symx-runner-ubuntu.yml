@@ -42,7 +42,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+          curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors https://astral.sh/uv/install.sh | sh
           echo "PATH=/Users/runner/.local/bin:$PATH" >> $GITHUB_ENV
           export PATH="/Users/runner/.local/bin:$PATH"
           uv --version
@@ -51,7 +51,7 @@ jobs:
 
       - name: Install Apple Inc. Root
         run: |
-          wget https://www.apple.com/appleca/AppleIncRootCertificate.cer
+          wget --tries=6 --waitretry=10 https://www.apple.com/appleca/AppleIncRootCertificate.cer
           openssl x509 -inform DER -in AppleIncRootCertificate.cer -out AppleIncRootCertificate.crt
           sudo cp AppleIncRootCertificate.crt /usr/local/share/ca-certificates
           sudo update-ca-certificates

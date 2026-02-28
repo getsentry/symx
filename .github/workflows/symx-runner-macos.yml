@@ -42,14 +42,14 @@ jobs:
 
       - name: Install dependencies
         run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
+          curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors https://astral.sh/uv/install.sh | sh
           echo "PATH=/Users/runner/.local/bin:$PATH" >> $GITHUB_ENV
           export PATH="/Users/runner/.local/bin:$PATH"
           uv --version
           uv sync
           brew install --formula blacktop/tap/ipsw
           brew install tree
-          curl -L https://github.com/getsentry/symbolicator/releases/latest/download/symsorter-Darwin-universal > symsorter
+          curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors https://github.com/getsentry/symbolicator/releases/latest/download/symsorter-Darwin-universal > symsorter
           chmod +x symsorter
           file symsorter
           ./symsorter --version
