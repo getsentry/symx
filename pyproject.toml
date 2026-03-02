@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 authors = [
     {name = "Mischan Toosarani-Hausberger", email = "mischan@abovevacant.com"},
@@ -17,6 +21,9 @@ name = "symx"
 version = "0.2.0"
 description = "Symbol collection for apple platforms."
 readme = "README.md"
+
+[project.scripts]
+symx = "symx.__main__:main"
 
 [dependency-groups]
 dev = [

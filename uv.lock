@@ -672,7 +672,7 @@ wheels = [
 [[package]]
 name = "symx"
 version = "0.2.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "deepdiff" },
     { name = "google-cloud-storage" },
