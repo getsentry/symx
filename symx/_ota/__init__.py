@@ -457,7 +457,7 @@ def split_dir_exists_in_dsc_search_results(split_dir: Path, dsc_search_result: l
     return False
 
 
-def find_dsc(input_dir: Path, ota_meta: OtaArtifact, output_dir: Path) -> list[DSCSearchResult]:
+def find_dsc(input_dir: Path, version: str, build: str, output_dir: Path) -> list[DSCSearchResult]:
     # TODO: are we also interested in the DriverKit dyld_shared_cache?
     #  System/DriverKit/System/Library/dyld/
     dsc_path_prefix_options = [
@@ -473,7 +473,7 @@ def find_dsc(input_dir: Path, ota_meta: OtaArtifact, output_dir: Path) -> list[D
         for arch in Arch:
             dsc_path = input_dir / (path_prefix + DYLD_SHARED_CACHE + "_" + arch)
             if os.path.isfile(dsc_path):
-                split_dir = output_dir / "split_symbols" / f"{ota_meta.version}_{ota_meta.build}_{arch}"
+                split_dir = output_dir / "split_symbols" / f"{version}_{build}_{arch}"
 
                 if split_dir_exists_in_dsc_search_results(split_dir, dsc_search_results):
                     split_dir = split_dir.parent / f"{split_dir.name}_{counter}"
@@ -600,7 +600,10 @@ class OtaExtract:
                     continue
 
                 try:
-                    self.extract_symbols_from_ota(local_ota_path, key, ota, work_dir_path)
+                    symbol_dirs = self.extract_symbols_from_ota(local_ota_path, key, ota, work_dir_path)
+                    bundle_id = f"ota_{key}"
+                    for symbol_dir in symbol_dirs:
+                        self.storage.upload_symbols(symbol_dir, key, ota, bundle_id)
                 except OtaExtractError as e:
                     # we only "handle" OtaExtractError as something where we can go on, all
                     # other exceptions should just stop the symbol-extraction process.
@@ -611,78 +614,96 @@ class OtaExtract:
                     ota.update_last_run()
                     self.storage.update_meta_item(key, ota)
 
-    def try_processing_ota_as_cryptex(
-        self, local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path
-    ) -> bool:
-        with tempfile.TemporaryDirectory(suffix="_cryptex_dmg") as cryptex_patch_dir:
-            logger.info("Trying patch_cryptex_dmg...", extra={"ota": ota_meta, "local_path": local_ota})
-            extracted_dmgs = patch_cryptex_dmg(local_ota, Path(cryptex_patch_dir))
-            if len(extracted_dmgs) != 0:
-                logger.info(
-                    "\tCryptex patch successful. Mount, split, symsorting DSC...",
-                    extra={"ota": ota_meta, "local_path": local_ota},
-                )
-                self.process_cryptex_dmg(extracted_dmgs, ota_meta_key, ota_meta, work_dir)
-                # TODO: maybe instead of bool that should be a container of paths produced in work_dir
-                return True
-
-        return False
-
-    def process_ota_directly(self, local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path) -> None:
-        with tempfile.TemporaryDirectory(suffix="_dsc_extract") as extract_dsc_tmp_dir:
-            extracted_dsc_dir = extract_ota(local_ota, Path(extract_dsc_tmp_dir))
-            logger.info("\t\tSplitting & symsorting DSC", extra={"ota": ota_meta, "local_path": local_ota})
-
-            if extracted_dsc_dir:
-                self.split_and_symsort_dsc(extracted_dsc_dir, ota_meta_key, ota_meta, work_dir)
-
     def extract_symbols_from_ota(
         self, local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path
-    ) -> None:
-        if not self.try_processing_ota_as_cryptex(local_ota, ota_meta_key, ota_meta, work_dir):
-            logger.info("\tNot a cryptex, so extracting OTA DSC directly")
-            self.process_ota_directly(local_ota, ota_meta_key, ota_meta, work_dir)
+    ) -> list[Path]:
+        return extract_symbols(
+            local_ota=local_ota,
+            platform=ota_meta.platform,
+            version=ota_meta.version,
+            build=ota_meta.build,
+            bundle_id=f"ota_{ota_meta_key}",
+            work_dir=work_dir,
+        )
 
-    def split_and_symsort_dsc(
-        self,
-        input_dir: Path,
-        ota_meta_key: str,
-        ota_meta: OtaArtifact,
-        output_dir: Path,
-    ) -> None:
-        split_dirs = split_dsc(find_dsc(input_dir, ota_meta, output_dir))
 
-        self.symsort_split_results(split_dirs, ota_meta_key, ota_meta, output_dir)
+def extract_symbols(
+    local_ota: Path,
+    platform: str,
+    version: str,
+    build: str,
+    bundle_id: str,
+    work_dir: Path,
+) -> list[Path]:
+    """
+    Extract symbols from a local OTA file. No storage interaction.
 
-    def process_cryptex_dmg(
-        self,
-        extracted_dmgs: dict[str, Path],
-        ota_meta_key: str,
-        ota_meta: OtaArtifact,
-        output_dir: Path,
-    ) -> None:
-        mount = mount_dmg(extracted_dmgs["cryptex-system-arm64e"])
+    Returns a list of directories containing symsorter output.
+    """
+    symbol_dirs = _try_processing_ota_as_cryptex(local_ota, platform, version, build, bundle_id, work_dir)
+    if not symbol_dirs:
+        logger.info("\tNot a cryptex, so extracting OTA DSC directly")
+        symbol_dirs = _process_ota_directly(local_ota, platform, version, build, bundle_id, work_dir)
+    return symbol_dirs
 
-        split_dirs = split_dsc(find_dsc(mount.point, ota_meta, output_dir))
 
-        detach_dev(mount.dev)
-
-        self.symsort_split_results(split_dirs, ota_meta_key, ota_meta, output_dir)
-
-    def symsort_split_results(
-        self,
-        split_dirs: list[Path],
-        ota_meta_key: str,
-        ota_meta: OtaArtifact,
-        output_dir: Path,
-    ) -> None:
-        for split_dir in split_dirs:
-            bundle_id = f"ota_{ota_meta_key}"
-            symbols_output_dir = output_dir / "symbols" / bundle_id
-            symsort(
-                split_dir,
-                symbols_output_dir,
-                ota_meta.platform,
-                bundle_id,
+def _try_processing_ota_as_cryptex(
+    local_ota: Path, platform: str, version: str, build: str, bundle_id: str, work_dir: Path
+) -> list[Path]:
+    with tempfile.TemporaryDirectory(suffix="_cryptex_dmg") as cryptex_patch_dir:
+        logger.info("Trying patch_cryptex_dmg...", extra={"local_path": local_ota})
+        extracted_dmgs = patch_cryptex_dmg(local_ota, Path(cryptex_patch_dir))
+        if len(extracted_dmgs) != 0:
+            logger.info(
+                "\tCryptex patch successful. Mount, split, symsorting DSC...",
+                extra={"local_path": local_ota},
             )
-            self.storage.upload_symbols(symbols_output_dir, ota_meta_key, ota_meta, bundle_id)
+            return _process_cryptex_dmg(extracted_dmgs, platform, version, build, bundle_id, work_dir)
+
+    return []
+
+
+def _process_ota_directly(
+    local_ota: Path, platform: str, version: str, build: str, bundle_id: str, work_dir: Path
+) -> list[Path]:
+    with tempfile.TemporaryDirectory(suffix="_dsc_extract") as extract_dsc_tmp_dir:
+        extracted_dsc_dir = extract_ota(local_ota, Path(extract_dsc_tmp_dir))
+        logger.info("\t\tSplitting & symsorting DSC", extra={"local_path": local_ota})
+
+        if extracted_dsc_dir:
+            return _split_and_symsort_dsc(extracted_dsc_dir, platform, version, build, bundle_id, work_dir)
+
+    return []
+
+
+def _split_and_symsort_dsc(
+    input_dir: Path, platform: str, version: str, build: str, bundle_id: str, output_dir: Path
+) -> list[Path]:
+    split_dirs = split_dsc(find_dsc(input_dir, version, build, output_dir))
+    return _symsort_split_results(split_dirs, platform, bundle_id, output_dir)
+
+
+def _process_cryptex_dmg(
+    extracted_dmgs: dict[str, Path], platform: str, version: str, build: str, bundle_id: str, output_dir: Path
+) -> list[Path]:
+    mount = mount_dmg(extracted_dmgs["cryptex-system-arm64e"])
+
+    split_dirs = split_dsc(find_dsc(mount.point, version, build, output_dir))
+
+    detach_dev(mount.dev)
+
+    return _symsort_split_results(split_dirs, platform, bundle_id, output_dir)
+
+
+def _symsort_split_results(split_dirs: list[Path], platform: str, bundle_id: str, output_dir: Path) -> list[Path]:
+    symbol_output_dirs: list[Path] = []
+    for split_dir in split_dirs:
+        symbols_output_dir = output_dir / "symbols" / bundle_id
+        symsort(
+            split_dir,
+            symbols_output_dir,
+            platform,
+            bundle_id,
+        )
+        symbol_output_dirs.append(symbols_output_dir)
+    return symbol_output_dirs

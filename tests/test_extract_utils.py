@@ -10,14 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from symx._common import Arch, ArtifactProcessingState
+from symx._common import Arch
 from symx._ipsw.common import IpswPlatform
 from symx._ipsw.extract import _map_platform_to_prefix, find_extraction_dir, generate_bundle_id
 from subprocess import CompletedProcess
 
 from symx._ota import (
     DSCSearchResult,
-    OtaArtifact,
     OtaExtractError,
     find_dsc,
     parse_cryptex_patch_output,
@@ -213,22 +212,6 @@ def test_split_dsc_empty_input_raises() -> None:
 # --- find_dsc tests ---
 
 
-def make_ota_artifact() -> OtaArtifact:
-    return OtaArtifact(
-        id="abc123",
-        build="21A100",
-        version="17.0",
-        platform="ios",
-        url="https://example.com/ota.zip",
-        hash="abc",
-        hash_algorithm="SHA-1",
-        description=[],
-        devices=[],
-        download_path=None,
-        processing_state=ArtifactProcessingState.MIRRORED,
-    )
-
-
 def test_find_dsc_standard_path() -> None:
     """Find DSC in System/Library/dyld/ location."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -240,7 +223,7 @@ def test_find_dsc_standard_path() -> None:
         dsc_dir.mkdir(parents=True)
         (dsc_dir / "dyld_shared_cache_arm64e").touch()
 
-        results = find_dsc(input_dir, make_ota_artifact(), output_dir)
+        results = find_dsc(input_dir, "17.0", "21A100", output_dir)
 
         assert len(results) == 1
         assert results[0].arch == Arch.ARM64E
@@ -257,7 +240,7 @@ def test_find_dsc_cache_path() -> None:
         dsc_dir.mkdir(parents=True)
         (dsc_dir / "dyld_shared_cache_arm64").touch()
 
-        results = find_dsc(input_dir, make_ota_artifact(), output_dir)
+        results = find_dsc(input_dir, "17.0", "21A100", output_dir)
 
         assert len(results) == 1
         assert results[0].arch == Arch.ARM64
@@ -274,7 +257,7 @@ def test_find_dsc_multiple_architectures() -> None:
         (dsc_dir / "dyld_shared_cache_arm64e").touch()
         (dsc_dir / "dyld_shared_cache_arm64").touch()
 
-        results = find_dsc(input_dir, make_ota_artifact(), output_dir)
+        results = find_dsc(input_dir, "17.0", "21A100", output_dir)
 
         assert len(results) == 2
         arches = {r.arch for r in results}
@@ -289,7 +272,7 @@ def test_find_dsc_no_dsc_raises_error() -> None:
         output_dir = Path(tmpdir) / "output"
 
         with pytest.raises(OtaExtractError, match="Couldn't find any dyld_shared_cache"):
-            find_dsc(input_dir, make_ota_artifact(), output_dir)
+            find_dsc(input_dir, "17.0", "21A100", output_dir)
 
 
 def test_find_dsc_generates_unique_split_dirs() -> None:
@@ -307,7 +290,7 @@ def test_find_dsc_generates_unique_split_dirs() -> None:
         loc2.mkdir(parents=True)
         (loc2 / "dyld_shared_cache_arm64e").touch()
 
-        results = find_dsc(input_dir, make_ota_artifact(), output_dir)
+        results = find_dsc(input_dir, "17.0", "21A100", output_dir)
 
         # Should find both, with unique split_dirs
         assert len(results) == 2
