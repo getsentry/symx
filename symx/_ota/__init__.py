@@ -583,8 +583,6 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
         extract_dirs = list_dirs_in(output_dir)
 
     if len(extract_dirs) == 0:
-        if _is_delta_ota(artifact):
-            raise DeltaOtaError(f"Delta/patch OTA detected (contains patches, no full DSC): {artifact}")
         raise OtaExtractError(f"Could not find {DYLD_SHARED_CACHE} in {artifact}")
     elif len(extract_dirs) > 1:
         extract_dirs_output = "\n".join([str(dir_path) for dir_path in extract_dirs])
@@ -737,12 +735,17 @@ def _try_processing_ota_as_cryptex(
 def _process_ota_directly(
     local_ota: Path, platform: str, version: str, build: str, bundle_id: str, work_dir: Path
 ) -> list[Path]:
-    with tempfile.TemporaryDirectory(suffix="_dsc_extract") as extract_dsc_tmp_dir:
-        extracted_dsc_dir = extract_ota(local_ota, Path(extract_dsc_tmp_dir))
-        logger.info("\t\tSplitting & symsorting DSC", extra={"local_path": local_ota})
+    try:
+        with tempfile.TemporaryDirectory(suffix="_dsc_extract") as extract_dsc_tmp_dir:
+            extracted_dsc_dir = extract_ota(local_ota, Path(extract_dsc_tmp_dir))
+            logger.info("\t\tSplitting & symsorting DSC", extra={"local_path": local_ota})
 
-        if extracted_dsc_dir:
-            return _split_and_symsort_dsc(extracted_dsc_dir, platform, version, build, bundle_id, work_dir)
+            if extracted_dsc_dir:
+                return _split_and_symsort_dsc(extracted_dsc_dir, platform, version, build, bundle_id, work_dir)
+    except OtaExtractError:
+        if _is_delta_ota(local_ota):
+            raise DeltaOtaError(f"Delta/patch OTA detected (contains image_patches, no full DSC): {local_ota}")
+        raise
 
     return []
 
