@@ -571,7 +571,7 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
     return extract_dirs[0]
 
 
-def _parse_version_tuple(version: str) -> tuple[int, ...]:
+def parse_version_tuple(version: str) -> tuple[int, ...]:
     """Parse a version string like '26.4' or '18.2.1' into a comparable tuple."""
     try:
         return tuple(int(x) for x in version.split("."))
@@ -600,7 +600,7 @@ def iter_mirror(storage: OtaStorage) -> Iterator[tuple[str, OtaArtifact]]:
             logger.info("No more mirrored OTAs available exiting iter_mirror().")
             return
 
-        mirrored.sort(key=lambda item: _parse_version_tuple(item[1].version), reverse=True)
+        mirrored.sort(key=lambda item: parse_version_tuple(item[1].version), reverse=True)
         mirrored_key, mirrored_ota = mirrored[0]
 
         logger.info(
