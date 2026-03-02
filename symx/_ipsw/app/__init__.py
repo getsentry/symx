@@ -4,7 +4,9 @@ from pathlib import Path
 
 import typer
 
-from symx._common import parse_gcs_url
+from symx._common import parse_gcs_url, validate_shell_deps
+from symx._ipsw.common import IpswPlatform
+from symx._ipsw.extract import IpswExtractor
 from symx._ipsw.runners import (
     import_meta_from_appledb,
     mirror as mirror_runner,
@@ -70,6 +72,29 @@ def extract(
         storage_backend = init_storage(Path(processing_dir), storage)
         if storage_backend:
             extract_runner(storage_backend, datetime.timedelta(minutes=timeout))
+
+
+@ipsw_app.command()
+def extract_file(
+    ipsw_file: Path = typer.Argument(..., help="Path to a local IPSW file", exists=True),
+    platform: IpswPlatform = typer.Option(..., "--platform", "-p", help="Platform (e.g. iOS, macOS, watchOS)"),
+    output_dir: Path | None = typer.Option(None, "--output", "-o", help="Output directory (default: temp dir)"),
+) -> None:
+    """
+    Extract symbols from a local IPSW file.
+    """
+    validate_shell_deps()
+
+    if output_dir is None:
+        output_dir = Path(tempfile.mkdtemp(prefix="symx_ipsw_"))
+        typer.echo(f"Output directory: {output_dir}")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    extractor = IpswExtractor(platform, ipsw_file.name, output_dir, ipsw_file)
+    symbols_dir = extractor.run()
+
+    typer.echo(f"Extracted symbols to: {symbols_dir}")
 
 
 @ipsw_app.command()
