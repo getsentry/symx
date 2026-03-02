@@ -510,24 +510,58 @@ def mount_dmg(dmg: Path) -> MountInfo:
     return parse_hdiutil_mount_output(result.stdout.decode("utf-8"))
 
 
+def _dir_contains_dsc(directory: Path) -> bool:
+    """Check if a directory (recursively) contains any dyld_shared_cache files."""
+    for _, _, files in os.walk(directory):
+        for f in files:
+            if f.startswith(DYLD_SHARED_CACHE):
+                return True
+    return False
+
+
 def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
+    # First try the legacy approach: literal filename extraction (works for older OTAs)
     subprocess.run(
         [
             "ipsw",
             "ota",
             "extract",
-            artifact,
+            str(artifact),
             DYLD_SHARED_CACHE,
             "-o",
-            output_dir,
+            str(output_dir),
         ],
         capture_output=True,
     )
 
     extract_dirs = list_dirs_in(output_dir)
+    if len(extract_dirs) == 0 or not _dir_contains_dsc(extract_dirs[0]):
+        # Fallback: modern payloadv2 OTAs (e.g. watchOS) store the DSC inside numbered payload
+        # chunks. The literal filename lookup fails to find anything, so we use -p (pattern)
+        # with -y (confirm payloadv2 search) instead.
+        # Note: -d -y should work but is buggy in ipsw <=3.1.655.
+        logger.info(
+            "Literal DSC extraction failed, trying payloadv2 pattern search.",
+            extra={"artifact": artifact},
+        )
+        subprocess.run(
+            [
+                "ipsw",
+                "ota",
+                "extract",
+                str(artifact),
+                "-p",
+                DYLD_SHARED_CACHE,
+                "-y",
+                "-o",
+                str(output_dir),
+            ],
+            capture_output=True,
+        )
+        extract_dirs = list_dirs_in(output_dir)
 
     if len(extract_dirs) == 0:
-        raise OtaExtractError(f"Could not to find {DYLD_SHARED_CACHE} in {artifact}")
+        raise OtaExtractError(f"Could not find {DYLD_SHARED_CACHE} in {artifact}")
     elif len(extract_dirs) > 1:
         extract_dirs_output = "\n".join([str(dir_path) for dir_path in extract_dirs])
         raise OtaExtractError(f"Found more than one image directory in {artifact}:\n{extract_dirs_output}")
