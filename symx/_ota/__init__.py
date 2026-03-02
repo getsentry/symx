@@ -412,6 +412,12 @@ class DeltaOtaError(Exception):
     pass
 
 
+class RecoveryOtaError(Exception):
+    """Raised when an OTA is a recoveryOS update (minimal boot environment, no DSC)."""
+
+    pass
+
+
 DscSplitter = Callable[[Path, Path], CompletedProcess[bytes]]
 
 
@@ -525,20 +531,37 @@ def _dir_contains_dsc(directory: Path) -> bool:
     return False
 
 
-def _is_delta_ota(artifact: Path) -> bool:
-    """Check if an OTA is a delta/patch update by looking for image_patches in the file listing.
+def _classify_ota_failure(artifact: Path) -> type[Exception] | None:
+    """When DSC extraction fails, classify the OTA to determine the appropriate error type.
 
-    Note: app_patches/ alone is not sufficient — full OTAs (e.g. watchOS, visionOS) can also
-    contain app_patches/ alongside a full system image with a DSC. Only image_patches/ reliably
-    indicates a delta OTA that replaces the system image with binary diffs.
+    Runs ipsw ota info + ls once and checks for:
+    - Recovery OTA (Darwin Recovery / RecoveryOSUpdate) → RecoveryOtaError
+    - Delta OTA (contains image_patches/) → DeltaOtaError
+
+    Returns the error class to raise, or None if the OTA type is unrecognized.
     """
-    result = subprocess.run(
+    info_result = subprocess.run(
+        ["ipsw", "ota", "info", str(artifact)],
+        capture_output=True,
+        text=True,
+    )
+    info_output = info_result.stdout + info_result.stderr
+    if "Darwin Recovery" in info_output or "RecoveryOSUpdate" in info_output:
+        return RecoveryOtaError
+
+    # Note: app_patches/ alone is not sufficient — full OTAs (e.g. watchOS, visionOS) can also
+    # contain app_patches/ alongside a full system image with a DSC. Only image_patches/ reliably
+    # indicates a delta OTA that replaces the system image with binary diffs.
+    ls_result = subprocess.run(
         ["ipsw", "ota", "ls", str(artifact)],
         capture_output=True,
         text=True,
     )
-    output = result.stdout + result.stderr
-    return "image_patches/" in output
+    ls_output = ls_result.stdout + ls_result.stderr
+    if "image_patches/" in ls_output:
+        return DeltaOtaError
+
+    return None
 
 
 def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
@@ -673,6 +696,14 @@ class OtaExtract:
                     ota.processing_state = ArtifactProcessingState.DELTA_OTA
                     ota.update_last_run()
                     self.storage.update_meta_item(key, ota)
+                except RecoveryOtaError as e:
+                    logger.info(
+                        "Skipping recovery OTA (minimal boot environment, no DSC).",
+                        extra={"ota": ota, "exception": e},
+                    )
+                    ota.processing_state = ArtifactProcessingState.RECOVERY_OTA
+                    ota.update_last_run()
+                    self.storage.update_meta_item(key, ota)
                 except OtaExtractError as e:
                     # we only "handle" OtaExtractError as something where we can go on, all
                     # other exceptions should just stop the symbol-extraction process.
@@ -742,9 +773,10 @@ def _process_ota_directly(
 
             if extracted_dsc_dir:
                 return _split_and_symsort_dsc(extracted_dsc_dir, platform, version, build, bundle_id, work_dir)
-    except OtaExtractError:
-        if _is_delta_ota(local_ota):
-            raise DeltaOtaError(f"Delta/patch OTA detected (contains image_patches, no full DSC): {local_ota}")
+    except OtaExtractError as e:
+        error_cls = _classify_ota_failure(local_ota)
+        if error_cls is not None:
+            raise error_cls(f"{error_cls.__name__}: {local_ota}") from e
         raise
 
     return []

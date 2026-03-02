@@ -73,6 +73,10 @@ class ArtifactProcessingState(StrEnum):
     # these never contain a DSC and cannot be processed for symbols
     DELTA_OTA = "delta_ota"
 
+    # the artifact is a recovery OS update (com.apple.MobileAsset.RecoveryOSUpdate) — a minimal
+    # boot environment (kernel + small rootfs + firmware) with no DSC
+    RECOVERY_OTA = "recovery_ota"
+
     # the symx goal: symbols are stored for symbolicator to grab
     SYMBOLS_EXTRACTED = "symbols_extracted"
 
