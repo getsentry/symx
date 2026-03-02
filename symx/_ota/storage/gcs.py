@@ -158,7 +158,10 @@ class OtaGcsStorage(OtaStorage):
     def bulk_update_meta(self, updates: dict[str, OtaArtifact]) -> None:
         """Apply multiple meta-data updates in a single read-modify-write cycle.
 
-        Only safe when no other workflows are concurrently modifying the meta-data.
+        The generation check prevents clobbering unrelated concurrent writes, but on retry
+        the updated keys will overwrite whatever state another workflow may have set for those
+        same keys. Only use this for batch operations (like migrations) where the affected keys
+        are not being concurrently modified by other workflows.
         """
         retry = 5
 
