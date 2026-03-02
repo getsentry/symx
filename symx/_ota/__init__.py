@@ -571,34 +571,42 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
     return extract_dirs[0]
 
 
+def _parse_version_tuple(version: str) -> tuple[int, ...]:
+    """Parse a version string like '26.4' or '18.2.1' into a comparable tuple."""
+    try:
+        return tuple(int(x) for x in version.split("."))
+    except (ValueError, AttributeError):
+        return (0,)
+
+
 def iter_mirror(storage: OtaStorage) -> Iterator[tuple[str, OtaArtifact]]:
     """
     A generator that reloads the meta-data on every iteration, so we fetch updated mirrored artifacts. This allows
     us to modify the meta-data in the loop that iterates over the output.
+
+    Yields the newest mirrored artifact first (by version), so that recent OS releases are prioritized.
+
     :return: The next current mirrored OtaArtifact to be processed together with its key.
     """
     while True:
-        mirrored_key: str | None = None
-        mirrored_ota: OtaArtifact | None = None
         ota_meta = storage.load_meta()
         if ota_meta is None:
             logger.error("Could not retrieve meta-data from storage.")
             return
 
-        for key, ota in ota_meta.items():
-            if ota.is_mirrored():
-                logger.info("Found mirrored OTA.", extra={"ota_key": key})
-                mirrored_key = key
-                mirrored_ota = ota
-                break
+        mirrored = [(key, ota) for key, ota in ota_meta.items() if ota.is_mirrored()]
 
-        if mirrored_ota is None or mirrored_key is None:
-            # this means we could not find any more mirrored OTAs
+        if not mirrored:
             logger.info("No more mirrored OTAs available exiting iter_mirror().")
             return
-        else:
-            logger.info("Yielding mirrored OTA for further processing.", extra={"ota": mirrored_ota})
-            yield mirrored_key, mirrored_ota
+
+        mirrored.sort(key=lambda item: _parse_version_tuple(item[1].version), reverse=True)
+        mirrored_key, mirrored_ota = mirrored[0]
+
+        logger.info(
+            "Yielding mirrored OTA for further processing.", extra={"ota": mirrored_ota, "ota_key": mirrored_key}
+        )
+        yield mirrored_key, mirrored_ota
 
 
 class OtaExtract:
