@@ -475,8 +475,6 @@ def find_dsc(input_dir: Path, version: str, build: str, output_dir: Path) -> lis
     dsc_path_prefix_options = [
         "System/Library/dyld/",
         "System/Library/Caches/com.apple.dyld/",
-        "AssetData/payloadv2/patches/System/Library/Caches/com.apple.dyld/",
-        "AssetData/payloadv2/ecc_data/System/Library/Caches/com.apple.dyld/",
     ]
 
     counter = 1
@@ -549,16 +547,19 @@ def _classify_ota_failure(artifact: Path) -> type[Exception] | None:
     if "Darwin Recovery" in info_output or "RecoveryOSUpdate" in info_output:
         return RecoveryOtaError
 
+    # Check for delta indicators in the file listing:
+    # - image_patches/: newer-style delta OTAs (e.g. iPad)
+    # - payloadv2/patches/System/Library/Caches/com.apple.dyld/: older-style deltas (e.g. Apple TV)
+    #   where the DSC itself is a binary diff
     # Note: app_patches/ alone is not sufficient — full OTAs (e.g. watchOS, visionOS) can also
-    # contain app_patches/ alongside a full system image with a DSC. Only image_patches/ reliably
-    # indicates a delta OTA that replaces the system image with binary diffs.
+    # contain app_patches/ alongside a full system image with a DSC.
     ls_result = subprocess.run(
         ["ipsw", "ota", "ls", str(artifact)],
         capture_output=True,
         text=True,
     )
     ls_output = ls_result.stdout + ls_result.stderr
-    if "image_patches/" in ls_output:
+    if "image_patches/" in ls_output or "payloadv2/patches/System/Library/Caches/com.apple.dyld/" in ls_output:
         return DeltaOtaError
 
     return None
