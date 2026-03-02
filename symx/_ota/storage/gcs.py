@@ -155,6 +155,34 @@ class OtaGcsStorage(OtaStorage):
 
         raise RuntimeError("Failed to update meta-data item")
 
+    def bulk_update_meta(self, updates: dict[str, OtaArtifact]) -> None:
+        """Apply multiple meta-data updates in a single read-modify-write cycle.
+
+        Only safe when no other workflows are concurrently modifying the meta-data.
+        """
+        retry = 5
+
+        while retry > 0:
+            blob = self.bucket.blob(ARTIFACTS_META_JSON)
+            if blob.exists():
+                ours, generation_match_precondition = download_and_hydrate_meta(blob)
+            else:
+                ours, generation_match_precondition = {}, 0
+
+            ours.update(updates)
+            try:
+                serializable_data = {k: v.model_dump() for k, v in ours.items()}
+                blob.upload_from_string(
+                    json.dumps(serializable_data),
+                    if_generation_match=generation_match_precondition,
+                )
+                logger.info("Bulk updated meta-data", extra={"count": len(updates)})
+                return
+            except PreconditionFailed:
+                retry = retry - 1
+
+        raise RuntimeError("Failed to bulk update meta-data")
+
     def upload_symbols(self, input_dir: Path, ota_meta_key: str, ota_meta: OtaArtifact, bundle_id: str) -> None:
         upload_symbol_binaries(self.bucket, ota_meta.platform, bundle_id, input_dir)
         ota_meta.processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
