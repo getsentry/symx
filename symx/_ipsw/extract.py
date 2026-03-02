@@ -6,7 +6,7 @@ from pathlib import Path
 import logging
 
 from symx._common import Arch, symsort, dyld_split
-from symx._ipsw.common import IpswArtifact, IpswSource, IpswPlatform
+from symx._ipsw.common import IpswPlatform
 
 logger = logging.getLogger(__name__)
 
@@ -18,15 +18,14 @@ mount_point_re = re.compile(r".*Press Ctrl\+C to unmount '(.*)'")
 class IpswExtractor:
     def __init__(
         self,
-        artifact: IpswArtifact,
-        source: IpswSource,
+        platform: IpswPlatform,
+        file_name: str,
         processing_dir: Path,
         ipsw_path: Path,
     ):
-        self.bundle_id = generate_bundle_id(source.file_name)
-        self.prefix = _map_platform_to_prefix(artifact.platform)
-        self.artifact = artifact
-        self.source = source
+        self.bundle_id = generate_bundle_id(file_name)
+        self.prefix = _map_platform_to_prefix(platform)
+        self.platform = platform
         if not processing_dir.is_dir():
             raise ValueError(f"IPSW path is expected to be a directory: {processing_dir}")
         self.processing_dir = processing_dir
@@ -87,7 +86,7 @@ class IpswExtractor:
 
     def _symsort_dsc(self):
         split_dir = self.processing_dir / "split_out"
-        if self.artifact.platform == IpswPlatform.MACOS:
+        if self.platform == IpswPlatform.MACOS:
             # all macOS IPSWs have dyld_shared_caches for both architectures
             compressed_archives: list[tuple[Path, str]] = []
 

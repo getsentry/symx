@@ -105,7 +105,7 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: timedelta) -> None:
 
             # 4.) Extract and upload symbols and update meta-data on success or failure.
             try:
-                extractor = IpswExtractor(artifact, source, ipsw_storage.local_dir, local_path)
+                extractor = IpswExtractor(artifact.platform, source.file_name, ipsw_storage.local_dir, local_path)
                 symbol_binaries_dir = extractor.run()
                 ipsw_storage.upload_symbols(
                     extractor.prefix,

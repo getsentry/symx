@@ -1,12 +1,11 @@
 import tempfile
-from datetime import datetime
 from pathlib import Path
 
 import pytest
 from pydantic import HttpUrl
 
 from symx._common import check_sha1
-from symx._ipsw.common import IpswArtifact, IpswSource, IpswPlatform, IpswReleaseStatus, IpswArtifactHashes
+from symx._ipsw.common import IpswSource, IpswPlatform, IpswArtifactHashes
 from symx._ipsw.extract import IpswExtractor
 
 
@@ -29,17 +28,9 @@ def test_ipsw_extract_run_watchos():
         # TODO: download artifact when it doesn't exit for CI
         pytest.skip("IPSW artifact does not exist", allow_module_level=True)
 
-    artifact = IpswArtifact(
-        platform=IpswPlatform.WATCHOS,
-        version="9.6.3",
-        build="20U502",
-        release_status=IpswReleaseStatus.RELEASE,
-        sources=[source],
-    )
-
     with tempfile.TemporaryDirectory() as tmpdir:
         processing_dir = Path(tmpdir)
-        extractor = IpswExtractor(artifact, source, processing_dir, ipsw_path)
+        extractor = IpswExtractor(IpswPlatform.WATCHOS, source.file_name, processing_dir, ipsw_path)
         extractor.run()
 
 
@@ -56,17 +47,9 @@ def test_ipsw_extract_run_ios():
         # TODO: download artifact when it doesn't exit for CI
         pytest.skip("IPSW artifact does not exist", allow_module_level=True)
 
-    artifact = IpswArtifact(
-        platform=IpswPlatform.WATCHOS,
-        version="18.2",
-        build="22C152",
-        release_status=IpswReleaseStatus.RELEASE,
-        sources=[source],
-    )
-
     processing_dir = Path("/Users/mischan/devel/tmp/test_out")
     ipsw_path = Path("/Users/mischan/devel/tmp/iPhone14,7_18.2_22C152_Restore.ipsw")
-    extractor = IpswExtractor(artifact, source, processing_dir, ipsw_path)
+    extractor = IpswExtractor(IpswPlatform.WATCHOS, source.file_name, processing_dir, ipsw_path)
     extractor.run()
 
 
@@ -122,18 +105,9 @@ def test_ipsw_extract_run_macos():
         # TODO: download artifact when it doesn't exit for CI
         pytest.skip("IPSW artifact does not exist", allow_module_level=True)
 
-    artifact = IpswArtifact(
-        platform=IpswPlatform.MACOS,
-        version="15.0_beta_2",
-        build="24A5279h",
-        release_status=IpswReleaseStatus.BETA,
-        released=datetime.fromisoformat("2024-06-24"),
-        sources=[source],
-    )
-
     with tempfile.TemporaryDirectory() as tmpdir:
         processing_dir = Path(tmpdir)
         assert ipsw_path.stat().st_size == source.size
         assert check_sha1(require_sha1(source.hashes), ipsw_path)
-        extractor = IpswExtractor(artifact, source, processing_dir, ipsw_path)
+        extractor = IpswExtractor(IpswPlatform.MACOS, source.file_name, processing_dir, ipsw_path)
         extractor.run()
