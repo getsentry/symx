@@ -69,6 +69,10 @@ class ArtifactProcessingState(StrEnum):
     # there was no dyld_shared_cache in the artifact (for instance: because it was a partial update)
     DSC_EXTRACTION_FAILED = "dsc_extraction_failed"
 
+    # the artifact is a delta/patch OTA (contains image_patches/app_patches instead of full files)
+    # these never contain a DSC and cannot be processed for symbols
+    DELTA_OTA = "delta_ota"
+
     # the symx goal: symbols are stored for symbolicator to grab
     SYMBOLS_EXTRACTED = "symbols_extracted"
 

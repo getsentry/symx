@@ -406,6 +406,12 @@ class OtaExtractError(Exception):
     pass
 
 
+class DeltaOtaError(Exception):
+    """Raised when an OTA is identified as a delta/patch update that contains no full DSC."""
+
+    pass
+
+
 DscSplitter = Callable[[Path, Path], CompletedProcess[bytes]]
 
 
@@ -519,6 +525,22 @@ def _dir_contains_dsc(directory: Path) -> bool:
     return False
 
 
+def _is_delta_ota(artifact: Path) -> bool:
+    """Check if an OTA is a delta/patch update by looking for image_patches in the file listing.
+
+    Note: app_patches/ alone is not sufficient — full OTAs (e.g. watchOS, visionOS) can also
+    contain app_patches/ alongside a full system image with a DSC. Only image_patches/ reliably
+    indicates a delta OTA that replaces the system image with binary diffs.
+    """
+    result = subprocess.run(
+        ["ipsw", "ota", "ls", str(artifact)],
+        capture_output=True,
+        text=True,
+    )
+    output = result.stdout + result.stderr
+    return "image_patches/" in output
+
+
 def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
     # First try the legacy approach: literal filename extraction (works for older OTAs)
     subprocess.run(
@@ -561,6 +583,8 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
         extract_dirs = list_dirs_in(output_dir)
 
     if len(extract_dirs) == 0:
+        if _is_delta_ota(artifact):
+            raise DeltaOtaError(f"Delta/patch OTA detected (contains patches, no full DSC): {artifact}")
         raise OtaExtractError(f"Could not find {DYLD_SHARED_CACHE} in {artifact}")
     elif len(extract_dirs) > 1:
         extract_dirs_output = "\n".join([str(dir_path) for dir_path in extract_dirs])
@@ -646,6 +670,11 @@ class OtaExtract:
                     bundle_id = f"ota_{key}"
                     for symbol_dir in symbol_dirs:
                         self.storage.upload_symbols(symbol_dir, key, ota, bundle_id)
+                except DeltaOtaError as e:
+                    logger.info("Skipping delta/patch OTA (no full DSC available).", extra={"ota": ota, "exception": e})
+                    ota.processing_state = ArtifactProcessingState.DELTA_OTA
+                    ota.update_last_run()
+                    self.storage.update_meta_item(key, ota)
                 except OtaExtractError as e:
                     # we only "handle" OtaExtractError as something where we can go on, all
                     # other exceptions should just stop the symbol-extraction process.
