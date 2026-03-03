@@ -323,11 +323,12 @@ def download_ota_from_apple(ota_meta: OtaArtifact, download_dir: Path) -> Path:
     raise RuntimeError(f"Failed to download {ota_meta.url}")
 
 
-def set_sentry_artifact_tags(key: str, ota: OtaArtifact) -> None:
-    sentry_sdk.set_tag("artifact.key", key)
-    sentry_sdk.set_tag("artifact.platform", ota.platform)
-    sentry_sdk.set_tag("artifact.version", ota.version)
-    sentry_sdk.set_tag("artifact.build", ota.build)
+def _set_artifact_scope(scope: sentry_sdk.Scope, key: str, ota: OtaArtifact) -> None:
+    """Set sentry tags on the given scope — isolates per-artifact context."""
+    scope.set_tag("artifact.key", key)
+    scope.set_tag("artifact.platform", ota.platform)
+    scope.set_tag("artifact.version", ota.version)
+    scope.set_tag("artifact.build", ota.build)
 
 
 class OtaMirror:
@@ -360,33 +361,36 @@ class OtaMirror:
                 if not ota.is_indexed():
                     continue
 
-                set_sentry_artifact_tags(key, ota)
+                with sentry_sdk.new_scope() as scope:
+                    _set_artifact_scope(scope, key, ota)
 
-                with sentry_sdk.start_transaction(
-                    op="ota.mirror",
-                    name=f"OTA mirror {ota.platform} {ota.version} {ota.build}",
-                ) as txn:
-                    txn.set_data("artifact.key", key)
-                    txn.set_data("artifact.platform", ota.platform)
-                    txn.set_data("artifact.version", ota.version)
-                    txn.set_data("artifact.build", ota.build)
+                    with sentry_sdk.start_transaction(
+                        op="ota.mirror",
+                        name=f"OTA mirror {ota.platform} {ota.version} {ota.build}",
+                    ) as txn:
+                        txn.set_tag("artifact.key", key)
+                        txn.set_tag("artifact.platform", ota.platform)
+                        txn.set_tag("artifact.version", ota.version)
+                        txn.set_tag("artifact.build", ota.build)
 
-                    try:
-                        ota_file = download_ota_from_apple(ota, Path(download_dir))
-                        with sentry_sdk.start_span(op="gcs.upload", name=f"Upload OTA {ota.platform} {ota.version}"):
-                            self.storage.save_ota(key, ota, ota_file)
-                        ota_file.unlink()
-                        artifacts_mirrored += 1
-                        sentry_sdk.metrics.count("ota.mirror.succeeded", 1, attributes={"platform": ota.platform})
-                    except Exception as e:
-                        sentry_sdk.capture_exception(e)
-                        logger.exception(e)
-                        ota.processing_state = ArtifactProcessingState.INDEXED_INVALID
-                        ota.update_last_run()
-                        self.storage.update_meta_item(key, ota)
-                        txn.set_status("internal_error")
-                        artifacts_failed += 1
-                        sentry_sdk.metrics.count("ota.mirror.failed", 1, attributes={"platform": ota.platform})
+                        try:
+                            ota_file = download_ota_from_apple(ota, Path(download_dir))
+                            with sentry_sdk.start_span(
+                                op="gcs.upload", name=f"Upload OTA {ota.platform} {ota.version}"
+                            ):
+                                self.storage.save_ota(key, ota, ota_file)
+                            ota_file.unlink()
+                            artifacts_mirrored += 1
+                            sentry_sdk.metrics.count("ota.mirror.succeeded", 1, attributes={"platform": ota.platform})
+                        except Exception as e:
+                            sentry_sdk.capture_exception(e)
+                            logger.exception(e)
+                            ota.processing_state = ArtifactProcessingState.INDEXED_INVALID
+                            ota.update_last_run()
+                            self.storage.update_meta_item(key, ota)
+                            txn.set_status("internal_error")
+                            artifacts_failed += 1
+                            sentry_sdk.metrics.count("ota.mirror.failed", 1, attributes={"platform": ota.platform})
 
         sentry_sdk.metrics.distribution("ota.mirror.artifacts_mirrored", artifacts_mirrored)
         sentry_sdk.metrics.distribution("ota.mirror.artifacts_failed", artifacts_failed)
@@ -731,80 +735,85 @@ class OtaExtract:
                 logger.warning("Exiting OTA extract due to elapsed timeout after %ds", int(time.time() - start))
                 break
 
-            set_sentry_artifact_tags(key, ota)
+            with sentry_sdk.new_scope() as scope:
+                _set_artifact_scope(scope, key, ota)
 
-            with sentry_sdk.start_transaction(
-                op="ota.extract",
-                name=f"OTA extract {ota.platform} {ota.version} {ota.build}",
-            ) as txn:
-                txn.set_data("artifact.key", key)
-                txn.set_data("artifact.platform", ota.platform)
-                txn.set_data("artifact.version", ota.version)
-                txn.set_data("artifact.build", ota.build)
+                with sentry_sdk.start_transaction(
+                    op="ota.extract",
+                    name=f"OTA extract {ota.platform} {ota.version} {ota.build}",
+                ) as txn:
+                    txn.set_tag("artifact.key", key)
+                    txn.set_tag("artifact.platform", ota.platform)
+                    txn.set_tag("artifact.version", ota.version)
+                    txn.set_tag("artifact.build", ota.build)
 
-                with tempfile.TemporaryDirectory() as ota_work_dir:
-                    work_dir_path = Path(ota_work_dir)
-                    logger.info("Downloading mirrored OTA %s %s %s", ota.platform, ota.version, ota.build)
+                    with tempfile.TemporaryDirectory() as ota_work_dir:
+                        work_dir_path = Path(ota_work_dir)
+                        logger.info("Downloading mirrored OTA %s %s %s", ota.platform, ota.version, ota.build)
 
-                    with sentry_sdk.start_span(op="gcs.download", name=f"Download OTA {ota.platform} {ota.version}"):
-                        local_ota_path = self.storage.load_ota(ota, work_dir_path)
-
-                    if local_ota_path is None:
-                        # means there is no OTA at the specified OTA location, although this was defined as MIRRORED
-                        # let's set this back to INDEXED, so the mirror workflow tries to download this again.
-                        ota.download_path = None
-                        ota.processing_state = ArtifactProcessingState.INDEXED
-                        ota.update_last_run()
-                        self.storage.update_meta_item(key, ota)
-                        txn.set_status("not_found")
-                        continue
-
-                    try:
                         with sentry_sdk.start_span(
-                            op="ota.extract.run",
-                            name=f"Extract+split+symsort OTA {ota.platform} {ota.version}",
+                            op="gcs.download", name=f"Download OTA {ota.platform} {ota.version}"
                         ):
-                            symbol_dirs = self.extract_symbols_from_ota(local_ota_path, key, ota, work_dir_path)
-                        bundle_id = f"ota_{key}"
-                        for symbol_dir in symbol_dirs:
+                            local_ota_path = self.storage.load_ota(ota, work_dir_path)
+
+                        if local_ota_path is None:
+                            # means there is no OTA at the specified OTA location, although this was defined as MIRRORED
+                            # let's set this back to INDEXED, so the mirror workflow tries to download this again.
+                            ota.download_path = None
+                            ota.processing_state = ArtifactProcessingState.INDEXED
+                            ota.update_last_run()
+                            self.storage.update_meta_item(key, ota)
+                            txn.set_status("not_found")
+                            continue
+
+                        try:
                             with sentry_sdk.start_span(
-                                op="gcs.upload_symbols", name=f"Upload OTA symbols {ota.platform} {ota.version}"
+                                op="ota.extract.run",
+                                name=f"Extract+split+symsort OTA {ota.platform} {ota.version}",
                             ):
-                                self.storage.upload_symbols(symbol_dir, key, ota, bundle_id)
-                        artifacts_extracted += 1
-                        sentry_sdk.metrics.count("ota.extract.succeeded", 1, attributes={"platform": ota.platform})
-                    except DeltaOtaError:
-                        logger.info(
-                            "Skipping delta/patch OTA %s %s %s (no full DSC)", ota.platform, ota.version, ota.build
-                        )
-                        ota.processing_state = ArtifactProcessingState.DELTA_OTA
-                        ota.update_last_run()
-                        self.storage.update_meta_item(key, ota)
-                        artifacts_skipped += 1
-                        sentry_sdk.metrics.count("ota.extract.skipped_delta", 1, attributes={"platform": ota.platform})
-                    except RecoveryOtaError:
-                        logger.info("Skipping recovery OTA %s %s %s (no DSC)", ota.platform, ota.version, ota.build)
-                        ota.processing_state = ArtifactProcessingState.RECOVERY_OTA
-                        ota.update_last_run()
-                        self.storage.update_meta_item(key, ota)
-                        artifacts_skipped += 1
-                        sentry_sdk.metrics.count(
-                            "ota.extract.skipped_recovery", 1, attributes={"platform": ota.platform}
-                        )
-                    except OtaExtractError as e:
-                        # we only "handle" OtaExtractError as something where we can go on, all
-                        # other exceptions should just stop the symbol-extraction process.
-                        sentry_sdk.capture_exception(e)
-                        logger.warning(
-                            "Failed to extract symbols from OTA %s %s %s", ota.platform, ota.version, ota.build
-                        )
-                        # also need to mark failing cases, because otherwise they will fail again
-                        ota.processing_state = ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
-                        ota.update_last_run()
-                        self.storage.update_meta_item(key, ota)
-                        txn.set_status("internal_error")
-                        artifacts_failed += 1
-                        sentry_sdk.metrics.count("ota.extract.failed", 1, attributes={"platform": ota.platform})
+                                symbol_dirs = self.extract_symbols_from_ota(local_ota_path, key, ota, work_dir_path)
+                            bundle_id = f"ota_{key}"
+                            for symbol_dir in symbol_dirs:
+                                with sentry_sdk.start_span(
+                                    op="gcs.upload_symbols", name=f"Upload OTA symbols {ota.platform} {ota.version}"
+                                ):
+                                    self.storage.upload_symbols(symbol_dir, key, ota, bundle_id)
+                            artifacts_extracted += 1
+                            sentry_sdk.metrics.count("ota.extract.succeeded", 1, attributes={"platform": ota.platform})
+                        except DeltaOtaError:
+                            logger.info(
+                                "Skipping delta/patch OTA %s %s %s (no full DSC)", ota.platform, ota.version, ota.build
+                            )
+                            ota.processing_state = ArtifactProcessingState.DELTA_OTA
+                            ota.update_last_run()
+                            self.storage.update_meta_item(key, ota)
+                            artifacts_skipped += 1
+                            sentry_sdk.metrics.count(
+                                "ota.extract.skipped_delta", 1, attributes={"platform": ota.platform}
+                            )
+                        except RecoveryOtaError:
+                            logger.info("Skipping recovery OTA %s %s %s (no DSC)", ota.platform, ota.version, ota.build)
+                            ota.processing_state = ArtifactProcessingState.RECOVERY_OTA
+                            ota.update_last_run()
+                            self.storage.update_meta_item(key, ota)
+                            artifacts_skipped += 1
+                            sentry_sdk.metrics.count(
+                                "ota.extract.skipped_recovery", 1, attributes={"platform": ota.platform}
+                            )
+                        except OtaExtractError as e:
+                            # we only "handle" OtaExtractError as something where we can go on, all
+                            # other exceptions should just stop the symbol-extraction process.
+                            sentry_sdk.capture_exception(e)
+                            logger.warning(
+                                "Failed to extract symbols from OTA %s %s %s", ota.platform, ota.version, ota.build
+                            )
+                            # also need to mark failing cases, because otherwise they will fail again
+                            ota.processing_state = ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
+                            ota.update_last_run()
+                            self.storage.update_meta_item(key, ota)
+                            txn.set_status("internal_error")
+                            artifacts_failed += 1
+                            sentry_sdk.metrics.count("ota.extract.failed", 1, attributes={"platform": ota.platform})
 
         sentry_sdk.metrics.distribution("ota.extract.artifacts_extracted", artifacts_extracted)
         sentry_sdk.metrics.distribution("ota.extract.artifacts_failed", artifacts_failed)
