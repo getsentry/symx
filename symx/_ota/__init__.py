@@ -14,6 +14,7 @@ from typing import Callable
 from subprocess import CompletedProcess
 
 import sentry_sdk
+import sentry_sdk.metrics
 from pydantic import BaseModel
 
 from symx._common import (
@@ -124,7 +125,7 @@ def parse_download_meta_output(
         # We regularly get 403 errors on the apple endpoint. These seem to be intermittent
         # availability issues and do not warrant error notification noise.
         if "api returned status: 403 Forbidden" not in ipsw_stderr:
-            logger.error("Download OTA meta failed.", extra={"ota": meta_data, "ipsw_stderr": ipsw_stderr})
+            logger.error("Download OTA meta failed for %s%s", platform, " (beta)" if beta else "")
     else:
         platform_meta = json.loads(result.stdout)
         for meta_item in platform_meta:
@@ -166,23 +167,26 @@ def parse_download_meta_output(
 def retrieve_current_meta() -> OtaMetaData:
     meta: OtaMetaData = {}
     for platform in PLATFORMS:
-        logger.info("Downloading OTA meta.", extra={"platform": platform})
-        cmd = [
-            "ipsw",
-            "download",
-            "ota",
-            "--platform",
-            platform,
-            "--urls",
-            "--json",
-        ]
+        with sentry_sdk.start_span(op="subprocess.ipsw_download_meta", name=f"Fetch OTA meta for {platform}") as span:
+            span.set_data("platform", platform)
+            logger.info("Downloading OTA meta for %s", platform)
+            cmd = [
+                "ipsw",
+                "download",
+                "ota",
+                "--platform",
+                platform,
+                "--urls",
+                "--json",
+            ]
 
-        parse_download_meta_output(platform, subprocess.run(cmd, capture_output=True), meta, False)
+            parse_download_meta_output(platform, subprocess.run(cmd, capture_output=True), meta, False)
 
-        beta_cmd = cmd.copy()
-        beta_cmd.append("--beta")
-        parse_download_meta_output(platform, subprocess.run(beta_cmd, capture_output=True), meta, True)
+            beta_cmd = cmd.copy()
+            beta_cmd.append("--beta")
+            parse_download_meta_output(platform, subprocess.run(beta_cmd, capture_output=True), meta, True)
 
+    sentry_sdk.metrics.distribution("ota.meta_sync.total_artifacts", len(meta))
     return meta
 
 
@@ -292,13 +296,29 @@ def check_ota_hash(ota_meta: OtaArtifact, filepath: Path) -> bool:
 
 
 def download_ota_from_apple(ota_meta: OtaArtifact, download_dir: Path) -> Path:
-    logger.info("Downloading OTA from Apple.", extra={"ota": ota_meta, "download_dir": download_dir})
+    with sentry_sdk.start_span(
+        op="http.download",
+        name=f"Download OTA {ota_meta.platform} {ota_meta.version} {ota_meta.build}",
+    ) as span:
+        span.set_data("platform", ota_meta.platform)
+        span.set_data("version", ota_meta.version)
+        span.set_data("build", ota_meta.build)
 
-    filepath = download_dir / f"{ota_meta.platform}_{ota_meta.version}_{ota_meta.build}_{ota_meta.id}.zip"
-    try_download_url_to_file(ota_meta.url, filepath)
-    if check_ota_hash(ota_meta, filepath):
-        logger.info("OTA download completed.", extra={"ota": ota_meta, "download_dir": download_dir})
-        return filepath
+        logger.info("Downloading OTA %s %s %s from Apple", ota_meta.platform, ota_meta.version, ota_meta.build)
+
+        filepath = download_dir / f"{ota_meta.platform}_{ota_meta.version}_{ota_meta.build}_{ota_meta.id}.zip"
+        try_download_url_to_file(ota_meta.url, filepath)
+        if check_ota_hash(ota_meta, filepath):
+            if filepath.exists():
+                size = filepath.stat().st_size
+                span.set_data("downloaded_bytes", size)
+                sentry_sdk.metrics.distribution(
+                    "ota.download.size_bytes", size, unit="byte", attributes={"platform": ota_meta.platform}
+                )
+            logger.info(
+                "OTA download completed and verified for %s %s %s", ota_meta.platform, ota_meta.version, ota_meta.build
+            )
+            return filepath
 
     raise RuntimeError(f"Failed to download {ota_meta.url}")
 
@@ -316,37 +336,60 @@ class OtaMirror:
         self.meta: OtaMetaData = {}
 
     def update_meta(self) -> None:
-        logger.info("Updating OTA meta-data")
-        apple_meta = retrieve_current_meta()
-        self.meta = self.storage.save_meta(apple_meta)
+        with sentry_sdk.start_span(op="ota.meta_sync", name="OTA meta-sync from Apple"):
+            logger.info("Updating OTA meta-data")
+            apple_meta = retrieve_current_meta()
+            self.meta = self.storage.save_meta(apple_meta)
 
     def mirror(self, timeout: datetime.timedelta) -> None:
-        logger.info("Mirroring OTA images.", extra={"storage": self.storage.name()})
+        logger.info("Mirroring OTA images to %s", self.storage.name())
 
         start = time.time()
+        artifacts_mirrored = 0
+        artifacts_failed = 0
+
         self.update_meta()
         with tempfile.TemporaryDirectory() as download_dir:
             key: str
             ota: OtaArtifact
             for key, ota in self.meta.items():
                 if int(time.time() - start) > timeout.seconds:
-                    logger.info("Exiting OTA mirror due to elapsed timeout.", extra={"timeout": timeout})
-                    return
+                    logger.info("Exiting OTA mirror due to elapsed timeout after %ds", int(time.time() - start))
+                    break
 
                 if not ota.is_indexed():
                     continue
 
                 set_sentry_artifact_tags(key, ota)
-                try:
-                    ota_file = download_ota_from_apple(ota, Path(download_dir))
-                    self.storage.save_ota(key, ota, ota_file)
-                    ota_file.unlink()
-                except Exception as e:
-                    sentry_sdk.capture_exception(e)
-                    logger.exception(e)
-                    ota.processing_state = ArtifactProcessingState.INDEXED_INVALID
-                    ota.update_last_run()
-                    self.storage.update_meta_item(key, ota)
+
+                with sentry_sdk.start_span(
+                    op="ota.mirror.artifact",
+                    name=f"Mirror OTA {ota.platform} {ota.version} {ota.build}",
+                ) as artifact_span:
+                    artifact_span.set_data("artifact.key", key)
+                    artifact_span.set_data("artifact.platform", ota.platform)
+                    artifact_span.set_data("artifact.version", ota.version)
+                    artifact_span.set_data("artifact.build", ota.build)
+
+                    try:
+                        ota_file = download_ota_from_apple(ota, Path(download_dir))
+                        with sentry_sdk.start_span(op="gcs.upload", name=f"Upload OTA {ota.platform} {ota.version}"):
+                            self.storage.save_ota(key, ota, ota_file)
+                        ota_file.unlink()
+                        artifacts_mirrored += 1
+                        sentry_sdk.metrics.count("ota.mirror.succeeded", 1, attributes={"platform": ota.platform})
+                    except Exception as e:
+                        sentry_sdk.capture_exception(e)
+                        logger.exception(e)
+                        ota.processing_state = ArtifactProcessingState.INDEXED_INVALID
+                        ota.update_last_run()
+                        self.storage.update_meta_item(key, ota)
+                        artifact_span.set_status("internal_error")
+                        artifacts_failed += 1
+                        sentry_sdk.metrics.count("ota.mirror.failed", 1, attributes={"platform": ota.platform})
+
+        sentry_sdk.metrics.distribution("ota.mirror.artifacts_mirrored", artifacts_mirrored)
+        sentry_sdk.metrics.distribution("ota.mirror.artifacts_failed", artifacts_failed)
 
 
 DYLD_SHARED_CACHE = "dyld_shared_cache"
@@ -379,12 +422,13 @@ def parse_cryptex_patch_output(stderr: str) -> dict[str, Path]:
 
 
 def patch_cryptex_dmg(artifact: Path, output_dir: Path) -> dict[str, Path]:
-    result = subprocess.run(
-        ["ipsw", "ota", "patch", str(artifact), "--output", str(output_dir)],
-        capture_output=True,
-    )
-    if result.returncode == 0 and result.stderr:
-        return parse_cryptex_patch_output(result.stderr.decode("utf-8"))
+    with sentry_sdk.start_span(op="subprocess.ipsw_ota_patch", name="Patch cryptex DMG"):
+        result = subprocess.run(
+            ["ipsw", "ota", "patch", str(artifact), "--output", str(output_dir)],
+            capture_output=True,
+        )
+        if result.returncode == 0 and result.stderr:
+            return parse_cryptex_patch_output(result.stderr.decode("utf-8"))
     return {}
 
 
@@ -440,19 +484,24 @@ def split_dsc(
     """
     split_dirs: list[Path] = []
     for result_item in search_result:
-        logger.info("\t\tSplitting DSC.", extra={"artifact": result_item.artifact})
-        result = splitter(result_item.artifact, result_item.split_dir)
-        if result.returncode != 0:
-            logger.warning(
-                "DSC Split failed.",
-                extra={"artifact": result_item.artifact, "arch": result_item.arch, "split_result": result},
-            )
-        else:
-            logger.info(
-                "\t\t\tDSC split successful.",
-                extra={"artifact": result_item.artifact, "arch": result_item.arch, "split_result": result},
-            )
-            split_dirs.append(result_item.split_dir)
+        with sentry_sdk.start_span(
+            op="subprocess.dyld_split",
+            name=f"Split DSC {result_item.arch}",
+        ) as span:
+            span.set_data("arch", str(result_item.arch))
+            span.set_data("artifact", str(result_item.artifact))
+            logger.info("Splitting DSC %s (%s)", result_item.artifact.name, result_item.arch)
+            result = splitter(result_item.artifact, result_item.split_dir)
+            if result.returncode != 0:
+                logger.warning(
+                    "DSC split failed for %s (%s)",
+                    result_item.artifact.name,
+                    result_item.arch,
+                )
+                span.set_status("internal_error")
+            else:
+                logger.info("DSC split successful for %s (%s)", result_item.artifact.name, result_item.arch)
+                split_dirs.append(result_item.split_dir)
 
     if len(split_dirs) == 0:
         artifacts = "\n".join([f"{result_item.artifact}_{result_item.arch}" for result_item in search_result])
@@ -498,7 +547,7 @@ def find_dsc(input_dir: Path, version: str, build: str, output_dir: Path) -> lis
 
 
 def symsort(dsc_split_dir: Path, output_dir: Path, prefix: str, bundle_id: str) -> None:
-    logger.info("\t\t\tSymsorting...", extra={"dsc_split_dir": dsc_split_dir, "symsort_output_dir": output_dir})
+    logger.info("Symsorting %s -> %s", dsc_split_dir, output_dir)
 
     rmdir_if_exists(output_dir)
     result = common_symsort(output_dir, prefix, bundle_id, dsc_split_dir)
@@ -507,17 +556,18 @@ def symsort(dsc_split_dir: Path, output_dir: Path, prefix: str, bundle_id: str) 
 
 
 def detach_dev(dev: str) -> None:
-    result = subprocess.run(["hdiutil", "detach", dev], capture_output=True, check=True)
-    logger.debug("\t\t\tDetached DMG.", extra={"detach_result": result})
+    subprocess.run(["hdiutil", "detach", dev], capture_output=True, check=True)
+    logger.debug("Detached DMG %s", dev)
 
 
 def mount_dmg(dmg: Path) -> MountInfo:
-    result = subprocess.run(
-        ["hdiutil", "mount", str(dmg)],
-        capture_output=True,
-        check=True,
-    )
-    return parse_hdiutil_mount_output(result.stdout.decode("utf-8"))
+    with sentry_sdk.start_span(op="subprocess.hdiutil_mount", name=f"Mount DMG {dmg.name}"):
+        result = subprocess.run(
+            ["hdiutil", "mount", str(dmg)],
+            capture_output=True,
+            check=True,
+        )
+        return parse_hdiutil_mount_output(result.stdout.decode("utf-8"))
 
 
 def _dir_contains_dsc(directory: Path) -> bool:
@@ -566,53 +616,54 @@ def _classify_ota_failure(artifact: Path) -> type[Exception] | None:
 
 
 def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
-    # First try the legacy approach: literal filename extraction (works for older OTAs)
-    subprocess.run(
-        [
-            "ipsw",
-            "ota",
-            "extract",
-            str(artifact),
-            DYLD_SHARED_CACHE,
-            "-o",
-            str(output_dir),
-        ],
-        capture_output=True,
-    )
+    with sentry_sdk.start_span(op="subprocess.ipsw_ota_extract", name="Extract OTA DSC") as span:
+        span.set_data("artifact", str(artifact))
 
-    extract_dirs = list_dirs_in(output_dir)
-    if len(extract_dirs) == 0 or not _dir_contains_dsc(extract_dirs[0]):
-        # Fallback: modern payloadv2 OTAs (e.g. watchOS) store the DSC inside numbered payload
-        # chunks. The literal filename lookup fails to find anything, so we use -p (pattern)
-        # with -y (confirm payloadv2 search) instead.
-        # Note: -d -y should work but is buggy in ipsw <=3.1.655.
-        logger.info(
-            "Literal DSC extraction failed, trying payloadv2 pattern search.",
-            extra={"artifact": artifact},
-        )
+        # First try the legacy approach: literal filename extraction (works for older OTAs)
         subprocess.run(
             [
                 "ipsw",
                 "ota",
                 "extract",
                 str(artifact),
-                "-p",
                 DYLD_SHARED_CACHE,
-                "-y",
                 "-o",
                 str(output_dir),
             ],
             capture_output=True,
         )
+
         extract_dirs = list_dirs_in(output_dir)
+        if len(extract_dirs) == 0 or not _dir_contains_dsc(extract_dirs[0]):
+            # Fallback: modern payloadv2 OTAs (e.g. watchOS) store the DSC inside numbered payload
+            # chunks. The literal filename lookup fails to find anything, so we use -p (pattern)
+            # with -y (confirm payloadv2 search) instead.
+            # Note: -d -y should work but is buggy in ipsw <=3.1.655.
+            logger.info("Literal DSC extraction failed, trying payloadv2 pattern search for %s", artifact.name)
+            subprocess.run(
+                [
+                    "ipsw",
+                    "ota",
+                    "extract",
+                    str(artifact),
+                    "-p",
+                    DYLD_SHARED_CACHE,
+                    "-y",
+                    "-o",
+                    str(output_dir),
+                ],
+                capture_output=True,
+            )
+            extract_dirs = list_dirs_in(output_dir)
 
-    if len(extract_dirs) == 0:
-        raise OtaExtractError(f"Could not find {DYLD_SHARED_CACHE} in {artifact}")
-    elif len(extract_dirs) > 1:
-        extract_dirs_output = "\n".join([str(dir_path) for dir_path in extract_dirs])
-        raise OtaExtractError(f"Found more than one image directory in {artifact}:\n{extract_dirs_output}")
+        if len(extract_dirs) == 0:
+            span.set_status("internal_error")
+            raise OtaExtractError(f"Could not find {DYLD_SHARED_CACHE} in {artifact}")
+        elif len(extract_dirs) > 1:
+            extract_dirs_output = "\n".join([str(dir_path) for dir_path in extract_dirs])
+            raise OtaExtractError(f"Found more than one image directory in {artifact}:\n{extract_dirs_output}")
 
-    logger.info("\t\tSuccessfully extracted DSC.", extra={"artifact": artifact})
+        logger.info("Successfully extracted DSC from %s", artifact.name)
 
     return extract_dirs[0]
 
@@ -643,14 +694,18 @@ def iter_mirror(storage: OtaStorage) -> Iterator[tuple[str, OtaArtifact]]:
         mirrored = [(key, ota) for key, ota in ota_meta.items() if ota.is_mirrored()]
 
         if not mirrored:
-            logger.info("No more mirrored OTAs available exiting iter_mirror().")
+            logger.info("No more mirrored OTAs available, exiting iter_mirror().")
             return
 
         mirrored.sort(key=lambda item: parse_version_tuple(item[1].version), reverse=True)
         mirrored_key, mirrored_ota = mirrored[0]
 
         logger.info(
-            "Yielding mirrored OTA for further processing.", extra={"ota": mirrored_ota, "ota_key": mirrored_key}
+            "Processing mirrored OTA %s %s %s (key=%s)",
+            mirrored_ota.platform,
+            mirrored_ota.version,
+            mirrored_ota.build,
+            mirrored_key,
         )
         yield mirrored_key, mirrored_ota
 
@@ -663,57 +718,97 @@ class OtaExtract:
     def extract(self, timeout: datetime.timedelta) -> None:
         validate_shell_deps()
 
-        logger.info("Extracting symbols from OTA images.", extra={"storage": self.storage.name()})
+        logger.info("Extracting symbols from OTA images on %s", self.storage.name())
         start = time.time()
+        artifacts_extracted = 0
+        artifacts_failed = 0
+        artifacts_skipped = 0
+
         key: str
         ota: OtaArtifact
         for key, ota in iter_mirror(self.storage):
             if int(time.time() - start) > timeout.seconds:
-                logger.warning("Exiting OTA extract due to elapsed timeout", extra={"timeout": timeout})
-                return
+                logger.warning("Exiting OTA extract due to elapsed timeout after %ds", int(time.time() - start))
+                break
 
             set_sentry_artifact_tags(key, ota)
 
-            with tempfile.TemporaryDirectory() as ota_work_dir:
-                work_dir_path = Path(ota_work_dir)
-                logger.info("Downloading mirrored OTA...", extra={"ota": ota, "local_path": work_dir_path})
-                local_ota_path = self.storage.load_ota(ota, work_dir_path)
-                if local_ota_path is None:
-                    # means there is no OTA at the specified OTA location, although this was defined as MIRRORED
-                    # let's set this back to INDEXED, so the mirror workflow tries to download this again.
-                    ota.download_path = None
-                    ota.processing_state = ArtifactProcessingState.INDEXED
-                    ota.update_last_run()
-                    self.storage.update_meta_item(key, ota)
-                    continue
+            with sentry_sdk.start_span(
+                op="ota.extract.artifact",
+                name=f"Extract OTA {ota.platform} {ota.version} {ota.build}",
+            ) as artifact_span:
+                artifact_span.set_data("artifact.key", key)
+                artifact_span.set_data("artifact.platform", ota.platform)
+                artifact_span.set_data("artifact.version", ota.version)
+                artifact_span.set_data("artifact.build", ota.build)
 
-                try:
-                    symbol_dirs = self.extract_symbols_from_ota(local_ota_path, key, ota, work_dir_path)
-                    bundle_id = f"ota_{key}"
-                    for symbol_dir in symbol_dirs:
-                        self.storage.upload_symbols(symbol_dir, key, ota, bundle_id)
-                except DeltaOtaError as e:
-                    logger.info("Skipping delta/patch OTA (no full DSC available).", extra={"ota": ota, "exception": e})
-                    ota.processing_state = ArtifactProcessingState.DELTA_OTA
-                    ota.update_last_run()
-                    self.storage.update_meta_item(key, ota)
-                except RecoveryOtaError as e:
-                    logger.info(
-                        "Skipping recovery OTA (minimal boot environment, no DSC).",
-                        extra={"ota": ota, "exception": e},
-                    )
-                    ota.processing_state = ArtifactProcessingState.RECOVERY_OTA
-                    ota.update_last_run()
-                    self.storage.update_meta_item(key, ota)
-                except OtaExtractError as e:
-                    # we only "handle" OtaExtractError as something where we can go on, all
-                    # other exceptions should just stop the symbol-extraction process.
-                    sentry_sdk.capture_exception(e)
-                    logger.warning("Failed to extract symbols from OTA.", extra={"ota": ota, "exception": e})
-                    # also need to mark failing cases, because otherwise they will fail again
-                    ota.processing_state = ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
-                    ota.update_last_run()
-                    self.storage.update_meta_item(key, ota)
+                with tempfile.TemporaryDirectory() as ota_work_dir:
+                    work_dir_path = Path(ota_work_dir)
+                    logger.info("Downloading mirrored OTA %s %s %s", ota.platform, ota.version, ota.build)
+
+                    with sentry_sdk.start_span(op="gcs.download", name=f"Download OTA {ota.platform} {ota.version}"):
+                        local_ota_path = self.storage.load_ota(ota, work_dir_path)
+
+                    if local_ota_path is None:
+                        # means there is no OTA at the specified OTA location, although this was defined as MIRRORED
+                        # let's set this back to INDEXED, so the mirror workflow tries to download this again.
+                        ota.download_path = None
+                        ota.processing_state = ArtifactProcessingState.INDEXED
+                        ota.update_last_run()
+                        self.storage.update_meta_item(key, ota)
+                        artifact_span.set_status("not_found")
+                        continue
+
+                    try:
+                        with sentry_sdk.start_span(
+                            op="ota.extract.run",
+                            name=f"Extract+split+symsort OTA {ota.platform} {ota.version}",
+                        ):
+                            symbol_dirs = self.extract_symbols_from_ota(local_ota_path, key, ota, work_dir_path)
+                        bundle_id = f"ota_{key}"
+                        for symbol_dir in symbol_dirs:
+                            with sentry_sdk.start_span(
+                                op="gcs.upload_symbols", name=f"Upload OTA symbols {ota.platform} {ota.version}"
+                            ):
+                                self.storage.upload_symbols(symbol_dir, key, ota, bundle_id)
+                        artifacts_extracted += 1
+                        sentry_sdk.metrics.count("ota.extract.succeeded", 1, attributes={"platform": ota.platform})
+                    except DeltaOtaError:
+                        logger.info(
+                            "Skipping delta/patch OTA %s %s %s (no full DSC)", ota.platform, ota.version, ota.build
+                        )
+                        ota.processing_state = ArtifactProcessingState.DELTA_OTA
+                        ota.update_last_run()
+                        self.storage.update_meta_item(key, ota)
+                        artifacts_skipped += 1
+                        sentry_sdk.metrics.count("ota.extract.skipped_delta", 1, attributes={"platform": ota.platform})
+                    except RecoveryOtaError:
+                        logger.info("Skipping recovery OTA %s %s %s (no DSC)", ota.platform, ota.version, ota.build)
+                        ota.processing_state = ArtifactProcessingState.RECOVERY_OTA
+                        ota.update_last_run()
+                        self.storage.update_meta_item(key, ota)
+                        artifacts_skipped += 1
+                        sentry_sdk.metrics.count(
+                            "ota.extract.skipped_recovery", 1, attributes={"platform": ota.platform}
+                        )
+                    except OtaExtractError as e:
+                        # we only "handle" OtaExtractError as something where we can go on, all
+                        # other exceptions should just stop the symbol-extraction process.
+                        sentry_sdk.capture_exception(e)
+                        logger.warning(
+                            "Failed to extract symbols from OTA %s %s %s", ota.platform, ota.version, ota.build
+                        )
+                        # also need to mark failing cases, because otherwise they will fail again
+                        ota.processing_state = ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
+                        ota.update_last_run()
+                        self.storage.update_meta_item(key, ota)
+                        artifact_span.set_status("internal_error")
+                        artifacts_failed += 1
+                        sentry_sdk.metrics.count("ota.extract.failed", 1, attributes={"platform": ota.platform})
+
+        sentry_sdk.metrics.distribution("ota.extract.artifacts_extracted", artifacts_extracted)
+        sentry_sdk.metrics.distribution("ota.extract.artifacts_failed", artifacts_failed)
+        sentry_sdk.metrics.distribution("ota.extract.artifacts_skipped", artifacts_skipped)
 
     def extract_symbols_from_ota(
         self, local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path
@@ -743,7 +838,7 @@ def extract_symbols(
     """
     symbol_dirs = _try_processing_ota_as_cryptex(local_ota, platform, version, build, bundle_id, work_dir)
     if not symbol_dirs:
-        logger.info("\tNot a cryptex, so extracting OTA DSC directly")
+        logger.info("Not a cryptex, extracting OTA DSC directly")
         symbol_dirs = _process_ota_directly(local_ota, platform, version, build, bundle_id, work_dir)
     return symbol_dirs
 
@@ -751,15 +846,13 @@ def extract_symbols(
 def _try_processing_ota_as_cryptex(
     local_ota: Path, platform: str, version: str, build: str, bundle_id: str, work_dir: Path
 ) -> list[Path]:
-    with tempfile.TemporaryDirectory(suffix="_cryptex_dmg") as cryptex_patch_dir:
-        logger.info("Trying patch_cryptex_dmg...", extra={"local_path": local_ota})
-        extracted_dmgs = patch_cryptex_dmg(local_ota, Path(cryptex_patch_dir))
-        if len(extracted_dmgs) != 0:
-            logger.info(
-                "\tCryptex patch successful. Mount, split, symsorting DSC...",
-                extra={"local_path": local_ota},
-            )
-            return _process_cryptex_dmg(extracted_dmgs, platform, version, build, bundle_id, work_dir)
+    with sentry_sdk.start_span(op="ota.extract.try_cryptex", name="Try cryptex patch"):
+        with tempfile.TemporaryDirectory(suffix="_cryptex_dmg") as cryptex_patch_dir:
+            logger.info("Trying cryptex patch for %s", local_ota.name)
+            extracted_dmgs = patch_cryptex_dmg(local_ota, Path(cryptex_patch_dir))
+            if len(extracted_dmgs) != 0:
+                logger.info("Cryptex patch successful, mounting and processing DSC for %s", local_ota.name)
+                return _process_cryptex_dmg(extracted_dmgs, platform, version, build, bundle_id, work_dir)
 
     return []
 
@@ -770,7 +863,7 @@ def _process_ota_directly(
     try:
         with tempfile.TemporaryDirectory(suffix="_dsc_extract") as extract_dsc_tmp_dir:
             extracted_dsc_dir = extract_ota(local_ota, Path(extract_dsc_tmp_dir))
-            logger.info("\t\tSplitting & symsorting DSC", extra={"local_path": local_ota})
+            logger.info("Splitting & symsorting DSC for %s", local_ota.name)
 
             if extracted_dsc_dir:
                 return _split_and_symsort_dsc(extracted_dsc_dir, platform, version, build, bundle_id, work_dir)

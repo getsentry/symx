@@ -5,6 +5,7 @@ from datetime import timedelta
 from typing import Iterable, Sequence
 
 import sentry_sdk
+import sentry_sdk.metrics
 
 from symx._common import (
     ArtifactProcessingState,
@@ -25,108 +26,213 @@ from symx._ipsw.storage.gcs import (
 logger = logging.getLogger(__name__)
 
 
+def _set_artifact_tags(artifact: IpswArtifact) -> None:
+    """Set sentry tags for the current artifact — applies to errors, spans, and logs context."""
+    sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
+    sentry_sdk.set_tag("ipsw.artifact.platform", str(artifact.platform))
+    sentry_sdk.set_tag("ipsw.artifact.version", artifact.version)
+    sentry_sdk.set_tag("ipsw.artifact.build", artifact.build)
+
+
 def import_meta_from_appledb(ipsw_storage: IpswGcsStorage) -> None:
-    ipsw_storage.load_artifacts_meta()
+    with sentry_sdk.start_span(op="ipsw.meta_sync", name="IPSW meta-sync from AppleDB"):
+        ipsw_storage.load_artifacts_meta()
 
-    importer = AppleDbIpswImport(ipsw_storage.local_dir)
-    importer.run()
+        importer = AppleDbIpswImport(ipsw_storage.local_dir)
+        importer.run()
 
-    logger.info("Updating IPSW meta with new artifacts", extra={"num_new_items": len(importer.new_artifacts)})
+        logger.info("Updating IPSW meta with %d new artifacts", len(importer.new_artifacts))
+        sentry_sdk.metrics.distribution("ipsw.meta_sync.new_artifacts", len(importer.new_artifacts))
 
-    # the meta store could be updated concurrently by both mirror- and extract-workflows, this means we cannot just
-    # write the blob with a generation check, because it will fail in that case without chance for recovery or retry.
-    # But since importing is an add-only operation, we can simply collect all artifacts that would be added and then add
-    # them individually via update_meta_item() which will always refresh on retry if there was a concurrent update.
-    for artifact in importer.new_artifacts:
-        ipsw_storage.update_meta_item(artifact)
+        # the meta store could be updated concurrently by both mirror- and extract-workflows, this means we cannot just
+        # write the blob with a generation check, because it will fail in that case without chance for recovery or retry.
+        # But since importing is an add-only operation, we can simply collect all artifacts that would be added and then add
+        # them individually via update_meta_item() which will always refresh on retry if there was a concurrent update.
+        with sentry_sdk.start_span(op="ipsw.meta_sync.upsert", name="Upsert new artifacts") as upsert_span:
+            upsert_span.set_data("count", len(importer.new_artifacts))
+            for artifact in importer.new_artifacts:
+                ipsw_storage.update_meta_item(artifact)
 
 
 def mirror(ipsw_storage: IpswGcsStorage, timeout: timedelta) -> None:
     start = time.time()
+    artifacts_mirrored = 0
+    artifacts_failed = 0
+
     for artifact in ipsw_storage.artifact_iter(mirror_filter):
-        logger.info("Downloading artifact.", extra={"artifact": artifact})
-        sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
-        for source_idx, source in enumerate(artifact.sources):
-            if int(time.time() - start) > timeout.seconds:
-                logger.warning("Exiting IPSW mirror due to elapsed timeout.", extra={"timeout": timeout})
-                return
+        _set_artifact_tags(artifact)
 
-            sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
-            if source.processing_state not in {
-                ArtifactProcessingState.INDEXED,
-            }:
-                logger.info("Bypassing source because it was already mirrored.", extra={"source": source})
-                continue
+        with sentry_sdk.start_span(
+            op="ipsw.mirror.artifact",
+            name=f"Mirror {artifact.key}",
+        ) as artifact_span:
+            artifact_span.set_data("artifact.key", artifact.key)
+            artifact_span.set_data("artifact.platform", str(artifact.platform))
+            artifact_span.set_data("artifact.version", artifact.version)
+            artifact_span.set_data("artifact.build", artifact.build)
 
-            log_disk_usage()
-            filepath = ipsw_storage.local_dir / source.file_name
-            try_download_url_to_file(str(source.link), filepath)
-            if not verify_download(filepath, source):
-                artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORING_FAILED
-                artifact.sources[source_idx].update_last_run()
-                ipsw_storage.update_meta_item(artifact)
-            else:
-                updated_artifact = ipsw_storage.upload_ipsw(artifact, (filepath, source))
-                ipsw_storage.update_meta_item(updated_artifact)
+            logger.info("Mirroring artifact %s", artifact.key)
 
-            filepath.unlink()
+            for source_idx, source in enumerate(artifact.sources):
+                if int(time.time() - start) > timeout.seconds:
+                    logger.warning("Exiting IPSW mirror due to elapsed timeout after %ds", int(time.time() - start))
+                    sentry_sdk.metrics.distribution("ipsw.mirror.artifacts_mirrored", artifacts_mirrored)
+                    sentry_sdk.metrics.distribution("ipsw.mirror.artifacts_failed", artifacts_failed)
+                    return
+
+                sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
+                if source.processing_state not in {
+                    ArtifactProcessingState.INDEXED,
+                }:
+                    logger.info("Bypassing %s (already %s)", source.file_name, source.processing_state)
+                    continue
+
+                with sentry_sdk.start_span(
+                    op="ipsw.mirror.source",
+                    name=f"Mirror source {source.file_name}",
+                ) as source_span:
+                    source_span.set_data("source.file_name", source.file_name)
+
+                    log_disk_usage()
+                    filepath = ipsw_storage.local_dir / source.file_name
+
+                    with sentry_sdk.start_span(op="http.download", name=f"Download {source.file_name} from Apple"):
+                        try_download_url_to_file(str(source.link), filepath)
+
+                    with sentry_sdk.start_span(op="ipsw.mirror.verify", name=f"Verify {source.file_name}"):
+                        download_ok = verify_download(filepath, source)
+
+                    if not download_ok:
+                        artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORING_FAILED
+                        artifact.sources[source_idx].update_last_run()
+                        ipsw_storage.update_meta_item(artifact)
+                        source_span.set_status("internal_error")
+                        artifacts_failed += 1
+                        sentry_sdk.metrics.count(
+                            "ipsw.mirror.failed", 1, attributes={"platform": str(artifact.platform)}
+                        )
+                    else:
+                        with sentry_sdk.start_span(op="gcs.upload", name=f"Upload {source.file_name} to GCS"):
+                            updated_artifact = ipsw_storage.upload_ipsw(artifact, (filepath, source))
+                        ipsw_storage.update_meta_item(updated_artifact)
+                        artifacts_mirrored += 1
+                        sentry_sdk.metrics.count(
+                            "ipsw.mirror.succeeded", 1, attributes={"platform": str(artifact.platform)}
+                        )
+
+                    filepath.unlink()
+
+    sentry_sdk.metrics.distribution("ipsw.mirror.artifacts_mirrored", artifacts_mirrored)
+    sentry_sdk.metrics.distribution("ipsw.mirror.artifacts_failed", artifacts_failed)
 
 
 def extract(ipsw_storage: IpswGcsStorage, timeout: timedelta) -> None:
     validate_shell_deps()
     start = time.time()
+    artifacts_extracted = 0
+    artifacts_failed = 0
+
     for artifact in ipsw_storage.artifact_iter(extract_filter):
-        logger.info("Processing artifact for extraction", extra={"artifact": artifact})
-        sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
-        for source_idx, source in enumerate(artifact.sources):
-            # 1.) Check timeout
-            if int(time.time() - start) > timeout.seconds:
-                logger.warning("Exiting IPSW extract due to elapsed timeout.", extra={"timeout": timeout})
-                return
+        _set_artifact_tags(artifact)
 
-            # 2.) Check whether source should be extracted
-            sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
-            if source.processing_state != ArtifactProcessingState.MIRRORED:
-                logger.info(
-                    "Bypassing source because it isn't ready to extract or already extracted", extra={"source": source}
-                )
-                continue
+        with sentry_sdk.start_span(
+            op="ipsw.extract.artifact",
+            name=f"Extract {artifact.key}",
+        ) as artifact_span:
+            artifact_span.set_data("artifact.key", artifact.key)
+            artifact_span.set_data("artifact.platform", str(artifact.platform))
+            artifact_span.set_data("artifact.version", artifact.version)
+            artifact_span.set_data("artifact.build", artifact.build)
 
-            # 3.) Download IPSW from mirror. If failing update meta-data.
-            log_disk_usage()
-            local_path = ipsw_storage.download_ipsw(source)
-            if local_path is None:
-                # we haven't been able to download the artifact from the mirror
-                artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRROR_CORRUPT
-                artifact.sources[source_idx].update_last_run()
-                ipsw_storage.update_meta_item(artifact)
-                ipsw_storage.clean_local_dir()
-                continue
+            logger.info(
+                "Extracting artifact %s (%s %s %s)", artifact.key, artifact.platform, artifact.version, artifact.build
+            )
 
-            # 4.) Extract and upload symbols and update meta-data on success or failure.
-            try:
-                extractor = IpswExtractor(artifact.platform, source.file_name, ipsw_storage.local_dir, local_path)
-                symbol_binaries_dir = extractor.run()
-                ipsw_storage.upload_symbols(
-                    extractor.prefix,
-                    extractor.bundle_id,
-                    artifact,
-                    source_idx,
-                    symbol_binaries_dir,
-                )
-                shutil.rmtree(symbol_binaries_dir)
-                artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
-            except Exception as e:
-                sentry_sdk.capture_exception(e)
-                logger.warning(
-                    "Symbol extraction failed, updating meta-data and continuing with the next one.",
-                    extra={"artifact": artifact, "source": source, "exception": e},
-                )
-                artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
-            finally:
-                artifact.sources[source_idx].update_last_run()
-                ipsw_storage.update_meta_item(artifact)
-                ipsw_storage.clean_local_dir()
+            for source_idx, source in enumerate(artifact.sources):
+                # 1.) Check timeout
+                if int(time.time() - start) > timeout.seconds:
+                    logger.warning("Exiting IPSW extract due to elapsed timeout after %ds", int(time.time() - start))
+                    sentry_sdk.metrics.distribution("ipsw.extract.artifacts_extracted", artifacts_extracted)
+                    sentry_sdk.metrics.distribution("ipsw.extract.artifacts_failed", artifacts_failed)
+                    return
+
+                # 2.) Check whether source should be extracted
+                sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
+                if source.processing_state != ArtifactProcessingState.MIRRORED:
+                    logger.info("Bypassing %s (state=%s)", source.file_name, source.processing_state)
+                    continue
+
+                with sentry_sdk.start_span(
+                    op="ipsw.extract.source",
+                    name=f"Extract source {source.file_name}",
+                ) as source_span:
+                    source_span.set_data("source.file_name", source.file_name)
+
+                    # 3.) Download IPSW from mirror. If failing update meta-data.
+                    log_disk_usage()
+                    with sentry_sdk.start_span(op="gcs.download", name=f"Download {source.file_name} from mirror"):
+                        local_path = ipsw_storage.download_ipsw(source)
+
+                    if local_path is None:
+                        # we haven't been able to download the artifact from the mirror
+                        artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRROR_CORRUPT
+                        artifact.sources[source_idx].update_last_run()
+                        ipsw_storage.update_meta_item(artifact)
+                        ipsw_storage.clean_local_dir()
+                        source_span.set_status("internal_error")
+                        artifacts_failed += 1
+                        sentry_sdk.metrics.count(
+                            "ipsw.extract.mirror_corrupt", 1, attributes={"platform": str(artifact.platform)}
+                        )
+                        continue
+
+                    # 4.) Extract and upload symbols and update meta-data on success or failure.
+                    try:
+                        with sentry_sdk.start_span(
+                            op="ipsw.extract.run", name=f"IPSW extract+symsort {source.file_name}"
+                        ):
+                            extractor = IpswExtractor(
+                                artifact.platform, source.file_name, ipsw_storage.local_dir, local_path
+                            )
+                            symbol_binaries_dir = extractor.run()
+
+                        with sentry_sdk.start_span(
+                            op="gcs.upload_symbols", name=f"Upload symbols for {source.file_name}"
+                        ):
+                            ipsw_storage.upload_symbols(
+                                extractor.prefix,
+                                extractor.bundle_id,
+                                artifact,
+                                source_idx,
+                                symbol_binaries_dir,
+                            )
+
+                        shutil.rmtree(symbol_binaries_dir)
+                        artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
+                        artifacts_extracted += 1
+                        sentry_sdk.metrics.count(
+                            "ipsw.extract.succeeded", 1, attributes={"platform": str(artifact.platform)}
+                        )
+                    except Exception as e:
+                        sentry_sdk.capture_exception(e)
+                        logger.warning(
+                            "Symbol extraction failed for %s, continuing with the next one.",
+                            source.file_name,
+                            extra={"artifact": artifact, "source": source, "exception": e},
+                        )
+                        artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
+                        source_span.set_status("internal_error")
+                        artifacts_failed += 1
+                        sentry_sdk.metrics.count(
+                            "ipsw.extract.failed", 1, attributes={"platform": str(artifact.platform)}
+                        )
+                    finally:
+                        artifact.sources[source_idx].update_last_run()
+                        ipsw_storage.update_meta_item(artifact)
+                        ipsw_storage.clean_local_dir()
+
+    sentry_sdk.metrics.distribution("ipsw.extract.artifacts_extracted", artifacts_extracted)
+    sentry_sdk.metrics.distribution("ipsw.extract.artifacts_failed", artifacts_failed)
 
 
 def _source_post_mirror_condition(source: IpswSource) -> bool:

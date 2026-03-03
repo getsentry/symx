@@ -3,6 +3,8 @@ import logging
 import tempfile
 from pathlib import Path
 
+import sentry_sdk
+import sentry_sdk.metrics
 from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Client, Bucket
 
@@ -90,21 +92,28 @@ class OtaGcsStorage(OtaStorage):
         if not ota_file.is_file():
             raise RuntimeError("Path to upload must be a file")
 
-        logger.info(
-            "Uploading OTA.", extra={"ota": ota_meta, "ota_file": ota_file.name, "bucket_name": self.bucket.name}
-        )
-        mirror_filename = convert_image_name_to_path(ota_file.name)
-        blob = self.bucket.blob(mirror_filename)
-        if blob.exists():
-            # if the existing remote file has the same MD5 hash as the file we are about to upload, we can go on without
-            # uploading and only update meta, since that means some meta is still set to INDEXED instead of MIRRORED.
-            # On the other hand, if the hashes differ, then we have a problem and should be getting out
-            if not compare_md5_hash(ota_file, blob):
-                return
-        else:
-            # this file will be split into considerable chunks: set timeout to something high
-            blob.upload_from_filename(str(ota_file), timeout=3600)
-            logger.info("Upload finished. Updating OTA meta-data.")
+        with sentry_sdk.start_span(op="gcs.upload_ota", name=f"Upload OTA {ota_file.name}") as span:
+            file_size = ota_file.stat().st_size
+            span.set_data("file_name", ota_file.name)
+            span.set_data("file_size_bytes", file_size)
+
+            logger.info("Uploading OTA %s (%dMiB) to %s", ota_file.name, file_size // (1024 * 1024), self.bucket.name)
+            mirror_filename = convert_image_name_to_path(ota_file.name)
+            blob = self.bucket.blob(mirror_filename)
+            if blob.exists():
+                # if the existing remote file has the same MD5 hash as the file we are about to upload, we can go on without
+                # uploading and only update meta, since that means some meta is still set to INDEXED instead of MIRRORED.
+                # On the other hand, if the hashes differ, then we have a problem and should be getting out
+                if not compare_md5_hash(ota_file, blob):
+                    span.set_status("internal_error")
+                    return
+            else:
+                # this file will be split into considerable chunks: set timeout to something high
+                blob.upload_from_filename(str(ota_file), timeout=3600)
+                logger.info("Upload finished for %s", ota_file.name)
+                sentry_sdk.metrics.distribution(
+                    "gcs.upload.size_bytes", file_size, unit="byte", attributes={"type": "ota"}
+                )
 
         ota_meta.download_path = mirror_filename
         ota_meta.processing_state = ArtifactProcessingState.MIRRORED
@@ -112,24 +121,35 @@ class OtaGcsStorage(OtaStorage):
         self.update_meta_item(ota_meta_key, ota_meta)
 
     def load_ota(self, ota: OtaArtifact, download_dir: Path) -> Path | None:
-        if ota.download_path is None:
-            logger.error("The OTA does not have a mirror path")
-            return None
+        with sentry_sdk.start_span(op="gcs.download_ota", name=f"Download OTA {ota.platform} {ota.version}") as span:
+            span.set_data("platform", ota.platform)
+            span.set_data("version", ota.version)
+            span.set_data("download_path", ota.download_path)
 
-        blob = self.bucket.blob(ota.download_path)
-        local_ota_path = download_dir / f"{ota.id}.zip"
-        if not blob.exists():
-            logger.error("The OTA references a mirror-path that is no longer accessible")
-            return None
+            if ota.download_path is None:
+                logger.error("OTA %s %s has no mirror path", ota.platform, ota.version)
+                span.set_status("invalid_argument")
+                return None
 
-        if not try_download_to_filename(blob, local_ota_path):
-            return None
+            blob = self.bucket.blob(ota.download_path)
+            local_ota_path = download_dir / f"{ota.id}.zip"
+            if not blob.exists():
+                logger.error("OTA mirror path no longer accessible: %s", ota.download_path)
+                span.set_status("not_found")
+                return None
 
-        if not check_ota_hash(ota, local_ota_path):
-            logger.error("The SHA1 mismatch between storage and meta-data for OTA")
-            return None
+            if not try_download_to_filename(blob, local_ota_path):
+                span.set_status("internal_error")
+                return None
 
-        return local_ota_path
+            if not check_ota_hash(ota, local_ota_path):
+                logger.error("SHA1 mismatch between storage and meta-data for OTA %s %s", ota.platform, ota.version)
+                span.set_status("data_loss")
+                return None
+
+            if local_ota_path.exists():
+                span.set_data("downloaded_bytes", local_ota_path.stat().st_size)
+            return local_ota_path
 
     def update_meta_item(self, ota_meta_key: str, ota_meta: OtaArtifact) -> OtaMetaData:
         retry = 5

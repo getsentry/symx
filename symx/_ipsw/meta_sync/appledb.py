@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import sentry_sdk
+import sentry_sdk.metrics
 from deepdiff import DeepDiff  # type: ignore
 from pydantic import (
     BaseModel,
@@ -200,7 +201,8 @@ class AppleDbIpswImport:
         try:
             # Clone or update the appledb repository
             with tempfile.TemporaryDirectory() as temp_dir:
-                self._repo_dir = clone_or_update_appledb_repo(Path(temp_dir))
+                with sentry_sdk.start_span(op="git.clone", name="Clone/update AppleDB repo"):
+                    self._repo_dir = clone_or_update_appledb_repo(Path(temp_dir))
 
                 platforms = list(IpswPlatform)
 
@@ -208,13 +210,22 @@ class AppleDbIpswImport:
                 platforms.remove(IpswPlatform.IPODOS)
 
                 for platform in platforms:
-                    self._process_platform(platform)
+                    with sentry_sdk.start_span(
+                        op="ipsw.meta_sync.platform", name=f"Process platform {platform}"
+                    ) as span:
+                        span.set_data("platform", str(platform))
+                        self._process_platform(platform)
         except Exception as e:
             sentry_sdk.capture_exception(e)
             logger.warning("Failed to sync IPSW meta-data.", extra={"exception": e})
         finally:
-            logger.info("Number of processed files = %d" % self.processed_file_count)
-            logger.info("Number of artifacts w/o sources = %d" % self.artifact_wo_sources_count)
+            logger.info(
+                "Processed %d files, %d artifacts without sources",
+                self.processed_file_count,
+                self.artifact_wo_sources_count,
+            )
+            sentry_sdk.metrics.distribution("ipsw.meta_sync.processed_files", self.processed_file_count)
+            sentry_sdk.metrics.distribution("ipsw.meta_sync.artifacts_without_sources", self.artifact_wo_sources_count)
 
     def _store_ipsw_meta(self) -> None:
         with open(self._processing_dir / ARTIFACTS_META_JSON, "w") as fp:

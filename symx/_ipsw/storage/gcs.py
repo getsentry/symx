@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Tuple, Iterator, Iterable, Callable, Sequence
 
 import sentry_sdk
+import sentry_sdk.metrics
 from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Bucket, Client
 
@@ -81,32 +82,40 @@ class IpswGcsStorage:
 
     def upload_ipsw(self, artifact: IpswArtifact, downloaded_source: tuple[Path, IpswSource]) -> IpswArtifact:
         ipsw_file, source = downloaded_source
-        sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
-        sentry_sdk.set_tag("ipsw.artifact.source", source.file_name)
         source_idx = artifact.sources.index(source)
         if not ipsw_file.is_file():
             raise RuntimeError("Path to upload must be a file")
 
-        logger.info("Uploading IPSW.", extra={"ipsw": ipsw_file.name, "bucket": self.bucket.name})
+        with sentry_sdk.start_span(op="gcs.upload_ipsw", name=f"Upload IPSW {source.file_name}") as span:
+            file_size = ipsw_file.stat().st_size
+            span.set_data("file_name", source.file_name)
+            span.set_data("file_size_bytes", file_size)
+            span.set_data("artifact_key", artifact.key)
 
-        mirror_filename = f"mirror/ipsw/{artifact.platform}/{artifact.version}/{artifact.build}/{source.file_name}"
-        blob = self.bucket.blob(mirror_filename)
-        if blob.exists():
-            # if the existing remote file has the same MD5 hash as the file we are about to upload, we can go on
-            # without uploading and only update meta, since that means some meta is still set to INDEXED instead
-            # of MIRRORED. On the other hand, if the hashes differ, then we have a problem and should be getting out
-            if not compare_md5_hash(ipsw_file, blob):
-                logger.error("Trying to upload IPSW that already exists in mirror with a different MD5")
-                artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORING_FAILED
-                return artifact
-        else:
-            # this file will be split into considerable chunks: set timeout to something high
-            blob.upload_from_filename(str(ipsw_file), timeout=3600, retry=SYMX_GCS_RETRY)
-            logger.info("Upload finished. Updating IPSW meta-data.")
+            logger.info("Uploading IPSW %s (%dMiB) to %s", ipsw_file.name, file_size // (1024 * 1024), self.bucket.name)
 
-        artifact.sources[source_idx].mirror_path = mirror_filename
-        artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
-        artifact.sources[source_idx].update_last_run()
+            mirror_filename = f"mirror/ipsw/{artifact.platform}/{artifact.version}/{artifact.build}/{source.file_name}"
+            blob = self.bucket.blob(mirror_filename)
+            if blob.exists():
+                # if the existing remote file has the same MD5 hash as the file we are about to upload, we can go on
+                # without uploading and only update meta, since that means some meta is still set to INDEXED instead
+                # of MIRRORED. On the other hand, if the hashes differ, then we have a problem and should be getting out
+                if not compare_md5_hash(ipsw_file, blob):
+                    logger.error("Trying to upload IPSW that already exists in mirror with a different MD5")
+                    artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORING_FAILED
+                    span.set_status("internal_error")
+                    return artifact
+            else:
+                # this file will be split into considerable chunks: set timeout to something high
+                blob.upload_from_filename(str(ipsw_file), timeout=3600, retry=SYMX_GCS_RETRY)
+                logger.info("Upload finished for %s", source.file_name)
+                sentry_sdk.metrics.distribution(
+                    "gcs.upload.size_bytes", file_size, unit="byte", attributes={"type": "ipsw"}
+                )
+
+            artifact.sources[source_idx].mirror_path = mirror_filename
+            artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
+            artifact.sources[source_idx].update_last_run()
 
         return artifact
 
@@ -176,21 +185,30 @@ class IpswGcsStorage:
             yield sorted_by_age_descending[0]
 
     def download_ipsw(self, ipsw_source: IpswSource) -> Path | None:
-        logger.info("Downloading IPSW source.", extra={"ipsw_source": ipsw_source})
-        if ipsw_source.mirror_path is None:
-            logger.error("Attempting to download IPSW without mirror path.")
-            return None
+        with sentry_sdk.start_span(op="gcs.download_ipsw", name=f"Download IPSW {ipsw_source.file_name}") as span:
+            span.set_data("file_name", ipsw_source.file_name)
+            span.set_data("mirror_path", ipsw_source.mirror_path)
 
-        blob = self.bucket.blob(ipsw_source.mirror_path)
-        local_ipsw_path = self.local_dir / ipsw_source.file_name
-        if not blob.exists():
-            logger.error("The IPSW-source references a mirror-path that is no longer accessible")
-            return None
+            logger.info("Downloading IPSW %s from mirror", ipsw_source.file_name)
+            if ipsw_source.mirror_path is None:
+                logger.error("Attempting to download IPSW without mirror path")
+                span.set_status("invalid_argument")
+                return None
 
-        if not (try_download_to_filename(blob, local_ipsw_path) and verify_download(local_ipsw_path, ipsw_source)):
-            return None
+            blob = self.bucket.blob(ipsw_source.mirror_path)
+            local_ipsw_path = self.local_dir / ipsw_source.file_name
+            if not blob.exists():
+                logger.error("IPSW mirror path no longer accessible: %s", ipsw_source.mirror_path)
+                span.set_status("not_found")
+                return None
 
-        return local_ipsw_path
+            if not (try_download_to_filename(blob, local_ipsw_path) and verify_download(local_ipsw_path, ipsw_source)):
+                span.set_status("internal_error")
+                return None
+
+            if local_ipsw_path.exists():
+                span.set_data("downloaded_bytes", local_ipsw_path.stat().st_size)
+            return local_ipsw_path
 
     def upload_symbols(
         self,

@@ -16,7 +16,10 @@ from typing import List
 from urllib.parse import ParseResult, urlparse
 
 import requests
+import time as time_module
+
 import sentry_sdk
+import sentry_sdk.metrics
 from google.api_core.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Bucket
 from google.cloud.storage.retry import DEFAULT_RETRY
@@ -211,29 +214,40 @@ def try_download_url_to_file(url: str, filepath: Path, num_retries: int = 5) -> 
 
 
 def download_url_to_file(url: str, filepath: Path) -> None:
-    res = requests.get(url, stream=True)
-    content_length = res.headers.get("content-length")
-    if not content_length:
-        logger.warning("URL endpoint does not respond with a content-length header")
-    else:
-        total = int(content_length)
-        total_mib = total / MiB
-        logger.info("Filesize: %dMiB", floor(total_mib))
+    with sentry_sdk.start_span(op="http.download", name=f"Download {filepath.name}") as span:
+        span.set_data("url", str(url))
+        span.set_data("filepath", str(filepath))
+        start = time_module.monotonic()
 
-    with open(filepath, "wb") as f:
-        actual = 0
-        last_print = 0.0
-        actual_mib = actual / MiB
-        for chunk in res.iter_content(chunk_size=8192):
-            f.write(chunk)
-            actual = actual + len(chunk)
+        res = requests.get(url, stream=True)
+        content_length = res.headers.get("content-length")
+        if not content_length:
+            logger.warning("URL endpoint does not respond with a content-length header")
+        else:
+            total = int(content_length)
+            total_mib = total / MiB
+            logger.info("Filesize: %dMiB", floor(total_mib))
+            span.set_data("content_length_bytes", total)
 
+        with open(filepath, "wb") as f:
+            actual = 0
+            last_print = 0.0
             actual_mib = actual / MiB
-            if actual_mib - last_print > 100.0:
-                logger.info("%dMiB", floor(actual_mib))
-                last_print = actual_mib
+            for chunk in res.iter_content(chunk_size=8192):
+                f.write(chunk)
+                actual = actual + len(chunk)
 
-        logger.info("%dMiB", floor(actual_mib))
+                actual_mib = actual / MiB
+                if actual_mib - last_print > 100.0:
+                    logger.info("%dMiB", floor(actual_mib))
+                    last_print = actual_mib
+
+            logger.info("%dMiB", floor(actual_mib))
+
+        elapsed = time_module.monotonic() - start
+        span.set_data("downloaded_bytes", actual)
+        sentry_sdk.metrics.distribution("download.size_bytes", actual, unit="byte")
+        sentry_sdk.metrics.distribution("download.duration_seconds", elapsed, unit="second")
 
 
 def compare_md5_hash(local_file: Path, remote_blob: Blob) -> bool:
@@ -302,37 +316,48 @@ def upload_file(local_file: Path, dest_blob_name: Path, bucket: Bucket) -> bool:
 
 
 def upload_symbol_binaries(bucket: Bucket, platform: str, bundle_id: str, binary_dir: Path) -> None:
-    logger.info("Uploading symbol binaries.", extra={"platform": platform, "bundle_id": bundle_id})
-    dest_blob_prefix = Path("symbols")
-    bundle_index_path = dest_blob_prefix / platform / "bundles" / bundle_id
-    blob = bucket.blob(str(bundle_index_path))
-    if blob.exists():
-        logger.warning("Bundle already exists in symbol store.", extra={"bundle_id": bundle_id, "platform": platform})
+    with sentry_sdk.start_span(op="gcs.upload_symbols", name=f"Upload symbols {platform}/{bundle_id}") as span:
+        span.set_data("platform", platform)
+        span.set_data("bundle_id", bundle_id)
+        logger.info("Uploading symbol binaries for %s/%s", platform, bundle_id)
+        dest_blob_prefix = Path("symbols")
+        bundle_index_path = dest_blob_prefix / platform / "bundles" / bundle_id
+        blob = bucket.blob(str(bundle_index_path))
+        if blob.exists():
+            logger.warning("Bundle %s already exists in symbol store for %s", bundle_id, platform)
 
-    duplicate_count = 0
-    new_count = 0
-    upload_tasks: list[tuple[Path, Path, Bucket]] = []
+        duplicate_count = 0
+        new_count = 0
+        upload_tasks: list[tuple[Path, Path, Bucket]] = []
 
-    for root, _, files in os.walk(binary_dir):
-        for file in files:
-            local_file = Path(root) / file
-            dest_blob_name = dest_blob_prefix / Path(root).relative_to(binary_dir) / file
-            upload_tasks.append((local_file, dest_blob_name, bucket))
+        for root, _, files in os.walk(binary_dir):
+            for file in files:
+                local_file = Path(root) / file
+                dest_blob_name = dest_blob_prefix / Path(root).relative_to(binary_dir) / file
+                upload_tasks.append((local_file, dest_blob_name, bucket))
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [
-            executor.submit(upload_file, local_file, dest_blob_name, bucket)
-            for local_file, dest_blob_name, bucket in upload_tasks
-        ]
+        span.set_data("total_files", len(upload_tasks))
 
-        for future in as_completed(futures):
-            if not future.result():
-                duplicate_count += 1
-            else:
-                new_count += 1
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [
+                executor.submit(upload_file, local_file, dest_blob_name, bucket)
+                for local_file, dest_blob_name, bucket in upload_tasks
+            ]
 
-    logger.info("New files uploaded =", extra={"new_files_count": new_count})
-    logger.info("Ignored duplicates =", extra={"duplicate_count": duplicate_count})
+            for future in as_completed(futures):
+                if not future.result():
+                    duplicate_count += 1
+                else:
+                    new_count += 1
+
+        logger.info(
+            "Symbol upload complete: %d new, %d duplicates (total %d)", new_count, duplicate_count, len(upload_tasks)
+        )
+        span.set_data("new_count", new_count)
+        span.set_data("duplicate_count", duplicate_count)
+        sentry_sdk.metrics.distribution("symbols.uploaded_new", new_count, attributes={"platform": platform})
+        sentry_sdk.metrics.distribution("symbols.duplicates", duplicate_count, attributes={"platform": platform})
+        sentry_sdk.metrics.distribution("symbols.total_files", len(upload_tasks), attributes={"platform": platform})
 
 
 def validate_shell_deps() -> None:
@@ -362,19 +387,27 @@ def validate_shell_deps() -> None:
 
 
 def try_download_to_filename(blob: Blob, local_file_path: Path, num_retries: int = 5) -> bool:
-    while num_retries > 0:
-        try:
-            blob.download_to_filename(str(local_file_path))
-            break
-        except Exception as e:
-            if num_retries > 0:
-                num_retries = num_retries - 1
-            else:
-                sentry_sdk.capture_exception(e)
-                logger.warning(
-                    "Failed to download blob.", extra={"blob_name": blob.name, "retries": num_retries, "exception": e}
-                )
-                return False
+    with sentry_sdk.start_span(op="gcs.download", name=f"Download blob {blob.name}") as span:
+        span.set_data("blob_name", blob.name)
+        while num_retries > 0:
+            try:
+                blob.download_to_filename(str(local_file_path))
+                if local_file_path.exists():
+                    size = local_file_path.stat().st_size
+                    span.set_data("downloaded_bytes", size)
+                    sentry_sdk.metrics.distribution("gcs.download.size_bytes", size, unit="byte")
+                break
+            except Exception as e:
+                if num_retries > 0:
+                    num_retries = num_retries - 1
+                else:
+                    sentry_sdk.capture_exception(e)
+                    logger.warning(
+                        "Failed to download blob.",
+                        extra={"blob_name": blob.name, "retries": num_retries, "exception": e},
+                    )
+                    span.set_status("internal_error")
+                    return False
 
     return True
 
@@ -401,40 +434,57 @@ def rmdir_if_exists(dir_path: Path) -> None:
 def symsort(
     output_dir: Path, prefix: str, bundle_id: str, split_dir: Path, ignore_errors: bool = False
 ) -> CompletedProcess[bytes]:
-    symsorter_args = [
-        "./symsorter",
-        "-zz",
-        "-o",
-        output_dir,
-        "--prefix",
-        prefix,
-        "--bundle-id",
-        bundle_id,
-    ]
+    with sentry_sdk.start_span(op="subprocess.symsort", name=f"Symsort {prefix}/{bundle_id}") as span:
+        span.set_data("prefix", prefix)
+        span.set_data("bundle_id", bundle_id)
+        span.set_data("split_dir", str(split_dir))
 
-    if ignore_errors:
-        symsorter_args.append("--ignore-errors")
+        symsorter_args = [
+            "./symsorter",
+            "-zz",
+            "-o",
+            output_dir,
+            "--prefix",
+            prefix,
+            "--bundle-id",
+            bundle_id,
+        ]
 
-    symsorter_args.append(split_dir)
+        if ignore_errors:
+            symsorter_args.append("--ignore-errors")
 
-    return subprocess.run(
-        symsorter_args,
-        capture_output=True,
-    )
+        symsorter_args.append(split_dir)
+
+        result = subprocess.run(
+            symsorter_args,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            span.set_status("internal_error")
+        return result
 
 
 def dyld_split(dsc: Path, output_dir: Path) -> CompletedProcess[bytes]:
-    return subprocess.run(
-        ["ipsw", "dyld", "split", str(dsc), "--output", str(output_dir)],
-        capture_output=True,
-    )
+    with sentry_sdk.start_span(op="subprocess.dyld_split", name=f"Dyld split {dsc.name}") as span:
+        span.set_data("dsc", str(dsc))
+        span.set_data("output_dir", str(output_dir))
+
+        result = subprocess.run(
+            ["ipsw", "dyld", "split", str(dsc), "--output", str(output_dir)],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            span.set_status("internal_error")
+        return result
 
 
 def log_disk_usage(prefix: str = "") -> None:
     total, used, free = shutil.disk_usage("/")
+    free_mib = free / MiB
+    used_pct = (used / total) * 100 if total > 0 else 0
     if prefix:
-        fmt_str = f"disk_usage ({prefix})"
+        logger.info("disk_usage (%s): %.0f%% used, %dMiB free", prefix, used_pct, floor(free_mib))
     else:
-        fmt_str = "disk_usage"
-
-    logger.info(fmt_str, extra={"total": total, "used": used, "free": free})
+        logger.info("disk_usage: %.0f%% used, %dMiB free", used_pct, floor(free_mib))
+    sentry_sdk.metrics.gauge("disk.free_bytes", free, unit="byte")
+    sentry_sdk.metrics.gauge("disk.used_percent", used_pct, unit="ratio")
