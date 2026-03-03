@@ -2,6 +2,7 @@ import datetime
 import tempfile
 from pathlib import Path
 
+import sentry_sdk
 import typer
 
 from symx._common import parse_gcs_url, validate_shell_deps
@@ -30,10 +31,11 @@ def meta_sync(storage: str = typer.Option(..., "--storage", "-s", help="Storage"
     """
     Synchronize meta-data with appledb.
     """
-    with tempfile.TemporaryDirectory() as processing_dir:
-        storage_backend = init_storage(Path(processing_dir), storage)
-        if storage_backend:
-            import_meta_from_appledb(storage_backend)
+    with sentry_sdk.start_transaction(op="ipsw.meta_sync", name="IPSW meta-sync"):
+        with tempfile.TemporaryDirectory() as processing_dir:
+            storage_backend = init_storage(Path(processing_dir), storage)
+            if storage_backend:
+                import_meta_from_appledb(storage_backend)
 
 
 @ipsw_app.command()
@@ -49,10 +51,11 @@ def mirror(
     """
     Mirror all indexed artifacts.
     """
-    with tempfile.TemporaryDirectory() as processing_dir:
-        storage_backend = init_storage(Path(processing_dir), storage)
-        if storage_backend:
-            mirror_runner(storage_backend, datetime.timedelta(minutes=timeout))
+    with sentry_sdk.start_transaction(op="ipsw.mirror", name="IPSW mirror"):
+        with tempfile.TemporaryDirectory() as processing_dir:
+            storage_backend = init_storage(Path(processing_dir), storage)
+            if storage_backend:
+                mirror_runner(storage_backend, datetime.timedelta(minutes=timeout))
 
 
 @ipsw_app.command()
@@ -68,10 +71,11 @@ def extract(
     """
     Extract all mirrored artifacts and upload their binaries to the symbol store.
     """
-    with tempfile.TemporaryDirectory() as processing_dir:
-        storage_backend = init_storage(Path(processing_dir), storage)
-        if storage_backend:
-            extract_runner(storage_backend, datetime.timedelta(minutes=timeout))
+    with sentry_sdk.start_transaction(op="ipsw.extract", name="IPSW extract"):
+        with tempfile.TemporaryDirectory() as processing_dir:
+            storage_backend = init_storage(Path(processing_dir), storage)
+            if storage_backend:
+                extract_runner(storage_backend, datetime.timedelta(minutes=timeout))
 
 
 @ipsw_app.command()
@@ -83,18 +87,19 @@ def extract_file(
     """
     Extract symbols from a local IPSW file.
     """
-    validate_shell_deps()
+    with sentry_sdk.start_transaction(op="ipsw.extract_file", name=f"IPSW extract-file {ipsw_file.name}"):
+        validate_shell_deps()
 
-    if output_dir is None:
-        output_dir = Path(tempfile.mkdtemp(prefix="symx_ipsw_"))
-        typer.echo(f"Output directory: {output_dir}")
+        if output_dir is None:
+            output_dir = Path(tempfile.mkdtemp(prefix="symx_ipsw_"))
+            typer.echo(f"Output directory: {output_dir}")
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-    extractor = IpswExtractor(platform, ipsw_file.name, output_dir, ipsw_file)
-    symbols_dir = extractor.run()
+        extractor = IpswExtractor(platform, ipsw_file.name, output_dir, ipsw_file)
+        symbols_dir = extractor.run()
 
-    typer.echo(f"Extracted symbols to: {symbols_dir}")
+        typer.echo(f"Extracted symbols to: {symbols_dir}")
 
 
 @ipsw_app.command()
@@ -104,7 +109,8 @@ def migrate(
     """
     Migrate/Maintain storage
     """
-    with tempfile.TemporaryDirectory() as processing_dir:
-        storage_backend = init_storage(Path(processing_dir), storage)
-        if storage_backend:
-            migrate_runner(storage_backend)
+    with sentry_sdk.start_transaction(op="ipsw.migrate", name="IPSW migrate"):
+        with tempfile.TemporaryDirectory() as processing_dir:
+            storage_backend = init_storage(Path(processing_dir), storage)
+            if storage_backend:
+                migrate_runner(storage_backend)

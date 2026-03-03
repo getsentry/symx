@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 from typing import List
 
+import sentry_sdk
 import typer
 from google.cloud.storage import Client, Bucket
 from pydantic import BaseModel, computed_field
@@ -49,25 +50,26 @@ def extract(
     """
     Extract symbols from Simulator images to storage
     """
-    # todo: move this out to a storage class including meta-data
-    uri = parse_gcs_url(storage)
-    if uri is None or uri.hostname is None:
-        return None
-    client: Client = Client(project=uri.username)
-    bucket: Bucket = client.bucket(uri.hostname)
-
-    for runtime in find_simulator_runtimes(retrieve_caches_path()):
-        with tempfile.TemporaryDirectory(prefix="_sentry_dyld_shared_cache_") as output_dir:
-            for dsc_file in runtime.path.iterdir():
-                if _is_ignored_dsc_file(dsc_file):
-                    continue
-                runtime.arch = dsc_file.name.split(_dyld_shared_cache_prefix)[1]
-                logger.info("Extracting symbols for macOS", extra={"runtime": runtime})
-                extract_system_symbols(runtime, Path(output_dir))
-
-            upload_symbol_binaries(bucket, runtime.os_name, runtime.bundle_id, Path(output_dir))
+    with sentry_sdk.start_transaction(op="sim.extract", name="Simulator extract"):
+        # todo: move this out to a storage class including meta-data
+        uri = parse_gcs_url(storage)
+        if uri is None or uri.hostname is None:
             return None
-    return None
+        client: Client = Client(project=uri.username)
+        bucket: Bucket = client.bucket(uri.hostname)
+
+        for runtime in find_simulator_runtimes(retrieve_caches_path()):
+            with tempfile.TemporaryDirectory(prefix="_sentry_dyld_shared_cache_") as output_dir:
+                for dsc_file in runtime.path.iterdir():
+                    if _is_ignored_dsc_file(dsc_file):
+                        continue
+                    runtime.arch = dsc_file.name.split(_dyld_shared_cache_prefix)[1]
+                    logger.info("Extracting symbols for macOS", extra={"runtime": runtime})
+                    extract_system_symbols(runtime, Path(output_dir))
+
+                upload_symbol_binaries(bucket, runtime.os_name, runtime.bundle_id, Path(output_dir))
+                return None
+        return None
 
 
 def retrieve_caches_path() -> Path:

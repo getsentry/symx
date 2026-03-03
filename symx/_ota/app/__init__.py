@@ -2,6 +2,7 @@ import datetime
 import tempfile
 from pathlib import Path
 
+import sentry_sdk
 import typer
 
 from symx._common import validate_shell_deps
@@ -25,10 +26,11 @@ def mirror(
     """
     Mirror OTA images to storage
     """
-    storage_backend = init_storage(storage)
-    if storage_backend:
-        ota = OtaMirror(storage=storage_backend)
-        ota.mirror(datetime.timedelta(minutes=timeout))
+    with sentry_sdk.start_transaction(op="ota.mirror", name="OTA mirror"):
+        storage_backend = init_storage(storage)
+        if storage_backend:
+            ota = OtaMirror(storage=storage_backend)
+            ota.mirror(datetime.timedelta(minutes=timeout))
 
 
 @ota_app.command()
@@ -44,10 +46,11 @@ def extract(
     """
     Extract dyld_shared_cache and symbols from OTA images to storage
     """
-    storage_backend = init_storage(storage)
-    if storage_backend:
-        ota = OtaExtract(storage=storage_backend)
-        ota.extract(datetime.timedelta(minutes=timeout))
+    with sentry_sdk.start_transaction(op="ota.extract", name="OTA extract"):
+        storage_backend = init_storage(storage)
+        if storage_backend:
+            ota = OtaExtract(storage=storage_backend)
+            ota.extract(datetime.timedelta(minutes=timeout))
 
 
 @ota_app.command()
@@ -64,31 +67,32 @@ def extract_file(
     """
     Extract symbols from a local OTA file.
     """
-    validate_shell_deps()
+    with sentry_sdk.start_transaction(op="ota.extract_file", name=f"OTA extract-file {ota_file.name}"):
+        validate_shell_deps()
 
-    if bundle_id is None:
-        bundle_id = f"ota_{platform}_{version}_{build}"
+        if bundle_id is None:
+            bundle_id = f"ota_{platform}_{version}_{build}"
 
-    if output_dir is None:
-        output_dir = Path(tempfile.mkdtemp(prefix="symx_ota_"))
-        typer.echo(f"Output directory: {output_dir}")
+        if output_dir is None:
+            output_dir = Path(tempfile.mkdtemp(prefix="symx_ota_"))
+            typer.echo(f"Output directory: {output_dir}")
 
-    symbol_dirs = extract_symbols(
-        local_ota=ota_file,
-        platform=platform,
-        version=version,
-        build=build,
-        bundle_id=bundle_id,
-        work_dir=output_dir,
-    )
+        symbol_dirs = extract_symbols(
+            local_ota=ota_file,
+            platform=platform,
+            version=version,
+            build=build,
+            bundle_id=bundle_id,
+            work_dir=output_dir,
+        )
 
-    if symbol_dirs:
-        typer.echo("Extracted symbols to:")
-        for d in symbol_dirs:
-            typer.echo(f"  {d}")
-    else:
-        typer.echo("No symbols extracted.", err=True)
-        raise typer.Exit(code=1)
+        if symbol_dirs:
+            typer.echo("Extracted symbols to:")
+            for d in symbol_dirs:
+                typer.echo(f"  {d}")
+        else:
+            typer.echo("No symbols extracted.", err=True)
+            raise typer.Exit(code=1)
 
 
 @ota_app.command()
@@ -99,6 +103,7 @@ def migrate_storage(storage: str = typer.Option(..., "--storage", "-s", help="St
     just the entry point for a GHA.
     :param storage: URI to a supported storage backend
     """
-    storage_backend = init_storage(storage)
-    if storage_backend:
-        migrate(storage_backend)
+    with sentry_sdk.start_transaction(op="ota.migrate", name="OTA migrate"):
+        storage_backend = init_storage(storage)
+        if storage_backend:
+            migrate(storage_backend)
