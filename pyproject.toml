@@ -10,7 +10,7 @@ license = {text = "MIT"}
 requires-python = "<3.14,>=3.12"
 dependencies = [
     "typer==0.21.1",
-    "sentry-sdk==2.49.0",
+    "sentry-sdk>=2.54.0",
     "google-cloud-storage==3.8.0",
     "protobuf==6.33.5", # TODO: explicitly bump protobuf to the CVE fix until google-cloud-storage bumps
     "pydantic==2.12.5",
