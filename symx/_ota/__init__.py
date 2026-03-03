@@ -336,7 +336,7 @@ class OtaMirror:
         self.meta: OtaMetaData = {}
 
     def update_meta(self) -> None:
-        with sentry_sdk.start_span(op="ota.meta_sync", name="OTA meta-sync from Apple"):
+        with sentry_sdk.start_transaction(op="ota.meta_sync", name="OTA meta-sync from Apple"):
             logger.info("Updating OTA meta-data")
             apple_meta = retrieve_current_meta()
             self.meta = self.storage.save_meta(apple_meta)
@@ -362,14 +362,14 @@ class OtaMirror:
 
                 set_sentry_artifact_tags(key, ota)
 
-                with sentry_sdk.start_span(
-                    op="ota.mirror.artifact",
-                    name=f"Mirror OTA {ota.platform} {ota.version} {ota.build}",
-                ) as artifact_span:
-                    artifact_span.set_data("artifact.key", key)
-                    artifact_span.set_data("artifact.platform", ota.platform)
-                    artifact_span.set_data("artifact.version", ota.version)
-                    artifact_span.set_data("artifact.build", ota.build)
+                with sentry_sdk.start_transaction(
+                    op="ota.mirror",
+                    name=f"OTA mirror {ota.platform} {ota.version} {ota.build}",
+                ) as txn:
+                    txn.set_data("artifact.key", key)
+                    txn.set_data("artifact.platform", ota.platform)
+                    txn.set_data("artifact.version", ota.version)
+                    txn.set_data("artifact.build", ota.build)
 
                     try:
                         ota_file = download_ota_from_apple(ota, Path(download_dir))
@@ -384,7 +384,7 @@ class OtaMirror:
                         ota.processing_state = ArtifactProcessingState.INDEXED_INVALID
                         ota.update_last_run()
                         self.storage.update_meta_item(key, ota)
-                        artifact_span.set_status("internal_error")
+                        txn.set_status("internal_error")
                         artifacts_failed += 1
                         sentry_sdk.metrics.count("ota.mirror.failed", 1, attributes={"platform": ota.platform})
 
@@ -733,14 +733,14 @@ class OtaExtract:
 
             set_sentry_artifact_tags(key, ota)
 
-            with sentry_sdk.start_span(
-                op="ota.extract.artifact",
-                name=f"Extract OTA {ota.platform} {ota.version} {ota.build}",
-            ) as artifact_span:
-                artifact_span.set_data("artifact.key", key)
-                artifact_span.set_data("artifact.platform", ota.platform)
-                artifact_span.set_data("artifact.version", ota.version)
-                artifact_span.set_data("artifact.build", ota.build)
+            with sentry_sdk.start_transaction(
+                op="ota.extract",
+                name=f"OTA extract {ota.platform} {ota.version} {ota.build}",
+            ) as txn:
+                txn.set_data("artifact.key", key)
+                txn.set_data("artifact.platform", ota.platform)
+                txn.set_data("artifact.version", ota.version)
+                txn.set_data("artifact.build", ota.build)
 
                 with tempfile.TemporaryDirectory() as ota_work_dir:
                     work_dir_path = Path(ota_work_dir)
@@ -756,7 +756,7 @@ class OtaExtract:
                         ota.processing_state = ArtifactProcessingState.INDEXED
                         ota.update_last_run()
                         self.storage.update_meta_item(key, ota)
-                        artifact_span.set_status("not_found")
+                        txn.set_status("not_found")
                         continue
 
                     try:
@@ -802,7 +802,7 @@ class OtaExtract:
                         ota.processing_state = ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
                         ota.update_last_run()
                         self.storage.update_meta_item(key, ota)
-                        artifact_span.set_status("internal_error")
+                        txn.set_status("internal_error")
                         artifacts_failed += 1
                         sentry_sdk.metrics.count("ota.extract.failed", 1, attributes={"platform": ota.platform})
 

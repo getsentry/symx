@@ -26,11 +26,10 @@ def mirror(
     """
     Mirror OTA images to storage
     """
-    with sentry_sdk.start_transaction(op="ota.mirror", name="OTA mirror"):
-        storage_backend = init_storage(storage)
-        if storage_backend:
-            ota = OtaMirror(storage=storage_backend)
-            ota.mirror(datetime.timedelta(minutes=timeout))
+    storage_backend = init_storage(storage)
+    if storage_backend:
+        ota = OtaMirror(storage=storage_backend)
+        ota.mirror(datetime.timedelta(minutes=timeout))
 
 
 @ota_app.command()
@@ -46,11 +45,10 @@ def extract(
     """
     Extract dyld_shared_cache and symbols from OTA images to storage
     """
-    with sentry_sdk.start_transaction(op="ota.extract", name="OTA extract"):
-        storage_backend = init_storage(storage)
-        if storage_backend:
-            ota = OtaExtract(storage=storage_backend)
-            ota.extract(datetime.timedelta(minutes=timeout))
+    storage_backend = init_storage(storage)
+    if storage_backend:
+        ota = OtaExtract(storage=storage_backend)
+        ota.extract(datetime.timedelta(minutes=timeout))
 
 
 @ota_app.command()

@@ -51,11 +51,10 @@ def mirror(
     """
     Mirror all indexed artifacts.
     """
-    with sentry_sdk.start_transaction(op="ipsw.mirror", name="IPSW mirror"):
-        with tempfile.TemporaryDirectory() as processing_dir:
-            storage_backend = init_storage(Path(processing_dir), storage)
-            if storage_backend:
-                mirror_runner(storage_backend, datetime.timedelta(minutes=timeout))
+    with tempfile.TemporaryDirectory() as processing_dir:
+        storage_backend = init_storage(Path(processing_dir), storage)
+        if storage_backend:
+            mirror_runner(storage_backend, datetime.timedelta(minutes=timeout))
 
 
 @ipsw_app.command()
@@ -71,11 +70,10 @@ def extract(
     """
     Extract all mirrored artifacts and upload their binaries to the symbol store.
     """
-    with sentry_sdk.start_transaction(op="ipsw.extract", name="IPSW extract"):
-        with tempfile.TemporaryDirectory() as processing_dir:
-            storage_backend = init_storage(Path(processing_dir), storage)
-            if storage_backend:
-                extract_runner(storage_backend, datetime.timedelta(minutes=timeout))
+    with tempfile.TemporaryDirectory() as processing_dir:
+        storage_backend = init_storage(Path(processing_dir), storage)
+        if storage_backend:
+            extract_runner(storage_backend, datetime.timedelta(minutes=timeout))
 
 
 @ipsw_app.command()

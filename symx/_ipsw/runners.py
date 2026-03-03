@@ -62,14 +62,14 @@ def mirror(ipsw_storage: IpswGcsStorage, timeout: timedelta) -> None:
     for artifact in ipsw_storage.artifact_iter(mirror_filter):
         _set_artifact_tags(artifact)
 
-        with sentry_sdk.start_span(
-            op="ipsw.mirror.artifact",
-            name=f"Mirror {artifact.key}",
-        ) as artifact_span:
-            artifact_span.set_data("artifact.key", artifact.key)
-            artifact_span.set_data("artifact.platform", str(artifact.platform))
-            artifact_span.set_data("artifact.version", artifact.version)
-            artifact_span.set_data("artifact.build", artifact.build)
+        with sentry_sdk.start_transaction(
+            op="ipsw.mirror",
+            name=f"IPSW mirror {artifact.platform} {artifact.version} {artifact.build}",
+        ) as txn:
+            txn.set_data("artifact.key", artifact.key)
+            txn.set_data("artifact.platform", str(artifact.platform))
+            txn.set_data("artifact.version", artifact.version)
+            txn.set_data("artifact.build", artifact.build)
 
             logger.info("Mirroring artifact %s", artifact.key)
 
@@ -135,14 +135,14 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: timedelta) -> None:
     for artifact in ipsw_storage.artifact_iter(extract_filter):
         _set_artifact_tags(artifact)
 
-        with sentry_sdk.start_span(
-            op="ipsw.extract.artifact",
-            name=f"Extract {artifact.key}",
-        ) as artifact_span:
-            artifact_span.set_data("artifact.key", artifact.key)
-            artifact_span.set_data("artifact.platform", str(artifact.platform))
-            artifact_span.set_data("artifact.version", artifact.version)
-            artifact_span.set_data("artifact.build", artifact.build)
+        with sentry_sdk.start_transaction(
+            op="ipsw.extract",
+            name=f"IPSW extract {artifact.platform} {artifact.version} {artifact.build}",
+        ) as txn:
+            txn.set_data("artifact.key", artifact.key)
+            txn.set_data("artifact.platform", str(artifact.platform))
+            txn.set_data("artifact.version", artifact.version)
+            txn.set_data("artifact.build", artifact.build)
 
             logger.info(
                 "Extracting artifact %s (%s %s %s)", artifact.key, artifact.platform, artifact.version, artifact.build
