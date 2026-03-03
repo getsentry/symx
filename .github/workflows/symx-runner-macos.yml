@@ -47,7 +47,7 @@ jobs:
           export PATH="/Users/runner/.local/bin:$PATH"
           uv --version
           uv sync
-          IPSW_VERSION="3.1.657"
+          IPSW_VERSION="3.1.659"
           curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors \
             "https://github.com/blacktop/ipsw/releases/download/v${IPSW_VERSION}/ipsw_${IPSW_VERSION}_macOS_universal.tar.gz" \
             -o /tmp/ipsw.tar.gz
