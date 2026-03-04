@@ -27,11 +27,31 @@ logger = logging.getLogger(__name__)
 
 
 def _set_artifact_scope(scope: sentry_sdk.Scope, artifact: IpswArtifact) -> None:
-    """Set sentry tags on the given scope — isolates per-artifact context."""
+    """Set sentry tags and context on the given scope — isolates per-artifact context."""
     scope.set_tag("ipsw.artifact.key", artifact.key)
     scope.set_tag("ipsw.artifact.platform", str(artifact.platform))
     scope.set_tag("ipsw.artifact.version", artifact.version)
     scope.set_tag("ipsw.artifact.build", artifact.build)
+    scope.set_context(
+        "ipsw_artifact",
+        {
+            "key": artifact.key,
+            "platform": str(artifact.platform),
+            "version": artifact.version,
+            "build": artifact.build,
+            "released": str(artifact.released) if artifact.released else None,
+            "sources": [
+                {
+                    "file_name": s.file_name,
+                    "link": str(s.link),
+                    "processing_state": str(s.processing_state),
+                    "mirror_path": s.mirror_path,
+                    "size": s.size,
+                }
+                for s in artifact.sources
+            ],
+        },
+    )
 
 
 def import_meta_from_appledb(ipsw_storage: IpswGcsStorage) -> None:

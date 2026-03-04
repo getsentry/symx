@@ -324,11 +324,26 @@ def download_ota_from_apple(ota_meta: OtaArtifact, download_dir: Path) -> Path:
 
 
 def _set_artifact_scope(scope: sentry_sdk.Scope, key: str, ota: OtaArtifact) -> None:
-    """Set sentry tags on the given scope — isolates per-artifact context."""
+    """Set sentry tags and context on the given scope — isolates per-artifact context."""
     scope.set_tag("artifact.key", key)
     scope.set_tag("artifact.platform", ota.platform)
     scope.set_tag("artifact.version", ota.version)
     scope.set_tag("artifact.build", ota.build)
+    scope.set_context(
+        "ota_artifact",
+        {
+            "key": key,
+            "platform": ota.platform,
+            "version": ota.version,
+            "build": ota.build,
+            "url": ota.url,
+            "id": ota.id,
+            "download_path": ota.download_path,
+            "processing_state": str(ota.processing_state),
+            "devices": ota.devices,
+            "hash": ota.hash,
+        },
+    )
 
 
 class OtaMirror:
