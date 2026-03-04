@@ -8,11 +8,12 @@ import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from enum import StrEnum
 from math import floor
 from pathlib import Path
 from subprocess import CompletedProcess
-from typing import List
+from typing import Generator, List
 from urllib.parse import ParseResult, urlparse
 
 import requests
@@ -20,6 +21,7 @@ import time as time_module
 
 import sentry_sdk
 import sentry_sdk.metrics
+from sentry_sdk.tracing import NoOpSpan
 from google.api_core.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Bucket
 from google.cloud.storage.retry import DEFAULT_RETRY
@@ -301,7 +303,25 @@ def parse_gcs_url(storage: str) -> ParseResult | None:
     return uri
 
 
-def upload_file(local_file: Path, dest_blob_name: Path, bucket: Bucket) -> bool:
+@contextmanager
+def suppress_auto_instrumented_spans() -> Generator[None, None, None]:
+    """Temporarily replace the active span with a NoOpSpan to prevent auto-instrumented
+    child spans (HTTP, subprocess, etc.) from being created.
+
+    The stdlib integration creates a span for every http.client request. During bulk symbol
+    uploads (5000-7000 files), this generates thousands of spans that exceed Sentry's max_spans
+    limit, causing the entire transaction to be silently dropped.
+    """
+    scope = sentry_sdk.get_current_scope()
+    original_span = scope.span
+    scope.span = NoOpSpan()
+    try:
+        yield
+    finally:
+        scope.span = original_span
+
+
+def _upload_file(local_file: Path, dest_blob_name: Path, bucket: Bucket) -> bool:
     blob = bucket.blob(str(dest_blob_name))
 
     try:
@@ -338,9 +358,9 @@ def upload_symbol_binaries(bucket: Bucket, platform: str, bundle_id: str, binary
 
         span.set_data("total_files", len(upload_tasks))
 
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with suppress_auto_instrumented_spans(), ThreadPoolExecutor(max_workers=10) as executor:
             futures = [
-                executor.submit(upload_file, local_file, dest_blob_name, bucket)
+                executor.submit(_upload_file, local_file, dest_blob_name, bucket)
                 for local_file, dest_blob_name, bucket in upload_tasks
             ]
 
