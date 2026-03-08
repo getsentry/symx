@@ -5,8 +5,8 @@ Tests for OTA metadata parsing from ipsw command output.
 import json
 import subprocess
 
-from symx._common import ArtifactProcessingState
-from symx._ota import OtaMetaData, parse_download_meta_output
+from symx.common import ArtifactProcessingState
+from symx.ota import OtaMetaData, parse_download_meta_output
 
 
 def make_completed_process(

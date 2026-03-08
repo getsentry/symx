@@ -1,14 +1,14 @@
 import logging
 import tempfile
 from pathlib import Path
-from typing import List
+
 
 import sentry_sdk
 import typer
 from google.cloud.storage import Client, Bucket
 from pydantic import BaseModel, computed_field
 
-from symx._common import symsort, dyld_split, upload_symbol_binaries, parse_gcs_url
+from symx.common import symsort, dyld_split, upload_symbol_binaries, parse_gcs_url
 
 logger = logging.getLogger(__name__)
 sim_app = typer.Typer()
@@ -88,8 +88,8 @@ def retrieve_caches_path() -> Path:
     return caches_path
 
 
-def find_simulator_runtimes(caches_path: Path) -> List[SimulatorRuntime]:
-    runtimes: List[SimulatorRuntime] = []
+def find_simulator_runtimes(caches_path: Path) -> list[SimulatorRuntime]:
+    runtimes: list[SimulatorRuntime] = []
     for macos_build_path in caches_path.iterdir():
         if macos_build_path.name == ".DS_Store":
             continue

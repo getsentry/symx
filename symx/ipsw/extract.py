@@ -7,8 +7,8 @@ import logging
 
 import sentry_sdk
 
-from symx._common import Arch, symsort, dyld_split
-from symx._ipsw.common import IpswPlatform
+from symx.common import Arch, symsort, dyld_split
+from symx.ipsw.common import IpswPlatform
 
 logger = logging.getLogger(__name__)
 

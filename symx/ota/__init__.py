@@ -1,4 +1,3 @@
-import datetime
 import glob
 import json
 import logging
@@ -6,28 +5,27 @@ import os
 import re
 import subprocess
 import tempfile
-import time
-from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Iterator
-from typing import Callable
+from collections.abc import Callable, Iterator
+from typing import Protocol
 from subprocess import CompletedProcess
 
 import sentry_sdk
 import sentry_sdk.metrics
 from pydantic import BaseModel
 
-from symx._common import (
+from symx.common import (
+    Timeout,
     Arch,
     github_run_id,
     ArtifactProcessingState,
     check_sha1,
-    validate_shell_deps,
     try_download_url_to_file,
     list_dirs_in,
     rmdir_if_exists,
     symsort as common_symsort,
     dyld_split,
+    validate_shell_deps,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,39 +73,40 @@ class OtaArtifact(BaseModel):
 OtaMetaData = dict[str, OtaArtifact]
 
 
-class OtaStorage(ABC):
-    """
-    Not an ultra-big fan of this, but this is just here to keep the door open and not fall into circular business.
-    Maybe we can get rid of the polymorphic storage in the end, but maybe it makes sense.
-    """
+class OtaStorage(Protocol):
+    def save_meta(self, theirs: OtaMetaData) -> OtaMetaData: ...
 
-    @abstractmethod
-    def save_meta(self, theirs: OtaMetaData) -> OtaMetaData:
-        raise NotImplementedError()
+    def save_ota(self, ota_meta_key: str, ota_meta: OtaArtifact, ota_file: Path) -> None: ...
 
-    @abstractmethod
-    def save_ota(self, ota_meta_key: str, ota_meta: OtaArtifact, ota_file: Path) -> None:
-        raise NotImplementedError()
+    def load_meta(self) -> OtaMetaData | None: ...
 
-    @abstractmethod
-    def load_meta(self) -> OtaMetaData | None:
-        raise NotImplementedError()
+    def load_ota(self, ota: OtaArtifact, download_dir: Path) -> Path | None: ...
 
-    @abstractmethod
-    def load_ota(self, ota: OtaArtifact, download_dir: Path) -> Path | None:
-        raise NotImplementedError()
+    def name(self) -> str: ...
 
-    @abstractmethod
-    def name(self) -> str:
-        raise NotImplementedError()
+    def update_meta_item(self, ota_meta_key: str, ota_meta: OtaArtifact) -> OtaMetaData: ...
 
-    @abstractmethod
-    def update_meta_item(self, ota_meta_key: str, ota_meta: OtaArtifact) -> OtaMetaData:
-        raise NotImplementedError()
+    def upload_symbols(self, input_dir: Path, ota_meta_key: str, ota_meta: OtaArtifact, bundle_id: str) -> None: ...
 
-    @abstractmethod
-    def upload_symbols(self, input_dir: Path, ota_meta_key: str, ota_meta: OtaArtifact, bundle_id: str) -> None:
-        raise NotImplementedError()
+
+class OtaMetaRetriever(Protocol):
+    def retrieve(self) -> OtaMetaData:
+        """Fetch current OTA meta-data from Apple."""
+        ...
+
+
+class OtaDownloader(Protocol):
+    def download(self, ota_meta: OtaArtifact, download_dir: Path) -> Path:
+        """Download an OTA from Apple, verify hash, return local path. Raises on failure."""
+        ...
+
+
+class OtaSymbolExtractor(Protocol):
+    def validate_deps(self) -> None: ...
+
+    def extract(self, local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path) -> list[Path]:
+        """Run the full extract pipeline, return list of symbol directories."""
+        ...
 
 
 class OtaMirrorError(Exception):
@@ -347,20 +346,25 @@ def _set_artifact_context(key: str, ota: OtaArtifact) -> None:
 
 
 class OtaMirror:
-    def __init__(self, storage: OtaStorage) -> None:
+    def __init__(
+        self,
+        storage: OtaStorage,
+        meta_retriever: OtaMetaRetriever | None = None,
+        downloader: OtaDownloader | None = None,
+    ) -> None:
         self.storage = storage
         self.meta: OtaMetaData = {}
+        self._meta_retriever = meta_retriever if meta_retriever is not None else _RealOtaMetaRetriever()
+        self._downloader = downloader if downloader is not None else _RealOtaDownloader()
 
     def update_meta(self) -> None:
         with sentry_sdk.start_transaction(op="ota.meta_sync", name="OTA meta-sync from Apple"):
             logger.info("Updating OTA meta-data")
-            apple_meta = retrieve_current_meta()
+            apple_meta = self._meta_retriever.retrieve()
             self.meta = self.storage.save_meta(apple_meta)
 
-    def mirror(self, timeout: datetime.timedelta) -> None:
+    def mirror(self, timer: Timeout) -> None:
         logger.info("Mirroring OTA images to %s", self.storage.name())
-
-        start = time.time()
         artifacts_mirrored = 0
         artifacts_failed = 0
 
@@ -369,8 +373,8 @@ class OtaMirror:
             key: str
             ota: OtaArtifact
             for key, ota in self.meta.items():
-                if int(time.time() - start) > timeout.seconds:
-                    logger.info("Exiting OTA mirror due to elapsed timeout after %ds", int(time.time() - start))
+                if timer.exceeded():
+                    logger.info("Exiting OTA mirror due to elapsed timeout after %ds", timer.elapsed_seconds)
                     break
 
                 if not ota.is_indexed():
@@ -382,7 +386,7 @@ class OtaMirror:
                 ):
                     _set_artifact_context(key, ota)
                     try:
-                        ota_file = download_ota_from_apple(ota, Path(download_dir))
+                        ota_file = self._downloader.download(ota, Path(download_dir))
                         with sentry_sdk.start_span(op="gcs.upload", name=f"Upload OTA {ota.platform} {ota.version}"):
                             self.storage.save_ota(key, ota, ota_file)
                         ota_file.unlink()
@@ -720,15 +724,19 @@ def iter_mirror(storage: OtaStorage) -> Iterator[tuple[str, OtaArtifact]]:
 
 
 class OtaExtract:
-    def __init__(self, storage: OtaStorage) -> None:
+    def __init__(
+        self,
+        storage: OtaStorage,
+        extractor: OtaSymbolExtractor | None = None,
+    ) -> None:
         self.storage = storage
         self.meta: OtaMetaData = {}
+        self._extractor = extractor if extractor is not None else _RealOtaSymbolExtractor()
 
-    def extract(self, timeout: datetime.timedelta) -> None:
-        validate_shell_deps()
+    def extract(self, timer: Timeout) -> None:
+        self._extractor.validate_deps()
 
         logger.info("Extracting symbols from OTA images on %s", self.storage.name())
-        start = time.time()
         artifacts_extracted = 0
         artifacts_failed = 0
         artifacts_skipped = 0
@@ -736,8 +744,8 @@ class OtaExtract:
         key: str
         ota: OtaArtifact
         for key, ota in iter_mirror(self.storage):
-            if int(time.time() - start) > timeout.seconds:
-                logger.warning("Exiting OTA extract due to elapsed timeout after %ds", int(time.time() - start))
+            if timer.exceeded():
+                logger.warning("Exiting OTA extract due to elapsed timeout after %ds", timer.elapsed_seconds)
                 break
 
             with sentry_sdk.start_transaction(
@@ -765,13 +773,16 @@ class OtaExtract:
                             op="ota.extract.run",
                             name=f"Extract+split+symsort OTA {ota.platform} {ota.version}",
                         ):
-                            symbol_dirs = self.extract_symbols_from_ota(local_ota_path, key, ota, work_dir_path)
+                            symbol_dirs = self._extractor.extract(local_ota_path, key, ota, work_dir_path)
                         bundle_id = f"ota_{key}"
                         for symbol_dir in symbol_dirs:
                             with sentry_sdk.start_span(
                                 op="gcs.upload_symbols", name=f"Upload OTA symbols {ota.platform} {ota.version}"
                             ):
                                 self.storage.upload_symbols(symbol_dir, key, ota, bundle_id)
+                        ota.processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
+                        ota.update_last_run()
+                        self.storage.update_meta_item(key, ota)
                         artifacts_extracted += 1
                         sentry_sdk.metrics.count("ota.extract.succeeded", 1, attributes={"platform": ota.platform})
                     except DeltaOtaError:
@@ -806,18 +817,6 @@ class OtaExtract:
         sentry_sdk.metrics.distribution("ota.extract.artifacts_extracted", artifacts_extracted)
         sentry_sdk.metrics.distribution("ota.extract.artifacts_failed", artifacts_failed)
         sentry_sdk.metrics.distribution("ota.extract.artifacts_skipped", artifacts_skipped)
-
-    def extract_symbols_from_ota(
-        self, local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path
-    ) -> list[Path]:
-        return extract_symbols(
-            local_ota=local_ota,
-            platform=ota_meta.platform,
-            version=ota_meta.version,
-            build=ota_meta.build,
-            bundle_id=f"ota_{ota_meta_key}",
-            work_dir=work_dir,
-        )
 
 
 def extract_symbols(
@@ -904,3 +903,31 @@ def _symsort_split_results(split_dirs: list[Path], platform: str, bundle_id: str
         )
         symbol_output_dirs.append(symbols_output_dir)
     return symbol_output_dirs
+
+
+# -- Default (production) implementations of injectable interfaces --
+
+
+class _RealOtaMetaRetriever(OtaMetaRetriever):
+    def retrieve(self) -> OtaMetaData:
+        return retrieve_current_meta()
+
+
+class _RealOtaDownloader(OtaDownloader):
+    def download(self, ota_meta: OtaArtifact, download_dir: Path) -> Path:
+        return download_ota_from_apple(ota_meta, download_dir)
+
+
+class _RealOtaSymbolExtractor(OtaSymbolExtractor):
+    def validate_deps(self) -> None:
+        validate_shell_deps()
+
+    def extract(self, local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path) -> list[Path]:
+        return extract_symbols(
+            local_ota=local_ota,
+            platform=ota_meta.platform,
+            version=ota_meta.version,
+            build=ota_meta.build,
+            bundle_id=f"ota_{ota_meta_key}",
+            work_dir=work_dir,
+        )

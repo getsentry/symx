@@ -11,8 +11,8 @@ fresh data from Apple. It handles:
 
 import pytest
 
-from symx._common import ArtifactProcessingState
-from symx._ota import generate_duplicate_key_from, merge_meta_data, OtaArtifact, OtaMetaData
+from symx.common import ArtifactProcessingState
+from symx.ota import generate_duplicate_key_from, merge_meta_data, OtaArtifact, OtaMetaData
 
 
 def make_ota_artifact(

@@ -7,14 +7,16 @@ import re
 import shutil
 import subprocess
 import sys
+from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from enum import StrEnum
 from math import floor
 from pathlib import Path
 from subprocess import CompletedProcess
-from typing import Generator, List
+from collections.abc import Generator
 from urllib.parse import ParseResult, urlparse
+
 
 import requests
 import time as time_module
@@ -35,6 +37,21 @@ MiB = 1024 * 1024
 
 # we use the default policy (initial_wait=1s, wait_mult=2x, max_wait=60s). 300s retry timeout gives us 10 retries.
 SYMX_GCS_RETRY = DEFAULT_RETRY.with_timeout(300.0)
+
+
+class Timeout:
+    """Tracks elapsed time and checks whether a timeout has been exceeded."""
+
+    def __init__(self, limit: timedelta) -> None:
+        self._limit_seconds = limit.total_seconds()
+        self._start = time_module.time()
+
+    def exceeded(self) -> bool:
+        return (time_module.time() - self._start) > self._limit_seconds
+
+    @property
+    def elapsed_seconds(self) -> int:
+        return int(time_module.time() - self._start)
 
 
 class Arch(StrEnum):
@@ -439,7 +456,7 @@ def is_dir_empty(dir_path: Path) -> bool:
         raise ValueError("The provided path does not exist or is not a directory.")
 
 
-def list_dirs_in(dir_path: Path) -> List[Path]:
+def list_dirs_in(dir_path: Path) -> list[Path]:
     if dir_path.exists() and dir_path.is_dir():
         return [entry for entry in dir_path.iterdir() if entry.is_dir()]
     else:

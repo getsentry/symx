@@ -8,9 +8,9 @@ from datetime import date, timedelta
 
 from pydantic import HttpUrl
 
-from symx._common import ArtifactProcessingState
-from symx._ipsw.common import IpswArtifact, IpswPlatform, IpswReleaseStatus, IpswSource
-from symx._ipsw.storage.gcs import mirror_filter, extract_filter
+from symx.common import ArtifactProcessingState
+from symx.ipsw.common import IpswArtifact, IpswPlatform, IpswReleaseStatus, IpswSource
+from symx.ipsw.storage.gcs import mirror_filter, extract_filter
 
 
 def make_source(state: ArtifactProcessingState = ArtifactProcessingState.INDEXED) -> IpswSource:

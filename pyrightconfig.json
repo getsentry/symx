@@ -4,6 +4,6 @@
   ],
   "stubPath": "typings",
   "ignore": [
-    "symx/_ipsw/meta_sync/meta_df.py"
+    "symx/ipsw/meta_sync/meta_df.py"
   ]
 }

@@ -2,7 +2,7 @@ import json
 import subprocess
 import sys
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -36,8 +36,8 @@ def format_duration(minutes: float) -> str:
 def get_workflow_runs(
     workflow: str,
     limit: int = 100,
-    branch: Optional[str] = None,
-    status: Optional[str] = None,
+    branch: str | None = None,
+    status: str | None = None,
 ) -> list[dict[str, Any]]:
     cmd = [
         "gh",
@@ -78,24 +78,24 @@ def get_run_log(run_id: int) -> str:
 @gha_app.command("runs")
 def list_runs(
     workflow: str = typer.Argument(..., help="Workflow name or filename"),
-    min_duration: Optional[float] = typer.Option(
+    min_duration: float | None = typer.Option(
         None,
         "--min-duration",
         "-d",
         help="Minimum duration in minutes",
     ),
-    max_duration: Optional[float] = typer.Option(
+    max_duration: float | None = typer.Option(
         None,
         "--max-duration",
         help="Maximum duration in minutes",
     ),
-    conclusion: Optional[str] = typer.Option(
+    conclusion: str | None = typer.Option(
         None,
         "--conclusion",
         "-c",
         help="Filter by conclusion (success, failure, cancelled, etc.)",
     ),
-    branch: Optional[str] = typer.Option(
+    branch: str | None = typer.Option(
         None,
         "--branch",
         "-b",
@@ -107,7 +107,7 @@ def list_runs(
         "-L",
         help="Maximum number of runs to fetch",
     ),
-    search_log: Optional[str] = typer.Option(
+    search_log: str | None = typer.Option(
         None,
         "--grep",
         "-g",
@@ -243,7 +243,7 @@ def list_workflows() -> None:
 @gha_app.command("view-log")
 def view_log(
     run_id: int = typer.Argument(..., help="Run ID (databaseId from 'runs' output) to view logs for"),
-    grep: Optional[str] = typer.Option(
+    grep: str | None = typer.Option(
         None,
         "--grep",
         "-g",

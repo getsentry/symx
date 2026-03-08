@@ -18,7 +18,7 @@ from pydantic import (
     HttpUrl,
 )
 
-from symx._ipsw.common import (
+from symx.ipsw.common import (
     IpswReleaseStatus,
     IpswPlatform,
     IpswArtifactHashes,

@@ -10,12 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from symx._common import Arch
-from symx._ipsw.common import IpswPlatform
-from symx._ipsw.extract import _map_platform_to_prefix, find_extraction_dir, generate_bundle_id
+from symx.common import Arch
+from symx.ipsw.common import IpswPlatform
+from symx.ipsw.extract import _map_platform_to_prefix, find_extraction_dir, generate_bundle_id
 from subprocess import CompletedProcess
 
-from symx._ota import (
+from symx.ota import (
     DSCSearchResult,
     OtaExtractError,
     find_dsc,

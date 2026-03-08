@@ -1,8 +1,8 @@
 import logging
 from pathlib import Path
 
-from symx._common import check_sha1
-from symx._ipsw.common import IpswSource
+from symx.common import check_sha1
+from symx.ipsw.common import IpswSource
 
 logger = logging.getLogger(__name__)
 

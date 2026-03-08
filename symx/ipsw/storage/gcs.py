@@ -2,27 +2,28 @@ import datetime
 import logging
 import shutil
 from pathlib import Path
-from typing import Tuple, Iterator, Iterable, Callable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 
 import sentry_sdk
 import sentry_sdk.metrics
 from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Bucket, Client
 
-from symx._common import (
+from symx.common import (
     ArtifactProcessingState,
     compare_md5_hash,
     upload_symbol_binaries,
     try_download_to_filename,
     SYMX_GCS_RETRY,
 )
-from symx._ipsw.common import (
+from symx.ipsw.common import (
     ARTIFACTS_META_JSON,
     IpswArtifactDb,
     IpswArtifact,
     IpswSource,
 )
-from symx._ipsw.mirror import verify_download
+from symx.ipsw.mirror import verify_download
+from symx.ipsw.storage import IpswStorage
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ def mirror_filter(
     ]
 
 
-class IpswGcsStorage:
+class IpswGcsStorage(IpswStorage):
     def __init__(self, local_dir: Path, project: str | None, bucket: str) -> None:
         self.local_dir = local_dir
         self.local_artifacts_meta = self.local_dir / ARTIFACTS_META_JSON
@@ -134,7 +135,7 @@ class IpswGcsStorage:
 
         raise RuntimeError("Failed to update meta-data item")
 
-    def refresh_artifacts_db(self) -> Tuple[Blob, IpswArtifactDb, int]:
+    def refresh_artifacts_db(self) -> tuple[Blob, IpswArtifactDb, int]:
         blob = self.load_artifacts_meta()
         if blob.exists():
             try:

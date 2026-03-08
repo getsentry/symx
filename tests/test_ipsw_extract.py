@@ -4,9 +4,9 @@ from pathlib import Path
 import pytest
 from pydantic import HttpUrl
 
-from symx._common import check_sha1
-from symx._ipsw.common import IpswSource, IpswPlatform, IpswArtifactHashes
-from symx._ipsw.extract import IpswExtractor
+from symx.common import check_sha1
+from symx.ipsw.common import IpswSource, IpswPlatform, IpswArtifactHashes
+from symx.ipsw.extract import IpswExtractor
 
 
 def require_sha1(hashes: IpswArtifactHashes | None) -> str:

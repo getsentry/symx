@@ -9,15 +9,15 @@ from datetime import date
 
 from pydantic import HttpUrl
 
-from symx._common import ArtifactProcessingState
-from symx._ipsw.common import (
+from symx.common import ArtifactProcessingState
+from symx.ipsw.common import (
     IpswArtifact,
     IpswArtifactHashes,
     IpswPlatform,
     IpswReleaseStatus,
     IpswSource,
 )
-from symx._ipsw.meta_sync.appledb import compare_artifacts_with_diff
+from symx.ipsw.meta_sync.appledb import compare_artifacts_with_diff
 
 
 def make_ipsw_source(

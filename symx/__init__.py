@@ -5,11 +5,11 @@ import sentry_sdk
 import typer
 from sentry_sdk.integrations.logging import SentryLogsHandler
 
-from ._common import github_run_id
-from ._gha.app import gha_app
-from ._ipsw.app import ipsw_app
-from ._ota.app import ota_app
-from ._sim.app import sim_app
+from .common import github_run_id
+from .gha.app import gha_app
+from .ipsw.app import ipsw_app
+from .ota.app import ota_app
+from .sim.app import sim_app
 
 SENTRY_DSN = os.environ.get("SENTRY_DSN", None)
 

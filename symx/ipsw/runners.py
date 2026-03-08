@@ -1,27 +1,57 @@
 import logging
 import shutil
-import time
-from datetime import timedelta
-from typing import Iterable, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from collections.abc import Iterable, Sequence
+from typing import Protocol
 
 import sentry_sdk
 import sentry_sdk.metrics
 
-from symx._common import (
+from symx.common import (
     ArtifactProcessingState,
-    validate_shell_deps,
-    try_download_url_to_file,
+    Timeout,
     log_disk_usage,
+    try_download_url_to_file,
+    validate_shell_deps,
 )
-from symx._ipsw.common import IpswArtifact, IpswSource
-from symx._ipsw.extract import IpswExtractor
-from symx._ipsw.meta_sync.appledb import AppleDbIpswImport
-from symx._ipsw.mirror import verify_download
-from symx._ipsw.storage.gcs import (
+from symx.ipsw.common import IpswArtifact, IpswPlatform, IpswSource
+from symx.ipsw.extract import IpswExtractor
+from symx.ipsw.meta_sync.appledb import AppleDbIpswImport
+from symx.ipsw.mirror import verify_download
+from symx.ipsw.storage import IpswStorage
+from symx.ipsw.storage.gcs import (
     IpswGcsStorage,
     mirror_filter,
     extract_filter,
 )
+
+
+# -- Injectable interfaces --
+
+
+class Downloader(Protocol):
+    def download(self, url: str, filepath: Path) -> None: ...
+
+    def verify(self, filepath: Path, source: IpswSource) -> bool: ...
+
+
+@dataclass(frozen=True)
+class ExtractionResult:
+    symbols_dir: Path
+    prefix: str
+    bundle_id: str
+
+
+class SymbolExtractor(Protocol):
+    def validate_deps(self) -> None: ...
+
+    def extract(
+        self, platform: IpswPlatform, file_name: str, processing_dir: Path, ipsw_path: Path
+    ) -> ExtractionResult:
+        """Run the full extract pipeline, return symbols dir + metadata."""
+        ...
+
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +84,7 @@ def _set_artifact_context(artifact: IpswArtifact) -> None:
     )
 
 
-def import_meta_from_appledb(ipsw_storage: IpswGcsStorage) -> None:
+def import_meta_from_appledb(ipsw_storage: "IpswGcsStorage") -> None:
     with sentry_sdk.start_span(op="ipsw.meta_sync", name="IPSW meta-sync from AppleDB"):
         ipsw_storage.load_artifacts_meta()
 
@@ -70,8 +100,13 @@ def import_meta_from_appledb(ipsw_storage: IpswGcsStorage) -> None:
                 ipsw_storage.update_meta_item(artifact)
 
 
-def mirror(ipsw_storage: IpswGcsStorage, timeout: timedelta) -> None:
-    start = time.time()
+def mirror(
+    ipsw_storage: IpswStorage,
+    timer: Timeout,
+    downloader: Downloader | None = None,
+) -> None:
+    if downloader is None:
+        downloader = _RealDownloader()
     artifacts_mirrored = 0
     artifacts_failed = 0
 
@@ -84,8 +119,8 @@ def mirror(ipsw_storage: IpswGcsStorage, timeout: timedelta) -> None:
             logger.info("Mirroring artifact %s", artifact.key)
 
             for source_idx, source in enumerate(artifact.sources):
-                if int(time.time() - start) > timeout.seconds:
-                    logger.warning("Exiting IPSW mirror due to elapsed timeout after %ds", int(time.time() - start))
+                if timer.exceeded():
+                    logger.warning("Exiting IPSW mirror due to elapsed timeout after %ds", timer.elapsed_seconds)
                     sentry_sdk.metrics.distribution("ipsw.mirror.artifacts_mirrored", artifacts_mirrored)
                     sentry_sdk.metrics.distribution("ipsw.mirror.artifacts_failed", artifacts_failed)
                     return
@@ -107,10 +142,10 @@ def mirror(ipsw_storage: IpswGcsStorage, timeout: timedelta) -> None:
                     filepath = ipsw_storage.local_dir / source.file_name
 
                     with sentry_sdk.start_span(op="http.download", name=f"Download {source.file_name} from Apple"):
-                        try_download_url_to_file(str(source.link), filepath)
+                        downloader.download(str(source.link), filepath)
 
                     with sentry_sdk.start_span(op="ipsw.mirror.verify", name=f"Verify {source.file_name}"):
-                        download_ok = verify_download(filepath, source)
+                        download_ok = downloader.verify(filepath, source)
 
                     if not download_ok:
                         artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORING_FAILED
@@ -136,9 +171,15 @@ def mirror(ipsw_storage: IpswGcsStorage, timeout: timedelta) -> None:
     sentry_sdk.metrics.distribution("ipsw.mirror.artifacts_failed", artifacts_failed)
 
 
-def extract(ipsw_storage: IpswGcsStorage, timeout: timedelta) -> None:
-    validate_shell_deps()
-    start = time.time()
+def extract(
+    ipsw_storage: IpswStorage,
+    timer: Timeout,
+    extractor: SymbolExtractor | None = None,
+) -> None:
+    if extractor is None:
+        extractor = _RealSymbolExtractor()
+
+    extractor.validate_deps()
     artifacts_extracted = 0
     artifacts_failed = 0
 
@@ -158,8 +199,8 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: timedelta) -> None:
 
             for source_idx, source in enumerate(artifact.sources):
                 # 1.) Check timeout
-                if int(time.time() - start) > timeout.seconds:
-                    logger.warning("Exiting IPSW extract due to elapsed timeout after %ds", int(time.time() - start))
+                if timer.exceeded():
+                    logger.warning("Exiting IPSW extract due to elapsed timeout after %ds", timer.elapsed_seconds)
                     sentry_sdk.metrics.distribution("ipsw.extract.artifacts_extracted", artifacts_extracted)
                     sentry_sdk.metrics.distribution("ipsw.extract.artifacts_failed", artifacts_failed)
                     return
@@ -198,23 +239,22 @@ def extract(ipsw_storage: IpswGcsStorage, timeout: timedelta) -> None:
                         with sentry_sdk.start_span(
                             op="ipsw.extract.run", name=f"IPSW extract+symsort {source.file_name}"
                         ):
-                            extractor = IpswExtractor(
+                            result = extractor.extract(
                                 artifact.platform, source.file_name, ipsw_storage.local_dir, local_path
                             )
-                            symbol_binaries_dir = extractor.run()
 
                         with sentry_sdk.start_span(
                             op="gcs.upload_symbols", name=f"Upload symbols for {source.file_name}"
                         ):
                             ipsw_storage.upload_symbols(
-                                extractor.prefix,
-                                extractor.bundle_id,
+                                result.prefix,
+                                result.bundle_id,
                                 artifact,
                                 source_idx,
-                                symbol_binaries_dir,
+                                result.symbols_dir,
                             )
 
-                        shutil.rmtree(symbol_binaries_dir)
+                        shutil.rmtree(result.symbols_dir)
                         artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
                         artifacts_extracted += 1
                         sentry_sdk.metrics.count(
@@ -285,3 +325,26 @@ def migrate(ipsw_storage: IpswGcsStorage) -> None:
                     artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
                     artifact.sources[source_idx].update_last_run()
                     ipsw_storage.update_meta_item(artifact)
+
+
+# -- Default (production) implementations of injectable interfaces --
+
+
+class _RealDownloader(Downloader):
+    def download(self, url: str, filepath: Path) -> None:
+        try_download_url_to_file(url, filepath)
+
+    def verify(self, filepath: Path, source: IpswSource) -> bool:
+        return verify_download(filepath, source)
+
+
+class _RealSymbolExtractor(SymbolExtractor):
+    def validate_deps(self) -> None:
+        validate_shell_deps()
+
+    def extract(
+        self, platform: IpswPlatform, file_name: str, processing_dir: Path, ipsw_path: Path
+    ) -> ExtractionResult:
+        extractor = IpswExtractor(platform, file_name, processing_dir, ipsw_path)
+        symbols_dir = extractor.run()
+        return ExtractionResult(symbols_dir=symbols_dir, prefix=extractor.prefix, bundle_id=extractor.bundle_id)
