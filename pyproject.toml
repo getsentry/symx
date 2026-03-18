@@ -15,7 +15,7 @@ dependencies = [
     "protobuf==6.33.5", # TODO: explicitly bump protobuf to the CVE fix until google-cloud-storage bumps
     "pydantic==2.12.5",
     "pandas>=3",
-    "deepdiff==8.6.1",
+    "deepdiff==8.6.2",
 ]
 name = "symx"
 version = "0.2.0"
