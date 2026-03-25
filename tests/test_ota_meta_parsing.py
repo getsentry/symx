@@ -6,7 +6,8 @@ import json
 import subprocess
 
 from symx.common import ArtifactProcessingState
-from symx.ota import OtaMetaData, parse_download_meta_output
+from symx.ota.common import OtaMetaData
+from symx.ota.meta import parse_download_meta_output
 
 
 def make_completed_process(

@@ -9,14 +9,14 @@ from datetime import timedelta
 from pathlib import Path
 
 from symx.common import ArtifactProcessingState
-from symx.ota import (
-    OtaArtifact,
-    OtaExtract,
-    OtaExtractError,
+from symx.ota.common import (
     DeltaOtaError,
-    RecoveryOtaError,
+    OtaArtifact,
+    OtaExtractError,
     OtaMetaData,
+    RecoveryOtaError,
 )
+from symx.ota.runners import OtaExtract
 from tests.fakes import FakeTimeout
 
 

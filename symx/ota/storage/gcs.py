@@ -15,14 +15,14 @@ from symx.common import (
     upload_symbol_binaries,
     try_download_to_filename,
 )
-from symx.ota import (
+from symx.ota.common import (
+    ARTIFACTS_META_JSON,
     OtaArtifact,
     OtaMetaData,
-    merge_meta_data,
-    ARTIFACTS_META_JSON,
     OtaStorage,
-    check_ota_hash,
 )
+from symx.ota.meta import merge_meta_data
+from symx.ota.mirror import check_ota_hash
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,8 @@ import typer
 
 from symx.common import validate_shell_deps
 from symx.ota.storage.gcs import init_storage
-from symx.ota import OtaMirror, OtaExtract, extract_symbols
+from symx.ota.extract import extract_symbols
+from symx.ota.runners import OtaExtract, OtaMirror
 from symx.ota.storage.maintenance import migrate
 
 ota_app = typer.Typer()

@@ -15,9 +15,8 @@ from symx.ipsw.common import IpswPlatform
 from symx.ipsw.extract import _map_platform_to_prefix, find_extraction_dir, generate_bundle_id
 from subprocess import CompletedProcess
 
-from symx.ota import (
-    DSCSearchResult,
-    OtaExtractError,
+from symx.ota.common import DSCSearchResult, OtaExtractError
+from symx.ota.extract import (
     find_dsc,
     parse_cryptex_patch_output,
     parse_hdiutil_mount_output,
