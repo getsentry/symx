@@ -220,16 +220,16 @@ def check_sha1(hash_sum: str, filepath: Path) -> bool:
 
 
 def try_download_url_to_file(url: str, filepath: Path, num_retries: int = 5) -> None:
-    while num_retries > 0:
+    for attempt in range(num_retries):
         try:
             download_url_to_file(url, filepath)
-            break
+            return
         except Exception as e:
-            if num_retries > 0:
-                num_retries = num_retries - 1
+            if attempt < num_retries - 1:
+                logger.info("Download failed, retrying", extra={"url": url, "attempt": attempt + 1})
             else:
                 sentry_sdk.capture_exception(e)
-                logger.warning("Failed to download URL", extra={"url": url, "retries": num_retries, "exception": e})
+                logger.warning("Failed to download URL", extra={"url": url, "attempts": num_retries, "exception": e})
 
 
 def download_url_to_file(url: str, filepath: Path) -> None:
@@ -426,27 +426,30 @@ def validate_shell_deps() -> None:
 def try_download_to_filename(blob: Blob, local_file_path: Path, num_retries: int = 5) -> bool:
     with sentry_sdk.start_span(op="gcs.download", name=f"Download blob {blob.name}") as span:
         span.set_data("blob_name", blob.name)
-        while num_retries > 0:
+        for attempt in range(num_retries):
             try:
                 blob.download_to_filename(str(local_file_path))
                 if local_file_path.exists():
                     size = local_file_path.stat().st_size
                     span.set_data("downloaded_bytes", size)
                     sentry_sdk.metrics.distribution("gcs.download.size_bytes", size, unit="byte")
-                break
+                return True
             except Exception as e:
-                if num_retries > 0:
-                    num_retries = num_retries - 1
+                if attempt < num_retries - 1:
+                    logger.info(
+                        "Blob download failed, retrying",
+                        extra={"blob_name": blob.name, "attempt": attempt + 1},
+                    )
                 else:
                     sentry_sdk.capture_exception(e)
                     logger.warning(
                         "Failed to download blob.",
-                        extra={"blob_name": blob.name, "retries": num_retries, "exception": e},
+                        extra={"blob_name": blob.name, "attempts": num_retries, "exception": e},
                     )
                     span.set_status("internal_error")
                     return False
 
-    return True
+    return False
 
 
 def is_dir_empty(dir_path: Path) -> bool:
