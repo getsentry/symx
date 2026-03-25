@@ -10,14 +10,10 @@ from pathlib import Path
 
 import sentry_sdk
 
-from symx.common import (
-    Arch,
-    dyld_split,
-    list_dirs_in,
-    rmdir_if_exists,
-    symsort as common_symsort,
-)
-from symx.ota.common import (
+from symx.model import Arch
+from symx.fs import list_dirs_in, rmdir_if_exists
+from symx.tools import dyld_split, symsort as common_symsort
+from symx.ota.model import (
     DYLD_SHARED_CACHE,
     DSCSearchResult,
     DeltaOtaError,
@@ -103,19 +99,11 @@ def split_dsc(
                 logger.info("DSC split successful for %s (%s)", result_item.artifact.name, result_item.arch)
                 split_dirs.append(result_item.split_dir)
 
-    if len(split_dirs) == 0:
+    if not split_dirs:
         artifacts = "\n".join([f"{result_item.artifact}_{result_item.arch}" for result_item in search_result])
         raise OtaExtractError(f"Split failed for all of:\n{artifacts}")
 
     return split_dirs
-
-
-def split_dir_exists_in_dsc_search_results(split_dir: Path, dsc_search_result: list[DSCSearchResult]) -> bool:
-    for result_item in dsc_search_result:
-        if split_dir == result_item.split_dir:
-            return True
-
-    return False
 
 
 def find_dsc(input_dir: Path, version: str, build: str, output_dir: Path) -> list[DSCSearchResult]:
@@ -134,13 +122,13 @@ def find_dsc(input_dir: Path, version: str, build: str, output_dir: Path) -> lis
             if os.path.isfile(dsc_path):
                 split_dir = output_dir / "split_symbols" / f"{version}_{build}_{arch}"
 
-                if split_dir_exists_in_dsc_search_results(split_dir, dsc_search_results):
+                if any(split_dir == r.split_dir for r in dsc_search_results):
                     split_dir = split_dir.parent / f"{split_dir.name}_{counter}"
                     counter = counter + 1
 
                 dsc_search_results.append(DSCSearchResult(arch=Arch(arch), artifact=dsc_path, split_dir=split_dir))
 
-    if len(dsc_search_results) == 0:
+    if not dsc_search_results:
         raise OtaExtractError(f"Couldn't find any {DYLD_SHARED_CACHE} paths in {input_dir}")
 
     return dsc_search_results
@@ -234,7 +222,7 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
         )
 
         extract_dirs = list_dirs_in(output_dir)
-        if len(extract_dirs) == 0 or not _dir_contains_dsc(extract_dirs[0]):
+        if not extract_dirs or not _dir_contains_dsc(extract_dirs[0]):
             # Fallback: modern payloadv2 OTAs (e.g. watchOS) store the DSC inside numbered payload
             # chunks. The literal filename lookup fails to find anything, so we use -p (pattern)
             # with -y (confirm payloadv2 search) instead.
@@ -256,7 +244,7 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
             )
             extract_dirs = list_dirs_in(output_dir)
 
-        if len(extract_dirs) == 0:
+        if not extract_dirs:
             span.set_status("internal_error")
             raise OtaExtractError(f"Could not find {DYLD_SHARED_CACHE} in {artifact}")
         elif len(extract_dirs) > 1:
@@ -295,7 +283,7 @@ def _try_processing_ota_as_cryptex(
         with tempfile.TemporaryDirectory(suffix="_cryptex_dmg") as cryptex_patch_dir:
             logger.info("Trying cryptex patch for %s", local_ota.name)
             extracted_dmgs = patch_cryptex_dmg(local_ota, Path(cryptex_patch_dir))
-            if len(extracted_dmgs) != 0:
+            if extracted_dmgs:
                 logger.info("Cryptex patch successful, mounting and processing DSC for %s", local_ota.name)
                 return _process_cryptex_dmg(extracted_dmgs, platform, version, build, bundle_id, work_dir)
 

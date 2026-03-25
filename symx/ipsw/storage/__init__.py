@@ -2,7 +2,7 @@ from pathlib import Path
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from typing import Protocol
 
-from symx.ipsw.common import IpswArtifact, IpswArtifactDb, IpswSource
+from symx.ipsw.model import IpswArtifact, IpswArtifactDb, IpswSource
 
 
 class IpswStorage(Protocol):

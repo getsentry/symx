@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 from pydantic import HttpUrl
 
-from symx.common import check_sha1
-from symx.ipsw.common import IpswSource, IpswPlatform, IpswArtifactHashes
+from symx.fs import check_sha1
+from symx.ipsw.model import IpswSource, IpswPlatform, IpswArtifactHashes
 from symx.ipsw.extract import IpswExtractor
 
 

@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 from typing import Callable, Iterator, Iterable, Sequence
 
-from symx.ipsw.common import IpswArtifact, IpswArtifactDb, IpswSource
+from symx.ipsw.model import IpswArtifact, IpswArtifactDb, IpswSource
 
 
 class InMemoryIpswStorage:
@@ -71,7 +71,7 @@ class InMemoryIpswStorage:
         shutil.copy2(ipsw_file, dest)
 
         artifact.sources[source_idx].mirror_path = mirror_path
-        from symx.common import ArtifactProcessingState
+        from symx.model import ArtifactProcessingState
 
         artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORED
         artifact.sources[source_idx].update_last_run()
@@ -99,7 +99,7 @@ class InMemoryIpswStorage:
         source_idx: int,
         binary_dir: Path,
     ) -> None:
-        from symx.common import ArtifactProcessingState
+        from symx.model import ArtifactProcessingState
 
         artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
         artifact.sources[source_idx].update_last_run()

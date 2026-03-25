@@ -7,7 +7,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field, computed_field
 from pydantic import HttpUrl
 
-from symx.common import ArtifactProcessingState, github_run_id
+from symx.model import ArtifactProcessingState, github_run_id
 
 logger = logging.getLogger(__name__)
 

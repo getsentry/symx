@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 
-from symx.common import Timeout
+from symx.model import Timeout
 
 
 class FakeTimeout(Timeout):

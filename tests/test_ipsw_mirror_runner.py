@@ -3,10 +3,10 @@
 from datetime import date, timedelta
 from pathlib import Path
 
-from symx.common import ArtifactProcessingState
+from symx.model import ArtifactProcessingState
 from pydantic import HttpUrl
 
-from symx.ipsw.common import (
+from symx.ipsw.model import (
     IpswArtifact,
     IpswArtifactHashes,
     IpswPlatform,

@@ -9,14 +9,14 @@ import sentry_sdk.metrics
 from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Bucket, Client
 
-from symx.common import (
-    ArtifactProcessingState,
-    compare_md5_hash,
-    upload_symbol_binaries,
-    try_download_to_filename,
+from symx.model import ArtifactProcessingState
+from symx.gcs import (
     SYMX_GCS_RETRY,
+    compare_md5_hash,
+    try_download_to_filename,
+    upload_symbol_binaries,
 )
-from symx.ipsw.common import (
+from symx.ipsw.model import (
     ARTIFACTS_META_JSON,
     IpswArtifactDb,
     IpswArtifact,
@@ -172,7 +172,7 @@ class IpswGcsStorage(IpswStorage):
         """
         while True:
             _, meta_db, _ = self.refresh_artifacts_db()
-            if len(meta_db.artifacts) == 0:
+            if not meta_db.artifacts:
                 logger.error("No artifacts in IPSW meta-data.")
                 return
 
@@ -180,7 +180,7 @@ class IpswGcsStorage(IpswStorage):
             logger.info("Number of filtered artifacts:", extra={"filtered_artifacts": len(filtered_artifacts)})
             sorted_by_age_descending = sorted(filtered_artifacts, key=_ipsw_artifact_sort_by_released, reverse=True)
 
-            if len(sorted_by_age_descending) == 0:
+            if not sorted_by_age_descending:
                 break
 
             yield sorted_by_age_descending[0]

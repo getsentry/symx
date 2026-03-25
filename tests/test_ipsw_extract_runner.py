@@ -5,8 +5,8 @@ from pathlib import Path
 
 from pydantic import HttpUrl
 
-from symx.common import ArtifactProcessingState
-from symx.ipsw.common import (
+from symx.model import ArtifactProcessingState
+from symx.ipsw.model import (
     IpswArtifact,
     IpswPlatform,
     IpswReleaseStatus,

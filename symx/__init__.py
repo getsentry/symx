@@ -5,7 +5,7 @@ import sentry_sdk
 import typer
 from sentry_sdk.integrations.logging import SentryLogsHandler
 
-from .common import github_run_id
+from .model import github_run_id
 from .gha.app import gha_app
 from .ipsw.app import ipsw_app
 from .ota.app import ota_app

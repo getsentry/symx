@@ -8,8 +8,8 @@ from datetime import date, timedelta
 
 from pydantic import HttpUrl
 
-from symx.common import ArtifactProcessingState
-from symx.ipsw.common import IpswArtifact, IpswPlatform, IpswReleaseStatus, IpswSource
+from symx.model import ArtifactProcessingState
+from symx.ipsw.model import IpswArtifact, IpswPlatform, IpswReleaseStatus, IpswSource
 from symx.ipsw.storage.gcs import mirror_filter, extract_filter
 
 

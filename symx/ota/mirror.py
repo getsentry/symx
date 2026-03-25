@@ -6,8 +6,9 @@ from pathlib import Path
 import sentry_sdk
 import sentry_sdk.metrics
 
-from symx.common import check_sha1, try_download_url_to_file
-from symx.ota.common import OtaArtifact
+from symx.download import try_download_url_to_file
+from symx.fs import check_sha1
+from symx.ota.model import OtaArtifact
 
 logger = logging.getLogger(__name__)
 

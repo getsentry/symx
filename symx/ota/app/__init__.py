@@ -5,7 +5,7 @@ from pathlib import Path
 import sentry_sdk
 import typer
 
-from symx.common import validate_shell_deps
+from symx.tools import validate_shell_deps
 from symx.ota.storage.gcs import init_storage
 from symx.ota.extract import extract_symbols
 from symx.ota.runners import OtaExtract, OtaMirror
@@ -29,7 +29,7 @@ def mirror(
     """
     storage_backend = init_storage(storage)
     if storage_backend:
-        from symx.common import Timeout
+        from symx.model import Timeout
 
         ota = OtaMirror(storage=storage_backend)
         ota.mirror(Timeout(datetime.timedelta(minutes=timeout)))
@@ -50,7 +50,7 @@ def extract(
     """
     storage_backend = init_storage(storage)
     if storage_backend:
-        from symx.common import Timeout
+        from symx.model import Timeout
 
         ota = OtaExtract(storage=storage_backend)
         ota.extract(Timeout(datetime.timedelta(minutes=timeout)))

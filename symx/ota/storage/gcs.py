@@ -8,14 +8,14 @@ import sentry_sdk.metrics
 from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Client, Bucket
 
-from symx.common import (
-    ArtifactProcessingState,
+from symx.model import ArtifactProcessingState
+from symx.gcs import (
     compare_md5_hash,
     parse_gcs_url,
-    upload_symbol_binaries,
     try_download_to_filename,
+    upload_symbol_binaries,
 )
-from symx.ota.common import (
+from symx.ota.model import (
     ARTIFACTS_META_JSON,
     OtaArtifact,
     OtaMetaData,

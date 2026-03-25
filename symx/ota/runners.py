@@ -8,12 +8,12 @@ from pathlib import Path
 import sentry_sdk
 import sentry_sdk.metrics
 
-from symx.common import (
+from symx.model import (
     ArtifactProcessingState,
     Timeout,
-    validate_shell_deps,
 )
-from symx.ota.common import (
+from symx.tools import validate_shell_deps
+from symx.ota.model import (
     DeltaOtaError,
     OtaArtifact,
     OtaDownloader,

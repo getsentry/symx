@@ -8,8 +8,8 @@ without actual file downloads or subprocess calls.
 from datetime import timedelta
 from pathlib import Path
 
-from symx.common import ArtifactProcessingState
-from symx.ota.common import (
+from symx.model import ArtifactProcessingState
+from symx.ota.model import (
     DeltaOtaError,
     OtaArtifact,
     OtaExtractError,

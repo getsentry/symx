@@ -1,7 +1,7 @@
 import logging
 
-from symx.common import ArtifactProcessingState
-from symx.ota.common import OtaArtifact, parse_version_tuple
+from symx.model import ArtifactProcessingState
+from symx.ota.model import OtaArtifact, parse_version_tuple
 from symx.ota.storage.gcs import OtaGcsStorage
 
 logger = logging.getLogger(__name__)

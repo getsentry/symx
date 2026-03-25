@@ -8,7 +8,7 @@ from typing import Protocol
 
 from pydantic import BaseModel
 
-from symx.common import (
+from symx.model import (
     Arch,
     ArtifactProcessingState,
     github_run_id,

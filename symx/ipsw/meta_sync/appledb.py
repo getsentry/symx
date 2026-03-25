@@ -18,7 +18,7 @@ from pydantic import (
     HttpUrl,
 )
 
-from symx.ipsw.common import (
+from symx.ipsw.model import (
     IpswReleaseStatus,
     IpswPlatform,
     IpswArtifactHashes,
@@ -298,7 +298,7 @@ class AppleDbIpswImport:
             return
 
         # either the artifact has no sources at all...
-        if len(src_artifact.sources) == 0:
+        if not src_artifact.sources:
             self.artifact_wo_sources_count += 1
             return
 
@@ -307,7 +307,7 @@ class AppleDbIpswImport:
             if source.link and source.type == "ipsw":
                 ipsw_sources.append(IpswSource(**source.model_dump(exclude={"type", "links"})))
         # ...or it has no usable sources (e.g. URLs that are no longer active, non-IPSW source, etc.)
-        if len(ipsw_sources) == 0:
+        if not ipsw_sources:
             self.artifact_wo_sources_count += 1
             return
 

@@ -8,7 +8,8 @@ import typer
 from google.cloud.storage import Client, Bucket
 from pydantic import BaseModel, computed_field
 
-from symx.common import symsort, dyld_split, upload_symbol_binaries, parse_gcs_url
+from symx.gcs import parse_gcs_url, upload_symbol_binaries
+from symx.tools import dyld_split, symsort
 
 logger = logging.getLogger(__name__)
 sim_app = typer.Typer()

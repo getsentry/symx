@@ -10,18 +10,17 @@ from pathlib import Path
 
 import pytest
 
-from symx.common import Arch
-from symx.ipsw.common import IpswPlatform
+from symx.model import Arch
+from symx.ipsw.model import IpswPlatform
 from symx.ipsw.extract import _map_platform_to_prefix, find_extraction_dir, generate_bundle_id
 from subprocess import CompletedProcess
 
-from symx.ota.common import DSCSearchResult, OtaExtractError
+from symx.ota.model import DSCSearchResult, OtaExtractError
 from symx.ota.extract import (
     find_dsc,
     parse_cryptex_patch_output,
     parse_hdiutil_mount_output,
     split_dsc,
-    split_dir_exists_in_dsc_search_results,
 )
 
 
@@ -131,28 +130,6 @@ def test_parse_hdiutil_mount_output_simple() -> None:
 
     assert result.dev == "/dev/disk2s1"
     assert result.point == Path("/Volumes/Test")
-
-
-# --- split_dir_exists_in_dsc_search_results tests ---
-
-
-def test_split_dir_exists_finds_match() -> None:
-    split_dir = Path("/tmp/split/17.0_21A100_arm64e")
-    results = [
-        DSCSearchResult(arch=Arch.ARM64E, artifact=Path("/tmp/dsc"), split_dir=split_dir),
-    ]
-    assert split_dir_exists_in_dsc_search_results(split_dir, results)
-
-
-def test_split_dir_exists_no_match() -> None:
-    results = [
-        DSCSearchResult(arch=Arch.ARM64E, artifact=Path("/tmp/dsc"), split_dir=Path("/tmp/other")),
-    ]
-    assert not split_dir_exists_in_dsc_search_results(Path("/tmp/split"), results)
-
-
-def test_split_dir_exists_empty_list() -> None:
-    assert not split_dir_exists_in_dsc_search_results(Path("/tmp/split"), [])
 
 
 # --- split_dsc tests ---

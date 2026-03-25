@@ -7,8 +7,8 @@ import subprocess
 import sentry_sdk
 import sentry_sdk.metrics
 
-from symx.common import ArtifactProcessingState
-from symx.ota.common import (
+from symx.model import ArtifactProcessingState
+from symx.ota.model import (
     PLATFORMS,
     OtaArtifact,
     OtaMetaData,
@@ -93,19 +93,11 @@ def retrieve_current_meta() -> OtaMetaData:
     return meta
 
 
-def merge_lists(a: list[str] | None, b: list[str] | None) -> list[str]:
-    if a is None:
-        a = []
-    if b is None:
-        b = []
-    return list(set(a + b))
-
-
 def generate_duplicate_key_from(ours: OtaMetaData, their_key: str) -> str:
     duplicate_num = 1
     key_candidate = f"{their_key}_duplicate_{duplicate_num}"
 
-    while key_candidate in ours.keys():
+    while key_candidate in ours:
         duplicate_num += 1
         key_candidate = f"{their_key}_duplicate_{duplicate_num}"
 
@@ -124,8 +116,12 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
     :param theirs: The meta-data of all OTA artifacts currently provided by Apple.
     :return: None
     """
+
+    def merge_lists(a: list[str] | None, b: list[str] | None) -> list[str]:
+        return list(set((a or []) + (b or [])))
+
     for their_key, their_item in theirs.items():
-        if their_key in ours.keys():
+        if their_key in ours:
             # we already have that id in out meta-store
             our_item = ours[their_key]
 
@@ -179,7 +175,7 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
             ours[their_key] = their_item
 
             # identify and mark beta <-> normal release duplicates
-            for _, our_v in ours.items():
+            for our_v in ours.values():
                 if (
                     their_item.hash == our_v.hash
                     and their_item.hash_algorithm == our_v.hash_algorithm

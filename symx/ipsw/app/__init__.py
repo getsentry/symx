@@ -5,8 +5,9 @@ from pathlib import Path
 import sentry_sdk
 import typer
 
-from symx.common import parse_gcs_url, validate_shell_deps
-from symx.ipsw.common import IpswPlatform
+from symx.gcs import parse_gcs_url
+from symx.tools import validate_shell_deps
+from symx.ipsw.model import IpswPlatform
 from symx.ipsw.extract import IpswExtractor
 from symx.ipsw.runners import (
     import_meta_from_appledb,
@@ -54,7 +55,7 @@ def mirror(
     with tempfile.TemporaryDirectory() as processing_dir:
         storage_backend = init_storage(Path(processing_dir), storage)
         if storage_backend:
-            from symx.common import Timeout
+            from symx.model import Timeout
 
             mirror_runner(storage_backend, Timeout(datetime.timedelta(minutes=timeout)))
 
@@ -75,7 +76,7 @@ def extract(
     with tempfile.TemporaryDirectory() as processing_dir:
         storage_backend = init_storage(Path(processing_dir), storage)
         if storage_backend:
-            from symx.common import Timeout
+            from symx.model import Timeout
 
             extract_runner(storage_backend, Timeout(datetime.timedelta(minutes=timeout)))
 
