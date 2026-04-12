@@ -13,6 +13,7 @@ from symx.ipsw.model import (
     IpswReleaseStatus,
     IpswSource,
 )
+from symx.download import DownloadError
 from symx.ipsw.runners import mirror
 from tests.fakes import FakeTimeout
 from tests.ipsw_storage_mock import InMemoryIpswStorage
@@ -24,11 +25,15 @@ from tests.ipsw_storage_mock import InMemoryIpswStorage
 class FakeDownloader:
     """Simulates downloading by writing a dummy file to disk."""
 
-    def __init__(self, verify_result: bool = True) -> None:
+    def __init__(self, verify_result: bool = True, download_raises: bool = False) -> None:
         self._verify_result = verify_result
+        self._download_raises = download_raises
         self.downloads: list[tuple[str, Path]] = []
 
     def download(self, url: str, filepath: Path) -> None:
+        if self._download_raises:
+            self.downloads.append((url, filepath))
+            raise DownloadError(f"Failed to download {url}")
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_bytes(b"fake ipsw content")
         self.downloads.append((url, filepath))
@@ -94,6 +99,30 @@ class TestMirrorRunner:
         assert updated.sources[0].processing_state == ArtifactProcessingState.MIRRORED
         assert updated.sources[0].mirror_path is not None
 
+    def test_download_error_marks_mirroring_failed_and_continues(self, tmp_path: Path) -> None:
+        """A DownloadError on one source must not abort the whole mirror run."""
+        storage = InMemoryIpswStorage(tmp_path)
+        a1 = _make_artifact(version="18.0", build="22A100")
+        a2 = _make_artifact(
+            version="18.1", build="22B100", url="https://updates.cdn-apple.com/iOS/iPhone_18.1_22B100_Restore.ipsw"
+        )
+        storage.seed_artifact(a1)
+        storage.seed_artifact(a2)
+
+        downloader = FakeDownloader(download_raises=True)
+
+        mirror(storage, FakeTimeout(timedelta(minutes=60)), downloader=downloader)
+
+        # Both sources were attempted
+        assert len(downloader.downloads) == 2
+        # No uploads happened
+        assert len(storage.uploaded_ipsws) == 0
+        # Both sources marked MIRRORING_FAILED
+        for artifact in (a1, a2):
+            updated = storage.get_artifact(artifact.key)
+            assert updated is not None
+            assert updated.sources[0].processing_state == ArtifactProcessingState.MIRRORING_FAILED
+
     def test_verification_failure_marks_mirroring_failed(self, tmp_path: Path) -> None:
         storage = InMemoryIpswStorage(tmp_path)
         artifact = _make_artifact()
@@ -120,7 +149,7 @@ class TestMirrorRunner:
 
         mirror(storage, FakeTimeout(timedelta(minutes=60)), downloader=downloader)
 
-        # Nothing downloaded or uploaded — already processed
+        # Nothing downloaded or uploaded -> already processed
         assert len(downloader.downloads) == 0
         assert len(storage.uploaded_ipsws) == 0
 
@@ -154,7 +183,7 @@ class TestMirrorRunner:
 
     def test_old_artifact_filtered_out(self, tmp_path: Path) -> None:
         storage = InMemoryIpswStorage(tmp_path)
-        # Released 3 years ago — mirror_filter requires this/previous year
+        # Released 3 years ago -> mirror_filter requires this/previous year
         old_artifact = _make_artifact(released=date(2020, 1, 1))
         storage.seed_artifact(old_artifact)
 

@@ -145,7 +145,7 @@ class TestExtractRunner:
                     link=HttpUrl("https://updates.cdn-apple.com/iOS/iPhone_18.0_22A100_Restore.ipsw"),
                     processing_state=ArtifactProcessingState.MIRRORED,
                     mirror_path="mirror/ipsw/iOS/18.0/22A100/iPhone_18.0_22A100_Restore.ipsw",
-                    # No file at mirror_path — download_ipsw will return None
+                    # No file at mirror_path -> download_ipsw will return None
                 )
             ],
         )

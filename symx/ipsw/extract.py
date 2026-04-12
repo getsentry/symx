@@ -16,6 +16,58 @@ logger = logging.getLogger(__name__)
 mount_point_re = re.compile(r".*Press Ctrl\+C to unmount '(.*)'")
 
 
+def _compress_directory(directory: Path) -> Path:
+    archive_path = directory.parent / f"{directory.name}.tar.zst"
+
+    with subprocess.Popen(
+        ["tar", "-cf", "-", "-C", str(directory.parent), str(directory.name)], stdout=subprocess.PIPE
+    ) as tar_proc:
+        with subprocess.Popen(
+            ["zstd", "-", "-o", str(archive_path)],
+            stdin=tar_proc.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ) as zstd_proc:
+            if tar_proc.stdout:
+                tar_proc.stdout.close()  # Allow tar_proc to receive SIGPIPE if zstd_proc exits
+            _, stderr = zstd_proc.communicate()
+
+            if zstd_proc.returncode != 0:
+                error_msg = stderr.decode("utf-8") if stderr else "Unknown error"
+                raise IpswExtractError(f"zstd compression failed: {error_msg}")
+
+    if tar_proc.returncode != 0:
+        raise IpswExtractError(f"tar archiving failed with return code {tar_proc.returncode}")
+
+    # Remove the original directory after compression
+    shutil.rmtree(directory)
+
+    return archive_path
+
+
+def _decompress_archive(archive_path: Path, target_dir: Path) -> None:
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    # Use subprocess to pipe zstd output to tar for decompression
+    with subprocess.Popen(["zstd", "-d", str(archive_path), "-c"], stdout=subprocess.PIPE) as zstd_proc:
+        with subprocess.Popen(
+            ["tar", "-xf", "-", "-C", str(target_dir.parent)],
+            stdin=zstd_proc.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ) as tar_proc:
+            if zstd_proc.stdout:
+                zstd_proc.stdout.close()
+            _, stderr = tar_proc.communicate()
+
+            if tar_proc.returncode != 0:
+                error_msg = stderr.decode("utf-8") if stderr else "Unknown error"
+                raise IpswExtractError(f"tar extraction failed: {error_msg}")
+
+    if zstd_proc.returncode != 0:
+        raise IpswExtractError(f"zstd decompression failed with return code {zstd_proc.returncode}")
+
+
 # TODO: there is good chance that we should split the extractor into separate classes based on at least platform
 #   and provide a factory function that instantiates the right extractor class using artifact and maybe source.
 class IpswExtractor:
@@ -99,7 +151,7 @@ class IpswExtractor:
 
         return self.symbols_dir()
 
-    def _symsort_dsc(self):
+    def _symsort_dsc(self) -> None:
         split_dir = self.processing_dir / "split_out"
         if self.platform == IpswPlatform.MACOS:
             # all macOS IPSWs have dyld_shared_caches for both architectures
@@ -121,7 +173,7 @@ class IpswExtractor:
                     arch_split_dir = split_dir / str(arch)
                     if arch_split_dir.exists():
                         with sentry_sdk.start_span(op="ipsw.compress", name=f"Compress {arch} split"):
-                            archive_path = self._compress_directory(arch_split_dir)
+                            archive_path = _compress_directory(arch_split_dir)
                         compressed_archives.append((archive_path, arch))
                         logger.info("Finished compressing %s split to %s", arch, archive_path)
 
@@ -133,7 +185,7 @@ class IpswExtractor:
             # Decompress all archives before final symsort processing
             for archive_path, arch in compressed_archives:
                 with sentry_sdk.start_span(op="ipsw.decompress", name=f"Decompress {arch} split"):
-                    self._decompress_archive(archive_path, split_dir / str(arch))
+                    _decompress_archive(archive_path, split_dir / str(arch))
                 archive_path.unlink()  # Remove the compressed archive after extraction
 
             # We accumulate each architecture as a sub-dir in split_dir and let symsorter process them together
@@ -154,7 +206,7 @@ class IpswExtractor:
         # we have very limited space on the GHA runners, so get rid of processed input data
         shutil.rmtree(split_dir)
 
-    def _symsort_sys_image(self):
+    def _symsort_sys_image(self) -> None:
         # mount the sys image (the process waits for sigint)
         with sentry_sdk.start_span(op="subprocess.ipsw_mount", name="Mount sys image") as mount_span:
             mount_proc = subprocess.Popen(
@@ -233,57 +285,7 @@ class IpswExtractor:
 
         return split_dir
 
-    def _compress_directory(self, directory: Path) -> Path:
-        archive_path = directory.parent / f"{directory.name}.tar.zst"
-
-        with subprocess.Popen(
-            ["tar", "-cf", "-", "-C", str(directory.parent), str(directory.name)], stdout=subprocess.PIPE
-        ) as tar_proc:
-            with subprocess.Popen(
-                ["zstd", "-", "-o", str(archive_path)],
-                stdin=tar_proc.stdout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            ) as zstd_proc:
-                if tar_proc.stdout:
-                    tar_proc.stdout.close()  # Allow tar_proc to receive SIGPIPE if zstd_proc exits
-                _, stderr = zstd_proc.communicate()
-
-                if zstd_proc.returncode != 0:
-                    error_msg = stderr.decode("utf-8") if stderr else "Unknown error"
-                    raise IpswExtractError(f"zstd compression failed: {error_msg}")
-
-        if tar_proc.returncode != 0:
-            raise IpswExtractError(f"tar archiving failed with return code {tar_proc.returncode}")
-
-        # Remove the original directory after compression
-        shutil.rmtree(directory)
-
-        return archive_path
-
-    def _decompress_archive(self, archive_path: Path, target_dir: Path) -> None:
-        target_dir.parent.mkdir(parents=True, exist_ok=True)
-
-        # Use subprocess to pipe zstd output to tar for decompression
-        with subprocess.Popen(["zstd", "-d", str(archive_path), "-c"], stdout=subprocess.PIPE) as zstd_proc:
-            with subprocess.Popen(
-                ["tar", "-xf", "-", "-C", str(target_dir.parent)],
-                stdin=zstd_proc.stdout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            ) as tar_proc:
-                if zstd_proc.stdout:
-                    zstd_proc.stdout.close()
-                _, stderr = tar_proc.communicate()
-
-                if tar_proc.returncode != 0:
-                    error_msg = stderr.decode("utf-8") if stderr else "Unknown error"
-                    raise IpswExtractError(f"tar extraction failed: {error_msg}")
-
-        if zstd_proc.returncode != 0:
-            raise IpswExtractError(f"zstd decompression failed with return code {zstd_proc.returncode}")
-
-    def _symsort(self, split_dir: Path, ignore_errors: bool = False):
+    def _symsort(self, split_dir: Path, ignore_errors: bool = False) -> None:
         output_dir = self.symbols_dir()
         logger.info("Symsorting %s -> %s", split_dir, output_dir)
 
