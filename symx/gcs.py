@@ -53,7 +53,7 @@ def compare_md5_hash(local_file: Path, remote_blob: Blob) -> bool:
     else:
         logger.error(
             "Blob was already uploaded but MD5 hash differs from the one uploaded",
-            extra={"blob_name": remote_blob.name, "remote_hash": {remote_hash}, "local_hash": {local_hash}},
+            extra={"blob_name": remote_blob.name, "remote_hash": remote_hash, "local_hash": local_hash},
         )
         return False
 
@@ -154,6 +154,12 @@ def upload_symbol_binaries(bucket: Bucket, platform: str, bundle_id: str, binary
 
 
 def try_download_to_filename(blob: Blob, local_file_path: Path, num_retries: int = 5) -> bool:
+    """Download a GCS blob to a local path with retries.
+
+    Returns True only when bytes were transferred successfully. Transport integrity (md5) is
+    handled by the GCS SDK internally; callers must still verify *content authenticity* against
+    the authoritative upstream hash (e.g. Apple's SHA-1 for IPSW/OTA) before trusting the file.
+    """
     with sentry_sdk.start_span(op="gcs.download", name=f"Download blob {blob.name}") as span:
         span.set_data("blob_name", blob.name)
         for attempt in range(num_retries):

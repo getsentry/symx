@@ -189,7 +189,7 @@ def _classify_ota_failure(artifact: Path) -> type[Exception] | None:
     # - image_patches/: newer-style delta OTAs (e.g. iPad)
     # - payloadv2/patches/System/Library/Caches/com.apple.dyld/: older-style deltas (e.g. Apple TV)
     #   where the DSC itself is a binary diff
-    # Note: app_patches/ alone is not sufficient — full OTAs (e.g. watchOS, visionOS) can also
+    # Note: app_patches/ alone is not sufficient: full OTAs (e.g. watchOS, visionOS) can also
     # contain app_patches/ alongside a full system image with a DSC.
     ls_result = subprocess.run(
         ["ipsw", "ota", "ls", str(artifact)],

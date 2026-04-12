@@ -12,7 +12,7 @@ from symx.model import (
     ArtifactProcessingState,
     Timeout,
 )
-from symx.download import try_download_url_to_file
+from symx.download import DownloadError, try_download_url_to_file
 from symx.fs import log_disk_usage
 from symx.tools import validate_shell_deps
 from symx.ipsw.model import IpswArtifact, IpswPlatform, IpswSource
@@ -141,11 +141,19 @@ def mirror(
                     log_disk_usage()
                     filepath = ipsw_storage.local_dir / source.file_name
 
-                    with sentry_sdk.start_span(op="http.download", name=f"Download {source.file_name} from Apple"):
-                        downloader.download(str(source.link), filepath)
+                    download_ok = False
+                    try:
+                        with sentry_sdk.start_span(op="http.download", name=f"Download {source.file_name} from Apple"):
+                            downloader.download(str(source.link), filepath)
 
-                    with sentry_sdk.start_span(op="ipsw.mirror.verify", name=f"Verify {source.file_name}"):
-                        download_ok = downloader.verify(filepath, source)
+                        with sentry_sdk.start_span(op="ipsw.mirror.verify", name=f"Verify {source.file_name}"):
+                            download_ok = downloader.verify(filepath, source)
+                    except DownloadError as e:
+                        sentry_sdk.capture_exception(e)
+                        logger.warning(
+                            "Download failed for source, marking as MIRRORING_FAILED",
+                            extra={"source": source.file_name, "exception": e},
+                        )
 
                     if not download_ok:
                         artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORING_FAILED
@@ -165,7 +173,7 @@ def mirror(
                             "ipsw.mirror.succeeded", 1, attributes={"platform": str(artifact.platform)}
                         )
 
-                    filepath.unlink()
+                    filepath.unlink(missing_ok=True)
 
     sentry_sdk.metrics.distribution("ipsw.mirror.artifacts_mirrored", artifacts_mirrored)
     sentry_sdk.metrics.distribution("ipsw.mirror.artifacts_failed", artifacts_failed)
