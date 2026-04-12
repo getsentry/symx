@@ -77,7 +77,7 @@ class IpswExtractor:
                     # consume and log remaining output from stdout and stderr
                     stdout, stderr = process.communicate()
                     ipsw_stdout = stdout.decode("utf-8")
-                    ipsw_stderr = stdout.decode("utf-8")
+                    ipsw_stderr = stderr.decode("utf-8")
                     logger.warning("ipsw timed out", extra={"ipsw_stdout": ipsw_stdout, "ipsw_stderr": ipsw_stderr})
                     span.set_status("deadline_exceeded")
                     raise TimeoutError("IPSW extraction timed out and was terminated.")
