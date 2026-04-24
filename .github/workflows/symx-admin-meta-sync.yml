@@ -5,21 +5,100 @@ permissions:
 
 on:
   workflow_dispatch:
+    inputs:
+      known_ipsw_generation:
+        description: Known local IPSW meta generation
+        required: false
+        type: string
+      known_ota_generation:
+        description: Known local OTA meta generation
+        required: false
+        type: string
 
 jobs:
-  call-reusable-workflow:
-    uses: ./.github/workflows/bucket-runner.yml
-    with:
-      job_name: "Fetch IPSW and OTA meta-data for admin cache"
-      bucket_step: "Download admin meta-data"
-      bucket_run: |
-        gcloud storage cp ${{ vars.SYMX_STORE }}/ipsw_meta.json .
-        gcloud storage cp ${{ vars.SYMX_STORE }}/ota_image_meta.json .
-        gcloud storage objects describe ${{ vars.SYMX_STORE }}/ipsw_meta.json --format=json > ipsw_meta_blob.json
-        gcloud storage objects describe ${{ vars.SYMX_STORE }}/ota_image_meta.json --format=json > ota_image_meta_blob.json
-      upload_name: symx-admin-meta
-      upload_path: |
-        ipsw_meta.json
-        ota_image_meta.json
-        ipsw_meta_blob.json
-        ota_image_meta_blob.json
+  sync-admin-meta:
+    name: Fetch IPSW and OTA meta-data for admin cache
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: projects/868781662168/locations/global/workloadIdentityPools/prod-github/providers/github-oidc-pool
+          service_account: symx-downloader@sac-prod-sa.iam.gserviceaccount.com
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        with:
+          version: ">= 363.0.0"
+
+      - name: Compare remote generations
+        id: compare
+        env:
+          SYMX_STORE: ${{ vars.SYMX_STORE }}
+          KNOWN_IPSW_GENERATION: ${{ inputs.known_ipsw_generation }}
+          KNOWN_OTA_GENERATION: ${{ inputs.known_ota_generation }}
+        run: |
+          set -euo pipefail
+          mkdir -p admin-meta
+
+          gcloud storage objects describe "$SYMX_STORE/ipsw_meta.json" --format=json > admin-meta/ipsw_meta_blob.json
+          gcloud storage objects describe "$SYMX_STORE/ota_image_meta.json" --format=json > admin-meta/ota_image_meta_blob.json
+
+          IPSW_GENERATION="$(jq -r '.generation' admin-meta/ipsw_meta_blob.json)"
+          OTA_GENERATION="$(jq -r '.generation' admin-meta/ota_image_meta_blob.json)"
+
+          IPSW_CHANGED=false
+          OTA_CHANGED=false
+          if [ -z "${KNOWN_IPSW_GENERATION}" ] || [ "${KNOWN_IPSW_GENERATION}" != "$IPSW_GENERATION" ]; then
+            IPSW_CHANGED=true
+          fi
+          if [ -z "${KNOWN_OTA_GENERATION}" ] || [ "${KNOWN_OTA_GENERATION}" != "$OTA_GENERATION" ]; then
+            OTA_CHANGED=true
+          fi
+
+          ANY_CHANGED=false
+          if [ "$IPSW_CHANGED" = "true" ] || [ "$OTA_CHANGED" = "true" ]; then
+            ANY_CHANGED=true
+          fi
+
+          jq -n \
+            --argjson ipsw_generation "$IPSW_GENERATION" \
+            --argjson ota_generation "$OTA_GENERATION" \
+            --argjson ipsw_changed "$IPSW_CHANGED" \
+            --argjson ota_changed "$OTA_CHANGED" \
+            '{
+              ipsw_generation: $ipsw_generation,
+              ota_generation: $ota_generation,
+              ipsw_changed: $ipsw_changed,
+              ota_changed: $ota_changed
+            }' > admin-meta/admin_meta_summary.json
+
+          echo "ipsw_generation=$IPSW_GENERATION" >> "$GITHUB_OUTPUT"
+          echo "ota_generation=$OTA_GENERATION" >> "$GITHUB_OUTPUT"
+          echo "ipsw_changed=$IPSW_CHANGED" >> "$GITHUB_OUTPUT"
+          echo "ota_changed=$OTA_CHANGED" >> "$GITHUB_OUTPUT"
+          echo "any_changed=$ANY_CHANGED" >> "$GITHUB_OUTPUT"
+
+      - name: Download changed meta-data
+        if: steps.compare.outputs.any_changed == 'true'
+        env:
+          SYMX_STORE: ${{ vars.SYMX_STORE }}
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.compare.outputs.ipsw_changed }}" = "true" ]; then
+            gcloud storage cp "$SYMX_STORE/ipsw_meta.json" admin-meta/ipsw_meta.json
+          fi
+          if [ "${{ steps.compare.outputs.ota_changed }}" = "true" ]; then
+            gcloud storage cp "$SYMX_STORE/ota_image_meta.json" admin-meta/ota_image_meta.json
+          fi
+
+      - name: Upload changed admin meta-data
+        if: steps.compare.outputs.any_changed == 'true'
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: symx-admin-meta
+          path: admin-meta/*
