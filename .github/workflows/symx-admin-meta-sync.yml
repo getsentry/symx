@@ -1,0 +1,25 @@
+name: Sync admin meta cache
+permissions:
+  contents: read
+  id-token: write
+
+on:
+  workflow_dispatch:
+
+jobs:
+  call-reusable-workflow:
+    uses: ./.github/workflows/bucket-runner.yml
+    with:
+      job_name: "Fetch IPSW and OTA meta-data for admin cache"
+      bucket_step: "Download admin meta-data"
+      bucket_run: |
+        gcloud storage cp ${{ vars.SYMX_STORE }}/ipsw_meta.json .
+        gcloud storage cp ${{ vars.SYMX_STORE }}/ota_image_meta.json .
+        gcloud storage objects describe ${{ vars.SYMX_STORE }}/ipsw_meta.json --format=json > ipsw_meta_blob.json
+        gcloud storage objects describe ${{ vars.SYMX_STORE }}/ota_image_meta.json --format=json > ota_image_meta_blob.json
+      upload_name: symx-admin-meta
+      upload_path: |
+        ipsw_meta.json
+        ota_image_meta.json
+        ipsw_meta_blob.json
+        ota_image_meta_blob.json
