@@ -25,6 +25,94 @@ from symx.ota.model import (
 
 logger = logging.getLogger(__name__)
 
+MAX_SUBPROCESS_OUTPUT_CHARS = 4_000
+MAX_EXTRACT_DIR_SAMPLE_ENTRIES = 20
+
+
+def _decode_subprocess_output(output: str | bytes | None) -> str:
+    if output is None:
+        return ""
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    return output
+
+
+def _format_subprocess_output(label: str, output: str | bytes | None) -> str:
+    text = _decode_subprocess_output(output).strip()
+    if not text:
+        return f"  {label}: <empty>"
+
+    if len(text) > MAX_SUBPROCESS_OUTPUT_CHARS:
+        omitted = len(text) - MAX_SUBPROCESS_OUTPUT_CHARS
+        text = f"{text[:MAX_SUBPROCESS_OUTPUT_CHARS]}\n... [truncated {omitted} chars]"
+
+    indented = "\n".join(f"    {line}" for line in text.splitlines())
+    return f"  {label}:\n{indented}"
+
+
+def _format_subprocess_result(
+    label: str, result: subprocess.CompletedProcess[bytes] | subprocess.CompletedProcess[str] | None
+) -> str:
+    if result is None:
+        return f"{label}: not attempted"
+
+    return "\n".join(
+        [
+            f"{label}: exit={result.returncode}",
+            _format_subprocess_output("stdout", result.stdout),
+            _format_subprocess_output("stderr", result.stderr),
+        ]
+    )
+
+
+def _describe_extract_dirs(output_dir: Path) -> str:
+    extract_dirs = list_dirs_in(output_dir)
+    if not extract_dirs:
+        return f"No image directories were created in {output_dir}"
+
+    lines = [f"Image directories created in {output_dir}:"]
+    for extract_dir in extract_dirs:
+        lines.append(f"- {extract_dir}")
+        if _dir_contains_dsc(extract_dir):
+            lines.append(f"  contains at least one {DYLD_SHARED_CACHE}* file")
+            continue
+
+        sample_entries: list[str] = []
+        for path in extract_dir.rglob("*"):
+            suffix = "/" if path.is_dir() else ""
+            sample_entries.append(f"{path.relative_to(extract_dir)}{suffix}")
+            if len(sample_entries) >= MAX_EXTRACT_DIR_SAMPLE_ENTRIES:
+                break
+
+        if not sample_entries:
+            lines.append("  (empty)")
+            continue
+
+        lines.append("  sample entries:")
+        lines.extend(f"    {entry}" for entry in sample_entries)
+        if len(sample_entries) >= MAX_EXTRACT_DIR_SAMPLE_ENTRIES:
+            lines.append(f"    ... showing first {MAX_EXTRACT_DIR_SAMPLE_ENTRIES} entries")
+
+    return "\n".join(lines)
+
+
+def _format_extract_ota_error(
+    artifact: Path,
+    output_dir: Path,
+    reason: str,
+    literal_result: subprocess.CompletedProcess[bytes],
+    pattern_result: subprocess.CompletedProcess[bytes] | None,
+) -> str:
+    return "\n".join(
+        [
+            reason,
+            _format_subprocess_result("literal extract", literal_result),
+            _format_subprocess_result("payloadv2 pattern extract", pattern_result),
+            _describe_extract_dirs(output_dir),
+            f"artifact: {artifact}",
+        ]
+    )
+
 
 def parse_cryptex_patch_output(stderr: str) -> dict[str, Path]:
     """Parse ipsw ota patch stderr to extract DMG file mappings."""
@@ -208,7 +296,7 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
         span.set_data("artifact", str(artifact))
 
         # First try the legacy approach: literal filename extraction (works for older OTAs)
-        subprocess.run(
+        literal_result = subprocess.run(
             [
                 "ipsw",
                 "ota",
@@ -220,7 +308,9 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
             ],
             capture_output=True,
         )
+        span.set_data("literal_extract.returncode", literal_result.returncode)
 
+        pattern_result: subprocess.CompletedProcess[bytes] | None = None
         extract_dirs = list_dirs_in(output_dir)
         if not extract_dirs or not _dir_contains_dsc(extract_dirs[0]):
             # Fallback: modern payloadv2 OTAs (e.g. watchOS) store the DSC inside numbered payload
@@ -228,7 +318,7 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
             # with -y (confirm payloadv2 search) instead.
             # Note: -d -y should work but is buggy in ipsw <=3.1.655.
             logger.info("Literal DSC extraction failed, trying payloadv2 pattern search for %s", artifact.name)
-            subprocess.run(
+            pattern_result = subprocess.run(
                 [
                     "ipsw",
                     "ota",
@@ -242,14 +332,42 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
                 ],
                 capture_output=True,
             )
+            span.set_data("pattern_extract.returncode", pattern_result.returncode)
             extract_dirs = list_dirs_in(output_dir)
 
         if not extract_dirs:
             span.set_status("internal_error")
-            raise OtaExtractError(f"Could not find {DYLD_SHARED_CACHE} in {artifact}")
+            raise OtaExtractError(
+                _format_extract_ota_error(
+                    artifact,
+                    output_dir,
+                    f"Could not find {DYLD_SHARED_CACHE} in {artifact}",
+                    literal_result,
+                    pattern_result,
+                )
+            )
         elif len(extract_dirs) > 1:
-            extract_dirs_output = "\n".join([str(dir_path) for dir_path in extract_dirs])
-            raise OtaExtractError(f"Found more than one image directory in {artifact}:\n{extract_dirs_output}")
+            span.set_status("internal_error")
+            raise OtaExtractError(
+                _format_extract_ota_error(
+                    artifact,
+                    output_dir,
+                    f"Found more than one image directory in {artifact}",
+                    literal_result,
+                    pattern_result,
+                )
+            )
+        elif not _dir_contains_dsc(extract_dirs[0]):
+            span.set_status("internal_error")
+            raise OtaExtractError(
+                _format_extract_ota_error(
+                    artifact,
+                    output_dir,
+                    f"OTA extraction produced no {DYLD_SHARED_CACHE} files for {artifact}",
+                    literal_result,
+                    pattern_result,
+                )
+            )
 
         logger.info("Successfully extracted DSC from %s", artifact.name)
 

@@ -232,7 +232,11 @@ class OtaExtract:
                     except OtaExtractError as e:
                         sentry_sdk.capture_exception(e)
                         logger.warning(
-                            "Failed to extract symbols from OTA %s %s %s", ota.platform, ota.version, ota.build
+                            "Failed to extract symbols from OTA %s %s %s: %s",
+                            ota.platform,
+                            ota.version,
+                            ota.build,
+                            e,
                         )
                         ota.processing_state = ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
                         ota.update_last_run()
