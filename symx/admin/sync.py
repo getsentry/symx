@@ -6,7 +6,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, cast
+from typing import cast
 
 from symx.admin.db import (
     SnapshotManifest,
@@ -21,6 +21,7 @@ from symx.admin.db import (
     write_manifest,
 )
 from symx.admin.gh_workflows import StatusCallback, WorkflowRun
+from symx.admin.meta_json import parse_ota_meta_json
 from symx.admin import gh_workflows
 from symx.ipsw.model import IpswArtifactDb
 from symx.ota.model import OtaArtifact
@@ -252,19 +253,7 @@ def _load_ipsw_db(ipsw_meta_path: Path) -> IpswArtifactDb:
 
 
 def _load_ota_meta(ota_meta_path: Path) -> dict[str, OtaArtifact]:
-    raw_ota_payload: object = json.loads(ota_meta_path.read_text())
-    if not isinstance(raw_ota_payload, dict):
-        raise AdminSyncError("Unexpected OTA meta-data payload")
-
-    ota_payload = cast(dict[object, object], raw_ota_payload)
-    ota_meta: dict[str, OtaArtifact] = {}
-    for key, value in ota_payload.items():
-        if not isinstance(key, str):
-            raise AdminSyncError("Unexpected OTA meta-data key type")
-        if not isinstance(value, dict):
-            raise AdminSyncError("Unexpected OTA meta-data value type")
-        ota_meta[key] = OtaArtifact(**cast(dict[str, Any], value))
-    return ota_meta
+    return parse_ota_meta_json(ota_meta_path.read_text(), AdminSyncError)
 
 
 def _snapshot_is_ready(paths: SnapshotPaths) -> bool:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -19,6 +18,8 @@ from symx.admin.actions import (
     worker_workflow_for_action,
 )
 from symx.admin.apply import AdminApplyValidationError, apply_request_to_ipsw_db, apply_request_to_ota_meta
+from symx.admin.meta_json import parse_ota_meta_json
+from symx.admin import gh_workflows
 from symx.gcs import parse_gcs_url
 from symx.ipsw.model import ARTIFACTS_META_JSON as IPSW_META_JSON, IpswArtifactDb
 from symx.ota.model import ARTIFACTS_META_JSON as OTA_META_JSON, OtaArtifact
@@ -139,7 +140,7 @@ def ensure_worker_running(
 
     _status(status_callback, f"Dispatching {workflow}…")
     try:
-        _run_gh_command(["workflow", "run", workflow])
+        gh_workflows.run_gh_command(["workflow", "run", workflow], AdminRemoteApplyError)
     except AdminRemoteApplyError as exc:
         return WorkerDispatchResult(workflow=workflow, status=WorkerDispatchStatus.DISPATCH_FAILED, detail=str(exc))
 
@@ -175,7 +176,10 @@ def append_apply_summary(summary_path: Path | None, result: ApplyBatchResult) ->
                 f"- worker detail: {result.worker.detail or '—'}",
             ]
         )
-    summary_path.write_text("\n".join(lines) + "\n")
+    existing_prefix = "\n" if summary_path.exists() and summary_path.stat().st_size > 0 else ""
+    with summary_path.open("a", encoding="utf-8") as summary_file:
+        summary_file.write(existing_prefix)
+        summary_file.write("\n".join(lines) + "\n")
 
 
 def _bucket_for_storage(storage: str) -> Bucket:
@@ -207,23 +211,11 @@ def _load_ipsw_db(blob: Blob) -> IpswArtifactDb:
 
 def _load_ota_meta(blob: Blob) -> dict[str, OtaArtifact]:
     raw_json = str(cast(Any, blob).download_as_text())
-    raw_payload: object = json.loads(raw_json)
-    if not isinstance(raw_payload, dict):
-        raise AdminRemoteApplyError("Unexpected OTA meta-data payload")
-
-    ota_payload = cast(dict[object, object], raw_payload)
-    result: dict[str, OtaArtifact] = {}
-    for key, value in ota_payload.items():
-        if not isinstance(key, str):
-            raise AdminRemoteApplyError("Unexpected OTA meta-data key type")
-        if not isinstance(value, dict):
-            raise AdminRemoteApplyError("Unexpected OTA meta-data value type")
-        result[key] = OtaArtifact(**cast(dict[str, Any], value))
-    return result
+    return parse_ota_meta_json(raw_json, AdminRemoteApplyError)
 
 
 def _list_workflow_runs(workflow: str, limit: int = 10) -> list[dict[str, object]]:
-    result = _run_gh_command(
+    result = gh_workflows.run_gh_command(
         [
             "run",
             "list",
@@ -233,21 +225,13 @@ def _list_workflow_runs(workflow: str, limit: int = 10) -> list[dict[str, object
             str(limit),
             "--json",
             "databaseId,status,url",
-        ]
+        ],
+        AdminRemoteApplyError,
     )
     raw_payload: object = json.loads(result.stdout)
     if not isinstance(raw_payload, list):
         raise AdminRemoteApplyError(f"Unexpected workflow run payload for {workflow}")
     return cast(list[dict[str, object]], raw_payload)
-
-
-def _run_gh_command(args: list[str]) -> subprocess.CompletedProcess[str]:
-    cmd = ["gh", *args]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        stderr = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
-        raise AdminRemoteApplyError(f"gh command failed: {' '.join(cmd)}\n{stderr}")
-    return result
 
 
 def _result(

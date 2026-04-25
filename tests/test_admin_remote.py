@@ -6,12 +6,13 @@ from symx.admin.actions import (
     AdminActionKind,
     AdminStore,
     ApplyBatchRequest,
+    ApplyBatchResult,
     ApplyBatchStatus,
     IpswTarget,
     WorkerDispatchResult,
     WorkerDispatchStatus,
 )
-from symx.admin.remote import execute_apply_request
+from symx.admin.remote import append_apply_summary, execute_apply_request
 from symx.ipsw.model import (
     IpswArtifact,
     IpswArtifactDb,
@@ -94,6 +95,30 @@ def test_execute_apply_request_refuses_stale_generation(monkeypatch) -> None:
     assert result.status == ApplyBatchStatus.STALE_GENERATION
     assert result.remote_generation == 101
     assert fake_blob.uploads == []
+
+
+def test_append_apply_summary_appends_to_existing_file(tmp_path) -> None:
+    summary_path = tmp_path / "summary.md"
+    summary_path.write_text("existing summary\n")
+    result = ApplyBatchResult(
+        status=ApplyBatchStatus.APPLIED,
+        store=AdminStore.IPSW,
+        action=AdminActionKind.QUEUE_EXTRACT,
+        snapshot_id="ipsw-101__ota-202",
+        base_generation=101,
+        remote_generation=101,
+        targets=(IpswTarget(artifact_key="iOS_18.0_22A100", link="https://updates.cdn-apple.com/test.ipsw"),),
+        reason="retry extract",
+        applied_count=1,
+        message="applied",
+    )
+
+    append_apply_summary(summary_path, result)
+
+    content = summary_path.read_text()
+    assert content.startswith("existing summary\n")
+    assert "# Admin apply: applied" in content
+    assert content.count("# Admin apply: applied") == 1
 
 
 def test_execute_apply_request_returns_worker_warning_after_successful_apply(monkeypatch) -> None:
