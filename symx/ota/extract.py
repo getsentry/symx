@@ -10,6 +10,7 @@ from pathlib import Path
 
 import sentry_sdk
 
+from symx.diagnostics import DEFAULT_DIRECTORY_SAMPLE_ENTRIES, describe_directory, format_subprocess_result
 from symx.model import Arch
 from symx.fs import list_dirs_in, rmdir_if_exists
 from symx.tools import dyld_split, symsort as common_symsort
@@ -25,45 +26,6 @@ from symx.ota.model import (
 
 logger = logging.getLogger(__name__)
 
-MAX_SUBPROCESS_OUTPUT_CHARS = 4_000
-MAX_EXTRACT_DIR_SAMPLE_ENTRIES = 20
-
-
-def _decode_subprocess_output(output: str | bytes | None) -> str:
-    if output is None:
-        return ""
-    if isinstance(output, bytes):
-        return output.decode("utf-8", errors="replace")
-    return output
-
-
-def _format_subprocess_output(label: str, output: str | bytes | None) -> str:
-    text = _decode_subprocess_output(output).strip()
-    if not text:
-        return f"  {label}: <empty>"
-
-    if len(text) > MAX_SUBPROCESS_OUTPUT_CHARS:
-        omitted = len(text) - MAX_SUBPROCESS_OUTPUT_CHARS
-        text = f"{text[:MAX_SUBPROCESS_OUTPUT_CHARS]}\n... [truncated {omitted} chars]"
-
-    indented = "\n".join(f"    {line}" for line in text.splitlines())
-    return f"  {label}:\n{indented}"
-
-
-def _format_subprocess_result(
-    label: str, result: subprocess.CompletedProcess[bytes] | subprocess.CompletedProcess[str] | None
-) -> str:
-    if result is None:
-        return f"{label}: not attempted"
-
-    return "\n".join(
-        [
-            f"{label}: exit={result.returncode}",
-            _format_subprocess_output("stdout", result.stdout),
-            _format_subprocess_output("stderr", result.stderr),
-        ]
-    )
-
 
 def _describe_extract_dirs(output_dir: Path) -> str:
     extract_dirs = list_dirs_in(output_dir)
@@ -77,21 +39,8 @@ def _describe_extract_dirs(output_dir: Path) -> str:
             lines.append(f"  contains at least one {DYLD_SHARED_CACHE}* file")
             continue
 
-        sample_entries: list[str] = []
-        for path in extract_dir.rglob("*"):
-            suffix = "/" if path.is_dir() else ""
-            sample_entries.append(f"{path.relative_to(extract_dir)}{suffix}")
-            if len(sample_entries) >= MAX_EXTRACT_DIR_SAMPLE_ENTRIES:
-                break
-
-        if not sample_entries:
-            lines.append("  (empty)")
-            continue
-
-        lines.append("  sample entries:")
-        lines.extend(f"    {entry}" for entry in sample_entries)
-        if len(sample_entries) >= MAX_EXTRACT_DIR_SAMPLE_ENTRIES:
-            lines.append(f"    ... showing first {MAX_EXTRACT_DIR_SAMPLE_ENTRIES} entries")
+        sample = describe_directory(extract_dir, max_entries=DEFAULT_DIRECTORY_SAMPLE_ENTRIES, indent="    ")
+        lines.extend(f"  {line}" for line in sample.splitlines())
 
     return "\n".join(lines)
 
@@ -106,8 +55,8 @@ def _format_extract_ota_error(
     return "\n".join(
         [
             reason,
-            _format_subprocess_result("literal extract", literal_result),
-            _format_subprocess_result("payloadv2 pattern extract", pattern_result),
+            format_subprocess_result("literal extract", literal_result),
+            format_subprocess_result("payloadv2 pattern extract", pattern_result),
             _describe_extract_dirs(output_dir),
             f"artifact: {artifact}",
         ]
