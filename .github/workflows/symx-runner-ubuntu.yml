@@ -47,7 +47,7 @@ jobs:
           export PATH="/Users/runner/.local/bin:$PATH"
           uv --version
           uv sync
-          IPSW_VERSION="3.1.670"
+          IPSW_VERSION="3.1.672"
           curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors \
             "https://github.com/blacktop/ipsw/releases/download/v${IPSW_VERSION}/ipsw_${IPSW_VERSION}_linux_x86_64.tar.gz" \
             -o /tmp/ipsw.tar.gz
