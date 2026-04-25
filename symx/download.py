@@ -101,6 +101,12 @@ def download_url_to_file(url: str, filepath: Path, status_callback: StatusCallba
 
 def _emit_status(message: str, status_callback: StatusCallback | None, warning: bool = False) -> None:
     if status_callback is not None:
+        # Intentional: a callback is an alternate output sink, not an addition to logging.
+        # The local admin TUI passes a callback so download progress/retry events stay inside
+        # the Textual UI instead of also being emitted via the normal logger, which would
+        # duplicate messages and can interfere with terminal rendering. The production runner
+        # paths do not pass a callback, so they still log normally and retain their existing
+        # observability behavior.
         status_callback(message)
         return
     if warning:
