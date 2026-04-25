@@ -12,7 +12,13 @@ import pytest
 
 from symx.model import Arch
 from symx.ipsw.model import IpswPlatform
-from symx.ipsw.extract import _map_platform_to_prefix, find_extraction_dir, generate_bundle_id
+from symx.ipsw.extract import (
+    IpswExtractError,
+    IpswExtractor,
+    map_platform_to_prefix,
+    find_extraction_dir,
+    generate_bundle_id,
+)
 from subprocess import CompletedProcess
 
 from symx.ota.model import DSCSearchResult, OtaExtractError
@@ -30,13 +36,13 @@ from symx.ota.extract import (
 
 def test_map_platform_ipados_to_ios() -> None:
     """iPadOS and iOS share the same symbol prefix."""
-    assert _map_platform_to_prefix(IpswPlatform.IPADOS) == "ios"
+    assert map_platform_to_prefix(IpswPlatform.IPADOS) == "ios"
 
 
 def test_map_platform_all_lowercase() -> None:
     """All platform prefixes should be lowercase."""
     for platform in IpswPlatform:
-        prefix = _map_platform_to_prefix(platform)
+        prefix = map_platform_to_prefix(platform)
         assert prefix == prefix.lower()
 
 
@@ -89,6 +95,99 @@ def test_find_extraction_dir_returns_first_match() -> None:
         result = find_extraction_dir(processing_dir)
 
         assert result in [processing_dir / "dir1", processing_dir / "dir2"]
+
+
+# --- IPSW diagnostics tests ---
+
+
+def _make_ipsw_extractor(tmp_path: Path) -> IpswExtractor:
+    processing_dir = tmp_path / "processing"
+    processing_dir.mkdir()
+    ipsw_path = tmp_path / "test.ipsw"
+    ipsw_path.touch()
+    return IpswExtractor(IpswPlatform.IPADOS, "iPad15,7_26.4.2_23E261_Restore.ipsw", processing_dir, ipsw_path)
+
+
+def test_ipsw_extract_dsc_raises_detailed_error_when_extract_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    extractor = _make_ipsw_extractor(tmp_path)
+
+    class FakePopen:
+        def __init__(self, command: list[str], stdout: object = None, stderr: object = None) -> None:
+            self.command = command
+            self.returncode = 1
+
+        def __enter__(self) -> "FakePopen":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+            return False
+
+        def communicate(self, timeout: int | None = None) -> tuple[bytes, bytes]:
+            return b"extract stdout", b"extract stderr"
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
+
+    with pytest.raises(IpswExtractError, match="ipsw extract failed") as exc_info:
+        extractor._ipsw_extract_dsc()
+
+    message = str(exc_info.value)
+    assert "extract stdout" in message
+    assert "extract stderr" in message
+    assert "command: ipsw extract" in message
+    assert str(extractor.processing_dir) in message
+
+
+def test_ipsw_split_raises_detailed_error_when_split_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    extractor = _make_ipsw_extractor(tmp_path)
+    extract_dir = extractor.processing_dir / "23E261__iPad15,7"
+    extract_dir.mkdir()
+    (extract_dir / "dyld_shared_cache_arm64e").touch()
+
+    def fake_dyld_split(dsc: Path, output_dir: Path) -> CompletedProcess[bytes]:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "partial").touch()
+        return CompletedProcess(args=[], returncode=1, stdout=b"split stdout", stderr=b"split stderr")
+
+    monkeypatch.setattr("symx.ipsw.extract.dyld_split", fake_dyld_split)
+
+    with pytest.raises(IpswExtractError, match="ipsw dyld split failed") as exc_info:
+        extractor._ipsw_split(extract_dir)
+
+    message = str(exc_info.value)
+    assert "split stdout" in message
+    assert "split stderr" in message
+    assert str(extract_dir) in message
+    assert "split_out" in message
+
+
+def test_ipsw_symsort_raises_detailed_error_when_symsorter_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    extractor = _make_ipsw_extractor(tmp_path)
+    split_dir = extractor.processing_dir / "split_out"
+    split_dir.mkdir()
+    (split_dir / "binary").touch()
+
+    def fake_symsort(
+        output_dir: Path, prefix: str, bundle_id: str, split_dir: Path, ignore_errors: bool = False
+    ) -> CompletedProcess[bytes]:
+        return CompletedProcess(args=[], returncode=1, stdout=b"symsort stdout", stderr=b"symsort stderr")
+
+    monkeypatch.setattr("symx.ipsw.extract.symsort", fake_symsort)
+
+    with pytest.raises(IpswExtractError, match="Symsorter failed for bundle") as exc_info:
+        extractor._symsort(split_dir)
+
+    message = str(exc_info.value)
+    assert "symsort stdout" in message
+    assert "symsort stderr" in message
+    assert str(split_dir) in message
+    assert str(extractor.symbols_dir()) in message
 
 
 # --- parse_cryptex_patch_output tests ---

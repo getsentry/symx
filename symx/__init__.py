@@ -6,6 +6,7 @@ import typer
 from sentry_sdk.integrations.logging import SentryLogsHandler
 
 from .model import github_run_id
+from .admin.app import admin_app
 from .gha.app import gha_app
 from .ipsw.app import ipsw_app
 from .ota.app import ota_app
@@ -14,6 +15,7 @@ from .sim.app import sim_app
 SENTRY_DSN = os.environ.get("SENTRY_DSN", None)
 
 app = typer.Typer()
+app.add_typer(admin_app, name="admin")
 app.add_typer(gha_app, name="gha")
 app.add_typer(ota_app, name="ota")
 app.add_typer(ipsw_app, name="ipsw")

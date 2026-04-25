@@ -7,6 +7,7 @@ import logging
 
 import sentry_sdk
 
+from symx.diagnostics import describe_directory, format_command, format_subprocess_output, format_subprocess_result
 from symx.model import Arch
 from symx.tools import dyld_split, symsort
 from symx.ipsw.model import IpswPlatform
@@ -14,6 +15,23 @@ from symx.ipsw.model import IpswPlatform
 logger = logging.getLogger(__name__)
 
 mount_point_re = re.compile(r".*Press Ctrl\+C to unmount '(.*)'")
+
+
+def _format_ipsw_command_error(
+    reason: str,
+    command: list[str],
+    stdout: str | bytes | None,
+    stderr: str | bytes | None,
+    directories: list[Path],
+) -> str:
+    details = [
+        reason,
+        f"command: {format_command(command)}",
+        format_subprocess_output("stdout", stdout),
+        format_subprocess_output("stderr", stderr),
+    ]
+    details.extend(describe_directory(directory) for directory in directories)
+    return "\n".join(details)
 
 
 def _compress_directory(directory: Path) -> Path:
@@ -79,7 +97,7 @@ class IpswExtractor:
         ipsw_path: Path,
     ):
         self.bundle_id = generate_bundle_id(file_name)
-        self.prefix = _map_platform_to_prefix(platform)
+        self.prefix = map_platform_to_prefix(platform)
         self.platform = platform
         if not processing_dir.is_dir():
             raise ValueError(f"IPSW path is expected to be a directory: {processing_dir}")
@@ -94,7 +112,7 @@ class IpswExtractor:
     def symbols_dir(self) -> Path:
         return self.processing_dir / "symbols"
 
-    def _ipsw_extract_dsc(self, arch: Arch | None = None) -> Path | None:
+    def _ipsw_extract_dsc(self, arch: Arch | None = None) -> Path:
         arch_label = str(arch) if arch else "default"
         with sentry_sdk.start_span(
             op="subprocess.ipsw_extract",
@@ -117,30 +135,52 @@ class IpswExtractor:
                 command.append("-a")
                 command.append(str(arch))
 
-            # Start the process using Popen
             with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
                 try:
                     # IPSW extraction is typically finished in a couple of minutes. Everything beyond 20 minutes is probably
                     # stuck because the dmg mounter asks for a password or something similar.
                     stdout, stderr = process.communicate(timeout=(60 * 20))
                 except subprocess.TimeoutExpired:
-                    # the timeout above doesn't kill the process, so make sure it is gone
                     process.kill()
-                    # consume and log remaining output from stdout and stderr
                     stdout, stderr = process.communicate()
-                    ipsw_stdout = stdout.decode("utf-8")
-                    ipsw_stderr = stderr.decode("utf-8")
-                    logger.warning("ipsw timed out", extra={"ipsw_stdout": ipsw_stdout, "ipsw_stderr": ipsw_stderr})
                     span.set_status("deadline_exceeded")
-                    raise TimeoutError("IPSW extraction timed out and was terminated.")
+                    raise IpswExtractError(
+                        _format_ipsw_command_error(
+                            f"ipsw extract timed out after 1200s for {self.ipsw_path} ({arch_label})",
+                            command,
+                            stdout,
+                            stderr,
+                            [self.processing_dir],
+                        )
+                    )
 
                 if process.returncode != 0:
-                    error_msg = stderr.decode("utf-8")
                     span.set_status("internal_error")
-                    raise IpswExtractError(f"ipsw extract failed with {error_msg}")
+                    raise IpswExtractError(
+                        _format_ipsw_command_error(
+                            f"ipsw extract failed for {self.ipsw_path} ({arch_label}) with exit code {process.returncode}",
+                            command,
+                            stdout,
+                            stderr,
+                            [self.processing_dir],
+                        )
+                    )
 
             _log_directory_contents(self.processing_dir)
-            return find_extraction_dir(self.processing_dir)
+            extract_dir = find_extraction_dir(self.processing_dir)
+            if extract_dir is None:
+                span.set_status("internal_error")
+                raise IpswExtractError(
+                    _format_ipsw_command_error(
+                        f"ipsw extract produced no dyld_shared_cache extraction directory for {self.ipsw_path} ({arch_label})",
+                        command,
+                        stdout,
+                        stderr,
+                        [self.processing_dir],
+                    )
+                )
+
+            return extract_dir
 
     def run(self) -> Path:
         with sentry_sdk.start_span(op="ipsw.extract.sys_image", name="Symsort sys image"):
@@ -163,8 +203,6 @@ class IpswExtractor:
                     arch_span.set_data("arch", str(arch))
 
                     extract_dir = self._ipsw_extract_dsc(arch)
-                    if extract_dir is None:
-                        raise IpswExtractError(f"Couldn't find IPSW dyld_shared_cache extraction directory for {arch}")
                     _log_directory_contents(extract_dir)
 
                     split_dir = self._ipsw_split(extract_dir, arch)
@@ -191,8 +229,6 @@ class IpswExtractor:
             # We accumulate each architecture as a sub-dir in split_dir and let symsorter process them together
         else:
             extract_dir = self._ipsw_extract_dsc()
-            if extract_dir is None:
-                raise IpswExtractError("Couldn't find IPSW dyld_shared_cache extraction directory")
             _log_directory_contents(extract_dir)
 
             # Delete IPSW also in the non-macOS path since this is our contract to the caller
@@ -208,6 +244,7 @@ class IpswExtractor:
 
     def _symsort_sys_image(self) -> None:
         # mount the sys image (the process waits for sigint)
+        mount_output_lines: list[str] = []
         with sentry_sdk.start_span(op="subprocess.ipsw_mount", name="Mount sys image") as mount_span:
             mount_proc = subprocess.Popen(
                 ["ipsw", "mount", "sys", str(self.ipsw_path), "-V"],
@@ -223,6 +260,7 @@ class IpswExtractor:
                 line = mount_proc.stdout.readline()
                 if not line:
                     break
+                mount_output_lines.append(line.rstrip())
                 mount_point_match = mount_point_re.match(line)
                 if not mount_point_match:
                     continue
@@ -232,6 +270,12 @@ class IpswExtractor:
 
             if mount_point:
                 mount_span.set_data("mount_point", str(mount_point))
+            elif mount_output_lines:
+                logger.warning(
+                    "Could not determine sys image mount point for %s.\n%s",
+                    self.ipsw_path.name,
+                    format_subprocess_output("mount output", "\n".join(mount_output_lines)),
+                )
 
         try:
             # symsort the entire sys mount-point
@@ -266,7 +310,9 @@ class IpswExtractor:
                 break
 
         if dsc_root_file is None:
-            raise IpswExtractError(f"Failed to find dyld_shared_cache root-file in {extract_dir}")
+            raise IpswExtractError(
+                f"Failed to find dyld_shared_cache root-file in {extract_dir}\n{describe_directory(extract_dir)}"
+            )
 
         split_dir = self.processing_dir / "split_out"
         if arch is not None:
@@ -277,11 +323,20 @@ class IpswExtractor:
 
         result = dyld_split(dsc_root_file, split_dir_arch)
 
+        if result.returncode != 0:
+            raise IpswExtractError(
+                "\n".join(
+                    [
+                        f"ipsw dyld split failed for {dsc_root_file}",
+                        format_subprocess_result("dyld split", result),
+                        describe_directory(extract_dir),
+                        describe_directory(split_dir_arch),
+                    ]
+                )
+            )
+
         # we have very limited space on the GHA runners, so get rid of processed input data
         shutil.rmtree(extract_dir)
-
-        if result.returncode != 0:
-            raise IpswExtractError(f"ipsw dyld split failed with {result}")
 
         return split_dir
 
@@ -292,7 +347,16 @@ class IpswExtractor:
         result = symsort(output_dir, self.prefix, self.bundle_id, split_dir, ignore_errors)
 
         if result.returncode != 0:
-            raise IpswExtractError(f"Symsorter failed with {result}")
+            raise IpswExtractError(
+                "\n".join(
+                    [
+                        f"Symsorter failed for bundle {self.bundle_id}",
+                        format_subprocess_result("symsorter", result),
+                        describe_directory(split_dir),
+                        describe_directory(output_dir),
+                    ]
+                )
+            )
 
 
 class IpswExtractError(Exception):
@@ -330,7 +394,7 @@ def _log_directory_contents(directory: Path) -> None:
     logger.info("Contents of directory.", extra={"directory": directory, "contents": dir_contents})
 
 
-def _map_platform_to_prefix(ipsw_platform: IpswPlatform) -> str:
+def map_platform_to_prefix(ipsw_platform: IpswPlatform) -> str:
     # IPSWs differentiate between iPadOS and iOS while OTA doesn't, so we put them in the same prefix
     if ipsw_platform == IpswPlatform.IPADOS:
         prefix_platform = IpswPlatform.IOS

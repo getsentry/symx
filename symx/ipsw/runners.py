@@ -271,8 +271,9 @@ def extract(
                     except Exception as e:
                         sentry_sdk.capture_exception(e)
                         logger.warning(
-                            "Symbol extraction failed for %s, continuing with the next one.",
+                            "Symbol extraction failed for %s: %s. Continuing with the next one.",
                             source.file_name,
+                            e,
                             extra={"artifact": artifact, "source": source, "exception": e},
                         )
                         artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED

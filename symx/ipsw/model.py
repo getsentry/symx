@@ -46,7 +46,7 @@ class IpswSource(BaseModel):
     processing_state: ArtifactProcessingState = ArtifactProcessingState.INDEXED
     mirror_path: str | None = None
     last_run: int = github_run_id()
-    last_modified: datetime.datetime = datetime.datetime.today()
+    last_modified: datetime.datetime | None = datetime.datetime.today()
 
     @computed_field  # type: ignore[misc]
     @property

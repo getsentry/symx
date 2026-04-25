@@ -49,6 +49,17 @@ def test_download_url_to_file_without_content_length(tmp_path: Path) -> None:
     assert filepath.read_bytes() == b"data"
 
 
+def test_download_url_to_file_reports_status_via_callback(tmp_path: Path) -> None:
+    filepath = tmp_path / "out.bin"
+    messages: list[str] = []
+
+    with patch("symx.download.requests.get", return_value=_fake_response([b"data"], content_length="4")):
+        download_url_to_file("https://example.com/file", filepath, status_callback=messages.append)
+
+    assert any("Filesize:" in message for message in messages)
+    assert any("Downloaded" in message for message in messages)
+
+
 def test_download_url_to_file_raises_on_http_error(tmp_path: Path) -> None:
     """A 404/500 response must raise, otherwise the error body is silently written to disk."""
     filepath = tmp_path / "out.bin"
@@ -76,7 +87,7 @@ def test_try_download_retries_then_succeeds(tmp_path: Path) -> None:
     filepath = tmp_path / "out.bin"
     call_count = 0
 
-    def flaky(url: str, filepath: Path) -> None:
+    def flaky(url: str, filepath: Path, status_callback: object = None) -> None:
         nonlocal call_count
         call_count += 1
         if call_count < 3:
@@ -95,7 +106,7 @@ def test_try_download_retries_on_http_error(tmp_path: Path) -> None:
     filepath = tmp_path / "out.bin"
     attempts = 0
 
-    def flaky(url: str, filepath: Path) -> None:
+    def flaky(url: str, filepath: Path, status_callback: object = None) -> None:
         nonlocal attempts
         attempts += 1
         if attempts < 2:
@@ -106,6 +117,25 @@ def test_try_download_retries_on_http_error(tmp_path: Path) -> None:
         try_download_url_to_file("https://example.com/flaky", filepath, num_retries=5)
 
     assert attempts == 2
+    assert filepath.read_bytes() == b"ok"
+
+
+def test_try_download_reports_retry_status_via_callback(tmp_path: Path) -> None:
+    filepath = tmp_path / "out.bin"
+    messages: list[str] = []
+    attempts = 0
+
+    def flaky(url: str, filepath: Path, status_callback: object = None) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 2:
+            raise ConnectionError("transient")
+        filepath.write_bytes(b"ok")
+
+    with patch("symx.download.download_url_to_file", side_effect=flaky):
+        try_download_url_to_file("https://example.com/file", filepath, num_retries=2, status_callback=messages.append)
+
+    assert any("retrying" in message for message in messages)
     assert filepath.read_bytes() == b"ok"
 
 

@@ -117,7 +117,13 @@ def upload_symbol_binaries(bucket: Bucket, platform: str, bundle_id: str, binary
         bundle_index_path = dest_blob_prefix / platform / "bundles" / bundle_id
         blob = bucket.blob(str(bundle_index_path))
         if blob.exists():
-            logger.warning("Bundle %s already exists in symbol store for %s", bundle_id, platform)
+            # This is expected on reruns: symbol uploads are intentionally additive and never overwrite
+            # files already present in the store.
+            logger.warning(
+                "Bundle %s already exists in symbol store for %s; continuing with additive upload",
+                bundle_id,
+                platform,
+            )
 
         duplicate_count = 0
         new_count = 0

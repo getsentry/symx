@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import shutil
+from collections.abc import Callable
 from math import floor
 from pathlib import Path
 
@@ -13,8 +14,10 @@ from symx.model import HASH_BLOCK_SIZE, MiB
 
 logger = logging.getLogger(__name__)
 
+StatusCallback = Callable[[str], None]
 
-def check_sha1(hash_sum: str, filepath: Path) -> bool:
+
+def check_sha1(hash_sum: str, filepath: Path, status_callback: StatusCallback | None = None) -> bool:
     sha1sum = hashlib.sha1()
     with open(filepath, "rb") as f:
         block = f.read(HASH_BLOCK_SIZE)
@@ -23,8 +26,15 @@ def check_sha1(hash_sum: str, filepath: Path) -> bool:
             block = f.read(HASH_BLOCK_SIZE)
 
     sha1sum_result = sha1sum.hexdigest()
-    logger.info("Calculated sha1", extra={"sha1": sha1sum_result, "expected_sha1": hash_sum})
+    _emit_status(f"Calculated sha1 {sha1sum_result} (expected {hash_sum})", status_callback)
     return sha1sum_result == hash_sum
+
+
+def _emit_status(message: str, status_callback: StatusCallback | None) -> None:
+    if status_callback is not None:
+        status_callback(message)
+        return
+    logger.info(message)
 
 
 def list_dirs_in(dir_path: Path) -> list[Path]:
