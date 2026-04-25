@@ -1,3 +1,5 @@
+import pytest
+
 from symx.admin.actions import (
     AdminActionKind,
     AdminStore,
@@ -98,3 +100,11 @@ def test_apply_batch_request_and_result_round_trip() -> None:
 
     assert ApplyBatchRequest.from_json(request.to_json()) == request
     assert ApplyBatchResult.from_json(result.to_json()) == result
+
+
+def test_apply_batch_request_rejects_boolean_integer_payloads() -> None:
+    with pytest.raises(ValueError, match="Unexpected integer payload"):
+        ApplyBatchRequest.from_json(
+            '{"store":"ota","action":"queue_mirror","snapshot_id":"ipsw-1__ota-2","base_generation":true,'
+            '"reason":"retry mirror","targets":[{"ota_key":"ota-key"}]}'
+        )

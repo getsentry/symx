@@ -147,6 +147,46 @@ def test_build_snapshot_db_and_query_failures(tmp_path: Path) -> None:
     assert [row.last_run for row in ota_failures] == [400, 300]
 
 
+def test_build_snapshot_db_allows_missing_source_last_modified(tmp_path: Path) -> None:
+    snapshot_id = make_snapshot_id(909, 1001)
+    paths = snapshot_paths(tmp_path, snapshot_id)
+    paths.root.mkdir(parents=True)
+
+    source = _ipsw_source(
+        "missing-last-modified.ipsw",
+        ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED,
+        last_run=300,
+        last_modified=datetime(2024, 9, 3, 12, 0, 0),
+    ).model_copy(update={"last_modified": None})
+    ipsw_db = IpswArtifactDb(
+        artifacts={
+            "iOS_18.0_22A100": IpswArtifact(
+                platform=IpswPlatform.IOS,
+                version="18.0",
+                build="22A100",
+                released=date(2024, 9, 1),
+                release_status=IpswReleaseStatus.RELEASE,
+                sources=[source],
+            )
+        }
+    )
+
+    build_snapshot_db(
+        paths.db_path,
+        snapshot_id,
+        ipsw_db,
+        ipsw_generation=909,
+        ota_meta={},
+        ota_generation=1001,
+        workflow_run_id=123,
+        workflow_run_url="https://github.example/run/123",
+    )
+
+    rows = load_ipsw_rows(paths.db_path)
+    assert len(rows) == 1
+    assert rows[0].last_modified is None
+
+
 def test_row_queries_return_all_rows_by_default(tmp_path: Path) -> None:
     snapshot_id = make_snapshot_id(303, 404)
     paths = snapshot_paths(tmp_path, snapshot_id)

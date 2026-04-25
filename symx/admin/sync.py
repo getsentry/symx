@@ -274,7 +274,7 @@ def _find_single_file(root: Path, file_name: str) -> Path:
 
 
 def _coerce_int(value: object, source: Path, field_name: str) -> int:
-    if not isinstance(value, (int, str)):
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
         raise AdminSyncError(f"Unexpected {field_name} type in {source}")
     return int(value)
 

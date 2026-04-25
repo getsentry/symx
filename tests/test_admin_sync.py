@@ -6,8 +6,10 @@ from pathlib import Path
 
 from pydantic import HttpUrl
 
+import pytest
+
 from symx.admin.db import load_snapshot_info, read_manifest, snapshot_paths
-from symx.admin.sync import ADMIN_META_ARTIFACT, ADMIN_META_SUMMARY, run_sync
+from symx.admin.sync import ADMIN_META_ARTIFACT, ADMIN_META_SUMMARY, AdminSyncError, _coerce_int, run_sync
 from symx.ipsw.model import (
     IpswArtifact,
     IpswArtifactDb,
@@ -271,6 +273,11 @@ def test_run_sync_merges_partial_update_with_latest_local_snapshot(tmp_path: Pat
         "-f",
         "known_ota_generation=202",
     ]
+
+
+def test_sync_coerce_int_rejects_boolean_values(tmp_path: Path) -> None:
+    with pytest.raises(AdminSyncError, match="Unexpected ipsw_generation type"):
+        _coerce_int(True, tmp_path / "summary.json", "ipsw_generation")
 
 
 def test_run_sync_rebuilds_incomplete_snapshot(tmp_path: Path, monkeypatch) -> None:

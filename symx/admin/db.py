@@ -315,7 +315,7 @@ def build_snapshot_db(
                             source.processing_state.value,
                             source.mirror_path,
                             source.last_run,
-                            source.last_modified.isoformat(),
+                            source.last_modified.isoformat() if source.last_modified is not None else None,
                         ),
                     )
 

@@ -291,6 +291,6 @@ def _optional_str(value: object) -> str | None:
 
 
 def _coerce_int(value: object) -> int:
-    if not isinstance(value, (int, str)):
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
         raise ValueError("Unexpected integer payload")
     return int(value)
