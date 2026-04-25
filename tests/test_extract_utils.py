@@ -17,6 +17,7 @@ from subprocess import CompletedProcess
 
 from symx.ota.model import DSCSearchResult, OtaExtractError
 from symx.ota.extract import (
+    extract_ota,
     find_dsc,
     parse_cryptex_patch_output,
     parse_hdiutil_mount_output,
@@ -272,3 +273,49 @@ def test_find_dsc_generates_unique_split_dirs() -> None:
         assert len(results) == 2
         split_dirs = [r.split_dir for r in results]
         assert len(set(split_dirs)) == 2  # All unique
+
+
+# --- extract_ota tests ---
+
+
+def test_extract_ota_raises_detailed_error_when_no_dsc_extracted(monkeypatch: pytest.MonkeyPatch) -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_dir = Path(tmpdir) / "output"
+        image_dir = output_dir / "21A100__Device1,1"
+
+        def fake_run(args: list[str], capture_output: bool) -> CompletedProcess[bytes]:
+            image_dir.mkdir(parents=True, exist_ok=True)
+            if "-p" in args:
+                return CompletedProcess(args=args, returncode=0, stdout=b"pattern stdout", stderr=b"pattern stderr")
+            return CompletedProcess(args=args, returncode=1, stdout=b"literal stdout", stderr=b"literal stderr")
+
+        monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+
+        with pytest.raises(OtaExtractError, match="OTA extraction produced no dyld_shared_cache files") as exc_info:
+            extract_ota(Path("/tmp/test.ota"), output_dir)
+
+        message = str(exc_info.value)
+        assert "literal extract: exit=1" in message
+        assert "payloadv2 pattern extract: exit=0" in message
+        assert "literal stdout" in message
+        assert "pattern stderr" in message
+        assert str(image_dir) in message
+
+
+def test_extract_ota_falls_back_to_pattern_extract(monkeypatch: pytest.MonkeyPatch) -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_dir = Path(tmpdir) / "output"
+        image_dir = output_dir / "21A100__Device1,1"
+
+        def fake_run(args: list[str], capture_output: bool) -> CompletedProcess[bytes]:
+            image_dir.mkdir(parents=True, exist_ok=True)
+            if "-p" in args:
+                dsc_dir = image_dir / "System/Library/Caches/com.apple.dyld"
+                dsc_dir.mkdir(parents=True, exist_ok=True)
+                (dsc_dir / "dyld_shared_cache_arm64e").touch()
+                return CompletedProcess(args=args, returncode=0, stdout=b"", stderr=b"")
+            return CompletedProcess(args=args, returncode=1, stdout=b"", stderr=b"literal failed")
+
+        monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+
+        assert extract_ota(Path("/tmp/test.ota"), output_dir) == image_dir
