@@ -1,0 +1,90 @@
+name: Apply admin rerun batch
+permissions:
+  actions: write
+  contents: read
+  id-token: write
+
+run-name: >-
+  Admin ${{ inputs.action || 'apply' }} (${{ inputs.store || 'unknown' }}):
+  ${{ inputs.reason || 'no reason provided' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      store:
+        description: Store to mutate (ipsw or ota)
+        required: true
+        type: string
+      action:
+        description: Curated admin action (queue_mirror or queue_extract)
+        required: true
+        type: string
+      snapshot_id:
+        description: Local snapshot identifier the operator reviewed
+        required: true
+        type: string
+      base_generation:
+        description: Expected remote generation for the selected store
+        required: true
+        type: string
+      reason:
+        description: Operator reason for this rerun batch
+        required: true
+        type: string
+      request_json:
+        description: Serialized admin apply request payload
+        required: true
+        type: string
+
+jobs:
+  apply-admin-batch:
+    name: Apply admin rerun batch
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: projects/868781662168/locations/global/workloadIdentityPools/prod-github/providers/github-oidc-pool
+          service_account: symx-downloader@sac-prod-sa.iam.gserviceaccount.com
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        with:
+          version: ">= 363.0.0"
+
+      - name: Install dependencies
+        run: |
+          curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors https://astral.sh/uv/install.sh | sh
+          echo "PATH=/home/runner/.local/bin:$PATH" >> "$GITHUB_ENV"
+          export PATH="/home/runner/.local/bin:$PATH"
+          uv --version
+          uv sync
+
+      - name: Apply admin batch
+        id: apply
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SYMX_STORE: ${{ vars.SYMX_STORE }}
+          REQUEST_JSON: ${{ inputs.request_json }}
+        run: |
+          export PATH="/home/runner/.local/bin:$PATH"
+          mkdir -p admin-apply
+          uv run python -m symx admin apply-batch \
+            --storage "$SYMX_STORE" \
+            --request-json "$REQUEST_JSON" \
+            --result-path admin-apply/symx_admin_apply_result.json
+
+      - name: Upload admin apply result
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: symx-admin-apply-result
+          path: admin-apply/symx_admin_apply_result.json

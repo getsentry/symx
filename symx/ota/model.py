@@ -48,6 +48,8 @@ class OtaArtifact(BaseModel):
     hash_algorithm: str
 
     # currently the run_id of the GHA Workflow so we can look it up
+    # TODO: add a `last_modified` field like IPSW has and migrate old meta-data offline by
+    #  hydrating it from the existing JSON plus `last_run`/fetch context where available.
     last_run: int = github_run_id()
     processing_state: ArtifactProcessingState = ArtifactProcessingState.INDEXED
 

@@ -39,6 +39,16 @@ class Arch(StrEnum):
 
 
 class ArtifactProcessingState(StrEnum):
+    """Persisted processing states shared by the IPSW and OTA pipelines.
+
+    Important domain nuance:
+    - IPSW persists state per ``IpswSource``.
+    - OTA persists state per ``OtaArtifact``.
+
+    Most enum members are assigned by current automation. ``IGNORED`` is retained as a
+    manual/operator-only state and is not assigned by the checked-in workflows.
+    """
+
     # we retrieved metadata from apple and merged it with ours
     INDEXED = "indexed"
 
@@ -59,12 +69,6 @@ class ArtifactProcessingState(StrEnum):
     # we have meta-data that points to the mirror, but the file at the path is missing or can't be validated
     MIRROR_CORRUPT = "mirror_corrupt"
 
-    # we stored the extracted dyld_shared_cache (optimization, not implemented yet)
-    DSC_EXTRACTED = "dsc_extracted"
-
-    # there was no dyld_shared_cache in the artifact (for instance: because it was a partial update)
-    DSC_EXTRACTION_FAILED = "dsc_extraction_failed"
-
     # the artifact is a delta/patch OTA (contains image_patches/app_patches instead of full files)
     # these never contain a DSC and cannot be processed for symbols
     DELTA_OTA = "delta_ota"
@@ -80,11 +84,7 @@ class ArtifactProcessingState(StrEnum):
     # and it turns out there are debug-ids already present but with different hash or something similar.
     SYMBOL_EXTRACTION_FAILED = "symbol_extraction_failed"
 
-    # we already know that the bundle_id is too coarse to discriminate between sensible duplicates. we probably should
-    # merge rather ignore images that result in existing bundle-ids. until this is implemented we mark images with this.
-    BUNDLE_DUPLICATION_DETECTED = "bundle_duplication_detected"
-
-    # manually assigned to ignore artifact from any processing
+    # manual/operator-only concept, but not currently assigned in automation
     IGNORED = "ignored"
 
 
