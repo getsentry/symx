@@ -1,10 +1,14 @@
+import threading
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from rich.text import Text
 
 from symx.admin.github import GithubRunInfo
 from symx.admin.tui import (
+    AdminTui,
     BackgroundTaskEntry,
+    DownloadQueueItem,
     format_failure_table_title,
     format_ipsw_detail,
     format_ota_detail,
@@ -85,6 +89,40 @@ def test_task_formatting_shows_short_row_text_and_full_details() -> None:
     assert task.result_detail is not None
     assert task.result_detail in detail
     assert format_failure_table_title("IPSW failures", 12) == "IPSW failures (12)"
+
+
+def test_download_worker_idle_check_avoids_clearing_active_queue(tmp_path: Path) -> None:
+    app = AdminTui(cache_dir=tmp_path)
+    current = threading.current_thread()
+
+    app._download_worker_thread = current
+    assert app._finish_download_worker_if_idle() is True
+    assert app._download_worker_thread is None
+
+    app._download_queue.put(
+        DownloadQueueItem(
+            task_id="task-1",
+            item_label="test.ipsw",
+            row=IpswFailureRow(
+                last_modified="2024-09-03T12:34:56",
+                processing_state=ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED,
+                platform="iOS",
+                version="18.0",
+                build="22A100",
+                artifact_key="iOS_18.0_22A100",
+                file_name="test.ipsw",
+                link="https://updates.cdn-apple.com/test.ipsw",
+                sha1="abc123",
+                last_run=123,
+                mirror_path=None,
+            ),
+        )
+    )
+    app._download_worker_thread = current
+    assert app._finish_download_worker_if_idle() is False
+    assert app._download_worker_thread is current
+    app._download_queue.get_nowait()
+    app._download_queue.task_done()
 
 
 def test_format_ota_detail_includes_resolved_run_time() -> None:

@@ -206,14 +206,14 @@ def _load_ipsw_db(blob: Blob) -> IpswArtifactDb:
 
 
 def _load_ota_meta(blob: Blob) -> dict[str, OtaArtifact]:
-    payload = str(cast(Any, blob).download_as_text())
-    raw_payload: object = json.loads(payload)
+    raw_json = str(cast(Any, blob).download_as_text())
+    raw_payload: object = json.loads(raw_json)
     if not isinstance(raw_payload, dict):
         raise AdminRemoteApplyError("Unexpected OTA meta-data payload")
 
-    payload = cast(dict[object, object], raw_payload)
+    ota_payload = cast(dict[object, object], raw_payload)
     result: dict[str, OtaArtifact] = {}
-    for key, value in payload.items():
+    for key, value in ota_payload.items():
         if not isinstance(key, str):
             raise AdminRemoteApplyError("Unexpected OTA meta-data key type")
         if not isinstance(value, dict):

@@ -275,6 +275,7 @@ class AdminTui(App[None]):
         self._sync_thread: threading.Thread | None = None
         self._sync_activate_latest = False
         self._apply_thread: threading.Thread | None = None
+        self._download_worker_lock = threading.Lock()
         self._download_worker_thread: threading.Thread | None = None
         self._run_lookup_thread: threading.Thread | None = None
         self._download_queue: Queue[DownloadQueueItem] = Queue()
@@ -832,11 +833,12 @@ class AdminTui(App[None]):
         self._set_status(result.message)
 
     def _start_download_worker(self) -> None:
-        if self._download_worker_thread is not None and self._download_worker_thread.is_alive():
-            return
+        with self._download_worker_lock:
+            if self._download_worker_thread is not None and self._download_worker_thread.is_alive():
+                return
 
-        self._download_worker_thread = threading.Thread(target=self._run_download_worker, daemon=True)
-        self._download_worker_thread.start()
+            self._download_worker_thread = threading.Thread(target=self._run_download_worker, daemon=True)
+            self._download_worker_thread.start()
 
     def _run_download_worker(self) -> None:
         try:
@@ -844,7 +846,9 @@ class AdminTui(App[None]):
                 try:
                     item = self._download_queue.get(timeout=0.2)
                 except Empty:
-                    return
+                    if self._finish_download_worker_if_idle():
+                        return
+                    continue
 
                 self._task_update_from_thread(item.task_id, status="running", progress_detail="Downloading")
                 self._status_from_thread(f"Downloading {item.item_label}…")
@@ -862,7 +866,17 @@ class AdminTui(App[None]):
                 finally:
                     self._download_queue.task_done()
         finally:
-            self._download_worker_thread = None
+            with self._download_worker_lock:
+                if self._download_worker_thread is threading.current_thread():
+                    self._download_worker_thread = None
+
+    def _finish_download_worker_if_idle(self) -> bool:
+        with self._download_worker_lock:
+            if not self._download_queue.empty():
+                return False
+            if self._download_worker_thread is threading.current_thread():
+                self._download_worker_thread = None
+            return True
 
     def _download_progress_from_thread(self, task_id: str, message: str) -> None:
         self.call_from_thread(self._update_task, task_id, progress_detail=message)
