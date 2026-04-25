@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import json
 import subprocess
-import time
-from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TypedDict, cast
 
+from symx.admin import gh_workflows
 from symx.admin.actions import ApplyBatchRequest, ApplyBatchResult
+from symx.admin.gh_workflows import StatusCallback, WorkflowRun
 
 ADMIN_APPLY_WORKFLOW = "symx-admin-apply.yml"
 ADMIN_APPLY_ARTIFACT = "symx-admin-apply-result"
@@ -17,28 +15,6 @@ ADMIN_APPLY_RESULT_FILE = "symx_admin_apply_result.json"
 
 class AdminApplyError(RuntimeError):
     pass
-
-
-class WorkflowRun(TypedDict):
-    databaseId: int
-    status: str
-    conclusion: str | None
-    url: str
-    startedAt: str | None
-    updatedAt: str | None
-    displayTitle: str
-    event: str
-
-
-class WorkflowArtifact(TypedDict, total=False):
-    name: str
-
-
-class WorkflowArtifactList(TypedDict):
-    artifacts: list[WorkflowArtifact]
-
-
-StatusCallback = Callable[[str], None]
 
 
 def run_apply(request: ApplyBatchRequest, status_callback: StatusCallback | None = None) -> ApplyBatchResult:
@@ -95,20 +71,11 @@ def _workflow_dispatch_args(request: ApplyBatchRequest) -> list[str]:
 
 
 def _status(status_callback: StatusCallback | None, message: str) -> None:
-    if status_callback is not None:
-        status_callback(message)
+    gh_workflows.emit_status(status_callback, message)
 
 
 def _wait_for_new_run(workflow: str, before_max_run_id: int) -> WorkflowRun:
-    deadline = time.monotonic() + 120.0
-    while time.monotonic() < deadline:
-        runs = _list_workflow_runs(workflow, limit=10)
-        new_runs = [run for run in runs if int(run["databaseId"]) > before_max_run_id]
-        if new_runs:
-            return max(new_runs, key=lambda run: int(run["databaseId"]))
-        time.sleep(2.0)
-
-    raise AdminApplyError(f"Timed out waiting for a new workflow run for {workflow}")
+    return gh_workflows.wait_for_new_run(workflow, before_max_run_id, AdminApplyError, _list_workflow_runs)
 
 
 def _wait_for_run_completion(
@@ -116,76 +83,23 @@ def _wait_for_run_completion(
     run_id: int,
     status_callback: StatusCallback | None,
 ) -> WorkflowRun:
-    deadline = time.monotonic() + 3600.0
-    last_status: tuple[str, str | None] | None = None
-
-    while time.monotonic() < deadline:
-        runs = _list_workflow_runs(workflow, limit=20)
-        matching_run = next((run for run in runs if int(run["databaseId"]) == run_id), None)
-        if matching_run is None:
-            time.sleep(5.0)
-            continue
-
-        status = str(matching_run["status"])
-        conclusion = matching_run["conclusion"]
-        current_status = (status, conclusion)
-        if current_status != last_status:
-            if status == "completed":
-                _status(status_callback, f"Workflow #{run_id} completed with conclusion={conclusion}")
-            else:
-                _status(status_callback, f"Workflow #{run_id} status={status}")
-            last_status = current_status
-
-        if status == "completed":
-            return matching_run
-
-        time.sleep(5.0)
-
-    raise AdminApplyError(f"Timed out waiting for workflow run #{run_id} to complete")
+    return gh_workflows.wait_for_run_completion(workflow, run_id, status_callback, AdminApplyError, _list_workflow_runs)
 
 
 def _list_workflow_runs(workflow: str, limit: int) -> list[WorkflowRun]:
-    result = _run_gh_command(
-        [
-            "run",
-            "list",
-            "--workflow",
-            workflow,
-            "--limit",
-            str(limit),
-            "--json",
-            "databaseId,status,conclusion,url,startedAt,updatedAt,displayTitle,event",
-        ]
-    )
-    raw_payload: object = json.loads(result.stdout)
-    if not isinstance(raw_payload, list):
-        raise AdminApplyError(f"Unexpected workflow run payload for {workflow}")
-    return cast(list[WorkflowRun], raw_payload)
+    return gh_workflows.list_workflow_runs(workflow, limit, AdminApplyError, _run_gh_command)
 
 
 def _max_run_id(runs: list[WorkflowRun]) -> int:
-    if not runs:
-        return 0
-    return max(int(run["databaseId"]) for run in runs)
+    return gh_workflows.max_run_id(runs)
 
 
 def _run_has_artifact(run_id: int, artifact_name: str) -> bool:
-    result = _run_gh_command(["api", f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts"])
-    raw_payload: object = json.loads(result.stdout)
-    if not isinstance(raw_payload, dict):
-        raise AdminApplyError(f"Unexpected artifact payload for run #{run_id}")
-
-    payload = cast(WorkflowArtifactList, raw_payload)
-    return any(artifact.get("name") == artifact_name for artifact in payload.get("artifacts", []))
+    return gh_workflows.run_has_artifact(run_id, artifact_name, AdminApplyError, _run_gh_command)
 
 
 def _run_gh_command(args: list[str]) -> subprocess.CompletedProcess[str]:
-    cmd = ["gh", *args]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        stderr = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
-        raise AdminApplyError(f"gh command failed: {' '.join(cmd)}\n{stderr}")
-    return result
+    return gh_workflows.run_gh_command(args, AdminApplyError)
 
 
 def _load_apply_result(download_dir: Path) -> ApplyBatchResult:
@@ -194,7 +108,4 @@ def _load_apply_result(download_dir: Path) -> ApplyBatchResult:
 
 
 def _find_single_file(root: Path, file_name: str) -> Path:
-    matches = list(root.rglob(file_name))
-    if len(matches) != 1:
-        raise AdminApplyError(f"Expected exactly one {file_name} in {root}, found {len(matches)}")
-    return matches[0]
+    return gh_workflows.find_single_file(root, file_name, AdminApplyError)
