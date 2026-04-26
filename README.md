@@ -73,18 +73,16 @@ More detail, including the "who processes what when" walkthrough and the state d
 
 ## Production workflows at a glance
 
-All schedules below are GitHub Actions cron schedules, so they are in **UTC**.
-
-| Workflow                                                                                                                 | Schedule       | Runner              | Purpose                                       |
-|--------------------------------------------------------------------------------------------------------------------------|----------------|---------------------|-----------------------------------------------|
-| [`symx-ipsw-meta-sync.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ipsw-meta-sync.yml)       | `45 * * * *`   | Ubuntu              | Refresh `ipsw_meta.json` from AppleDB         |
-| [`symx-ipsw-mirror.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ipsw-mirror.yml)             | `15 */6 * * *` | Ubuntu              | Mirror recent indexed IPSWs into GCS          |
-| [`symx-ipsw-extract.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ipsw-extract.yml)           | `55 */6 * * *` | macOS               | Extract symbols from mirrored IPSWs           |
-| [`symx-ota-mirror.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ota-mirror.yml)               | `30 */6 * * *` | Ubuntu              | Refresh OTA metadata and mirror indexed OTAs  |
-| [`symx-ota-extract.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ota-extract.yml)             | `30 */6 * * *` | macOS               | Extract symbols from mirrored OTAs            |
-| [`symx-simulator-extract.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-simulator-extract.yml) | `0 4 * * *`    | GitHub macOS matrix | Upload simulator-cache symbols                |
-| [`symx-admin-meta-sync.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-admin-meta-sync.yml)     | on demand      | Ubuntu              | Build admin snapshot inputs for the local TUI |
-| [`symx-admin-apply.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-admin-apply.yml)             | on demand      | Ubuntu              | Apply curated admin rerun batches             |
+| Workflow                                                                                                                 | Runner              | Purpose                                       |
+|--------------------------------------------------------------------------------------------------------------------------|---------------------|-----------------------------------------------|
+| [`symx-ipsw-meta-sync.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ipsw-meta-sync.yml)       | Ubuntu              | Refresh `ipsw_meta.json` from AppleDB         |
+| [`symx-ipsw-mirror.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ipsw-mirror.yml)             | Ubuntu              | Mirror recent indexed IPSWs into GCS          |
+| [`symx-ipsw-extract.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ipsw-extract.yml)           | macOS               | Extract symbols from mirrored IPSWs           |
+| [`symx-ota-mirror.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ota-mirror.yml)               | Ubuntu              | Refresh OTA metadata and mirror indexed OTAs  |
+| [`symx-ota-extract.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ota-extract.yml)             | macOS               | Extract symbols from mirrored OTAs            |
+| [`symx-simulator-extract.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-simulator-extract.yml) | GitHub macOS matrix | Upload simulator-cache symbols                |
+| [`symx-admin-meta-sync.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-admin-meta-sync.yml)     | Ubuntu              | Build admin snapshot inputs for the local TUI |
+| [`symx-admin-apply.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-admin-apply.yml)             | Ubuntu              | Apply curated admin rerun batches             |
 
 The workflow files in [`.github/workflows/`](.github/workflows/) are the authoritative deployment config.
 
@@ -178,7 +176,7 @@ Useful entry points:
 
 A few things are important to know up front:
 
-- **GCS is the shared source of truth** for current workflow state.
+- **GCS is the shared source of truth** for the current workflow state.
 - **GitHub Actions is the scheduler/executor**, not just CI.
 - **IPSW sync is conservative**: new artifacts are inserted, but significant changes to already-known IPSW artifacts are only logged today, not automatically merged.
 - **OTA sync is more aggressive**: OTA metadata is merged into the stored set while preserving local processing progress.
@@ -198,7 +196,7 @@ A few things are important to know up front:
 
 Use `uv` for all local commands.
 
-Before considering a change done, run the full check suite:
+Before considering a change "done", run the full check suite:
 
 ```bash
 uv run ruff check --fix
