@@ -5,8 +5,11 @@ These are pure functions or functions with minimal I/O that support
 the OTA and IPSW extraction workflows.
 """
 
+import subprocess
 import tempfile
+import zipfile
 from pathlib import Path
+from typing import BinaryIO, cast
 
 import pytest
 
@@ -14,15 +17,19 @@ from symx.model import Arch
 from symx.ipsw.model import IpswPlatform
 from symx.ipsw.extract import (
     IpswExtractError,
+    IpswExtractTimeoutError,
     IpswExtractor,
-    map_platform_to_prefix,
     find_extraction_dir,
     generate_bundle_id,
+    map_platform_to_prefix,
 )
 from subprocess import CompletedProcess
 
 from symx.ota.model import DSCSearchResult, OtaExtractError
 from symx.ota.extract import (
+    DYLD_AA_INCLUDE_REGEX,
+    _probe_payload_with_aa,
+    _probe_unsupported_payload_format,
     extract_ota,
     find_dsc,
     parse_cryptex_patch_output,
@@ -440,3 +447,86 @@ def test_extract_ota_falls_back_to_pattern_extract(monkeypatch: pytest.MonkeyPat
         monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
 
         assert extract_ota(Path("/tmp/test.ota"), output_dir) == image_dir
+
+
+def test_probe_payload_with_aa_materializes_zip_member_for_subprocess_stdin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "test.zip"
+    payload_name = "AssetData/payloadv2/payload.000"
+    payload_bytes = b"payloadv2 bytes"
+
+    with zipfile.ZipFile(artifact, "w") as archive:
+        archive.writestr(payload_name, payload_bytes)
+
+    def fake_run(args: list[str], stdin: object | None = None, capture_output: bool = False) -> CompletedProcess[bytes]:
+        assert stdin is not None
+        stdin_file = cast(BinaryIO, stdin)
+        stdin_file.fileno()
+        assert stdin_file.read() == payload_bytes
+        return CompletedProcess(args=args, returncode=1, stdout=b"", stderr=b"Invalid/non-supported archive stream")
+
+    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+
+    result = _probe_payload_with_aa(artifact, payload_name, DYLD_AA_INCLUDE_REGEX)
+
+    assert result["payload"] == payload_name
+    assert result["returncode"] == 1
+    assert result["extracted_count"] == 0
+    assert result["unsupported_error"] is True
+
+
+def test_probe_unsupported_payload_format_returns_true_for_consistent_aa_legacy_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = Path("/tmp/test.zip")
+
+    monkeypatch.setattr("symx.ota.extract._ota_is_zip_archive", lambda artifact: True)
+    monkeypatch.setattr(
+        "symx.ota.extract._read_post_bom_dsc_matches",
+        lambda artifact: ["System/Library/Caches/com.apple.dyld/dyld_shared_cache_armv7k"],
+    )
+    monkeypatch.setattr(
+        "symx.ota.extract._payload_entry_names",
+        lambda artifact: ["AssetData/payloadv2/payload.000", "AssetData/payloadv2/payload.001"],
+    )
+
+    def fake_probe_payload_with_aa(artifact: Path, payload_name: str, pattern: str) -> dict[str, object]:
+        return {
+            "payload": payload_name,
+            "returncode": 1,
+            "stdout": None,
+            "stderr": "Invalid/non-supported archive stream",
+            "extracted_count": 0,
+            "unsupported_error": True,
+        }
+
+    monkeypatch.setattr("symx.ota.extract._probe_payload_with_aa", fake_probe_payload_with_aa)
+
+    assert _probe_unsupported_payload_format(artifact) is True
+
+
+def test_probe_unsupported_payload_format_returns_false_when_payload_extracts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = Path("/tmp/test.zip")
+
+    monkeypatch.setattr("symx.ota.extract._ota_is_zip_archive", lambda artifact: True)
+    monkeypatch.setattr(
+        "symx.ota.extract._read_post_bom_dsc_matches",
+        lambda artifact: ["System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e"],
+    )
+    monkeypatch.setattr("symx.ota.extract._payload_entry_names", lambda artifact: ["AssetData/payloadv2/payload.003"])
+    monkeypatch.setattr(
+        "symx.ota.extract._probe_payload_with_aa",
+        lambda artifact, payload_name, pattern: {
+            "payload": payload_name,
+            "returncode": 0,
+            "stdout": None,
+            "stderr": None,
+            "extracted_count": 1,
+            "unsupported_error": False,
+        },
+    )
+
+    assert _probe_unsupported_payload_format(artifact) is False

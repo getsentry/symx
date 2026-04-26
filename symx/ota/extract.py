@@ -4,9 +4,12 @@ import glob
 import logging
 import os
 import re
+import shutil
 import subprocess
 import tempfile
+import zipfile
 from pathlib import Path
+from typing import TypedDict
 
 import sentry_sdk
 
@@ -28,45 +31,170 @@ from symx.ota.model import (
     MountInfo,
     OtaExtractError,
     RecoveryOtaError,
+    UnsupportedOtaPayloadError,
 )
 
 logger = logging.getLogger(__name__)
 
+PAYLOAD_FILE_NAME_RE = re.compile(r"(^|.*/)payloadv2/payload\.\d+$")
+DYLD_BOM_ENTRY_RE = re.compile(
+    r"^(?:\./)?(?:System/DriverKit/)?System/Library/(?:dyld|Caches/com\.apple\.dyld)/dyld_shared_cache_[^\s/]+$"
+)
+DYLD_AA_INCLUDE_REGEX = r"(System/DriverKit/)?System/Library/(dyld|Caches/com\.apple\.dyld)/dyld_shared_cache_"
+UNSUPPORTED_AA_ERROR_MARKERS = (
+    "invalid/non-supported archive stream",
+    "archive stream read error (header)",
+)
+MAX_AA_PROBE_OUTPUT_CHARS = 500
 
-def _describe_extract_dirs(output_dir: Path) -> str:
+
+class PayloadAaProbeResult(TypedDict):
+    payload: str
+    returncode: int
+    stdout: str | None
+    stderr: str | None
+    extracted_count: int
+    unsupported_error: bool
+
+
+def _extract_dirs_data(output_dir: Path) -> list[dict[str, object]]:
+    if not output_dir.exists() or not output_dir.is_dir():
+        return []
+
     extract_dirs = list_dirs_in(output_dir)
-    if not extract_dirs:
-        return f"No image directories were created in {output_dir}"
-
-    lines = [f"Image directories created in {output_dir}:"]
+    results: list[dict[str, object]] = []
     for extract_dir in extract_dirs:
-        lines.append(f"- {extract_dir}")
-        if _dir_contains_dsc(extract_dir):
-            lines.append(f"  contains at least one {DYLD_SHARED_CACHE}* file")
-            continue
-
-        sample = describe_directory(extract_dir, max_entries=DEFAULT_DIRECTORY_SAMPLE_ENTRIES, indent="    ")
-        lines.extend(f"  {line}" for line in sample.splitlines())
-
-    return "\n".join(lines)
+        data = directory_data(extract_dir, max_entries=DEFAULT_DIRECTORY_SAMPLE_ENTRIES)
+        data["contains_dsc"] = _dir_contains_dsc(extract_dir)
+        results.append(data)
+    return results
 
 
-def _format_extract_ota_error(
-    artifact: Path,
-    output_dir: Path,
-    reason: str,
-    literal_result: subprocess.CompletedProcess[bytes],
-    pattern_result: subprocess.CompletedProcess[bytes] | None,
-) -> str:
-    return "\n".join(
-        [
-            reason,
-            format_subprocess_result("literal extract", literal_result),
-            format_subprocess_result("payloadv2 pattern extract", pattern_result),
-            _describe_extract_dirs(output_dir),
-            f"artifact: {artifact}",
-        ]
+def _should_probe_unsupported_payload(error: OtaExtractError) -> bool:
+    message = str(error)
+    return any(
+        marker in message
+        for marker in (
+            f"Could not find {DYLD_SHARED_CACHE}",
+            f"OTA extraction produced no {DYLD_SHARED_CACHE} files",
+            f"Couldn't find any {DYLD_SHARED_CACHE} paths",
+        )
     )
+
+
+def _ota_is_zip_archive(artifact: Path) -> bool:
+    try:
+        return zipfile.is_zipfile(artifact)
+    except OSError:
+        return False
+
+
+def _payload_entry_names(artifact: Path) -> list[str]:
+    with zipfile.ZipFile(artifact) as archive:
+        return [name for name in archive.namelist() if PAYLOAD_FILE_NAME_RE.search(name)]
+
+
+def _read_post_bom_dsc_matches(artifact: Path) -> list[str]:
+    with zipfile.ZipFile(artifact) as archive:
+        post_bom_name = next((name for name in archive.namelist() if name.endswith("post.bom")), None)
+        if post_bom_name is None:
+            return []
+
+        with tempfile.TemporaryDirectory(suffix="_ota_post_bom") as post_bom_tmp_dir:
+            bom_path = Path(post_bom_tmp_dir) / Path(post_bom_name).name
+            bom_path.write_bytes(archive.read(post_bom_name))
+            result = subprocess.run(["lsbom", str(bom_path)], capture_output=True, text=True)
+
+        if result.returncode != 0:
+            return []
+
+        matches: list[str] = []
+        for line in result.stdout.splitlines():
+            entry = line.split("\t", 1)[0].strip()
+            if DYLD_BOM_ENTRY_RE.match(entry):
+                matches.append(entry.removeprefix("./"))
+        return matches
+
+
+def _aa_result_indicates_unsupported_payload(stdout: str | bytes | None, stderr: str | bytes | None) -> bool:
+    combined = "\n".join(
+        part for part in (decode_subprocess_output(stdout), decode_subprocess_output(stderr)) if part
+    ).lower()
+    return any(marker in combined for marker in UNSUPPORTED_AA_ERROR_MARKERS)
+
+
+def _probe_payload_with_aa(artifact: Path, payload_name: str, pattern: str) -> PayloadAaProbeResult:
+    with tempfile.TemporaryDirectory(suffix="_ota_aa_probe") as aa_probe_dir:
+        output_dir = Path(aa_probe_dir) / "out"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        payload_input_path = Path(aa_probe_dir) / "payload_input.bin"
+
+        with zipfile.ZipFile(artifact) as archive:
+            with archive.open(payload_name) as payload_stream, payload_input_path.open("wb") as payload_input_file:
+                shutil.copyfileobj(payload_stream, payload_input_file)
+
+        with payload_input_path.open("rb") as payload_input_file:
+            result = subprocess.run(
+                ["aa", "extract", "-d", str(output_dir), "-include-regex", pattern],
+                stdin=payload_input_file,
+                capture_output=True,
+            )
+
+        extracted_count = sum(1 for path in output_dir.rglob("*") if path.is_file())
+        return {
+            "payload": payload_name,
+            "returncode": result.returncode,
+            "stdout": truncate_text(result.stdout, max_chars=MAX_AA_PROBE_OUTPUT_CHARS),
+            "stderr": truncate_text(result.stderr, max_chars=MAX_AA_PROBE_OUTPUT_CHARS),
+            "extracted_count": extracted_count,
+            "unsupported_error": _aa_result_indicates_unsupported_payload(result.stdout, result.stderr),
+        }
+
+
+def _probe_unsupported_payload_format(artifact: Path) -> bool:
+    with sentry_sdk.start_span(op="ota.extract.payload_probe", name="Probe unsupported OTA payload") as span:
+        span.set_data("artifact", str(artifact))
+
+        try:
+            if not _ota_is_zip_archive(artifact):
+                span.set_data("is_zip_archive", False)
+                return False
+
+            span.set_data("is_zip_archive", True)
+            bom_matches = _read_post_bom_dsc_matches(artifact)
+            span.set_data("post_bom_dsc_match_count", len(bom_matches))
+            span.set_data("post_bom_dsc_matches", bom_matches[:10])
+            if not bom_matches:
+                return False
+
+            payload_names = _payload_entry_names(artifact)
+            span.set_data("payload_probe_count", len(payload_names))
+            if not payload_names:
+                return False
+
+            results = [
+                _probe_payload_with_aa(artifact, payload_name, DYLD_AA_INCLUDE_REGEX) for payload_name in payload_names
+            ]
+            extracted_total = sum(result["extracted_count"] for result in results)
+            unsupported_errors = sum(1 for result in results if result["unsupported_error"])
+            other_errors = sum(1 for result in results if result["returncode"] != 0 and not result["unsupported_error"])
+            span.set_data(
+                "payload_probe_summary",
+                {
+                    "payloads_probed": len(results),
+                    "extracted_total": extracted_total,
+                    "unsupported_errors": unsupported_errors,
+                    "other_errors": other_errors,
+                },
+            )
+            span.set_data("payload_probe_results", results[:10])
+
+            unsupported = extracted_total == 0 and unsupported_errors > 0 and other_errors == 0
+            span.set_data("unsupported_payload_format", unsupported)
+            return unsupported
+        except (FileNotFoundError, OSError, ValueError, zipfile.BadZipFile) as exc:
+            span.set_data("payload_probe_error", str(exc))
+            return False
 
 
 def parse_cryptex_patch_output(stderr: str) -> dict[str, Path]:
@@ -301,15 +429,6 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
             raise OtaExtractError(f"Found more than one image directory in {artifact}")
         elif not _dir_contains_dsc(extract_dirs[0]):
             span.set_status("internal_error")
-            raise OtaExtractError(
-                _format_extract_ota_error(
-                    artifact,
-                    output_dir,
-                    f"OTA extraction produced no {DYLD_SHARED_CACHE} files for {artifact}",
-                    literal_result,
-                    pattern_result,
-                )
-            )
             span.set_data(
                 "extract_failure_reason", f"OTA extraction produced no {DYLD_SHARED_CACHE} files for {artifact}"
             )
@@ -368,6 +487,8 @@ def _process_ota_directly(
         error_cls = _classify_ota_failure(local_ota)
         if error_cls is not None:
             raise error_cls(f"{error_cls.__name__}: {local_ota}") from e
+        if _should_probe_unsupported_payload(e) and _probe_unsupported_payload_format(local_ota):
+            raise UnsupportedOtaPayloadError(f"Unsupported OTA payload format: {local_ota}") from e
         raise
 
     return []

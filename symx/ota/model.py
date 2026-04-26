@@ -149,6 +149,12 @@ class RecoveryOtaError(Exception):
     pass
 
 
+class UnsupportedOtaPayloadError(Exception):
+    """Raised when an OTA references a DSC but current tooling cannot extract its payload format."""
+
+    pass
+
+
 # -- Utilities --
 
 

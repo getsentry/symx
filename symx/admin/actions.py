@@ -265,6 +265,7 @@ def _excluded_states(store: AdminStore) -> frozenset[ArtifactProcessingState]:
             ArtifactProcessingState.INDEXED_DUPLICATE,
             ArtifactProcessingState.DELTA_OTA,
             ArtifactProcessingState.RECOVERY_OTA,
+            ArtifactProcessingState.UNSUPPORTED_OTA_PAYLOAD,
         }
     )
 

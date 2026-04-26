@@ -23,6 +23,7 @@ from symx.ota.model import (
     OtaStorage,
     OtaSymbolExtractor,
     RecoveryOtaError,
+    UnsupportedOtaPayloadError,
     parse_version_tuple,
 )
 from symx.ota.extract import extract_symbols
@@ -228,6 +229,20 @@ class OtaExtract:
                         artifacts_skipped += 1
                         sentry_sdk.metrics.count(
                             "ota.extract.skipped_recovery", 1, attributes={"platform": ota.platform}
+                        )
+                    except UnsupportedOtaPayloadError:
+                        logger.info(
+                            "Skipping unsupported OTA payload %s %s %s (current tooling cannot extract payloadv2 DSC)",
+                            ota.platform,
+                            ota.version,
+                            ota.build,
+                        )
+                        ota.processing_state = ArtifactProcessingState.UNSUPPORTED_OTA_PAYLOAD
+                        ota.update_last_run()
+                        self.storage.update_meta_item(key, ota)
+                        artifacts_skipped += 1
+                        sentry_sdk.metrics.count(
+                            "ota.extract.skipped_unsupported_payload", 1, attributes={"platform": ota.platform}
                         )
                     except OtaExtractError as e:
                         sentry_sdk.capture_exception(e)
