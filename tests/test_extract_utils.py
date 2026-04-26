@@ -108,6 +108,41 @@ def _make_ipsw_extractor(tmp_path: Path) -> IpswExtractor:
     return IpswExtractor(IpswPlatform.IPADOS, "iPad15,7_26.4.2_23E261_Restore.ipsw", processing_dir, ipsw_path)
 
 
+def test_ipsw_extract_dsc_timeout_preserves_timeout_contract_and_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    extractor = _make_ipsw_extractor(tmp_path)
+
+    class FakePopen:
+        def __init__(self, command: list[str], stdout: object = None, stderr: object = None) -> None:
+            self.command = command
+            self.returncode = 0
+
+        def __enter__(self) -> "FakePopen":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+            return False
+
+        def communicate(self, timeout: int | None = None) -> tuple[bytes, bytes]:
+            if timeout is not None:
+                raise subprocess.TimeoutExpired(self.command, timeout)
+            return b"timeout stdout", b"timeout stderr"
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
+
+    with pytest.raises(TimeoutError, match="ipsw extract timed out") as exc_info:
+        extractor._ipsw_extract_dsc()
+
+    assert isinstance(exc_info.value, IpswExtractTimeoutError)
+    assert isinstance(exc_info.value, IpswExtractError)
+    message = str(exc_info.value)
+    assert message == f"ipsw extract timed out for {extractor.ipsw_path} (default)"
+
+
 def test_ipsw_extract_dsc_raises_detailed_error_when_extract_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -136,10 +171,7 @@ def test_ipsw_extract_dsc_raises_detailed_error_when_extract_fails(
         extractor._ipsw_extract_dsc()
 
     message = str(exc_info.value)
-    assert "extract stdout" in message
-    assert "extract stderr" in message
-    assert "command: ipsw extract" in message
-    assert str(extractor.processing_dir) in message
+    assert message == f"ipsw extract failed for {extractor.ipsw_path} (default) with exit code 1"
 
 
 def test_ipsw_split_raises_detailed_error_when_split_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,10 +191,7 @@ def test_ipsw_split_raises_detailed_error_when_split_fails(tmp_path: Path, monke
         extractor._ipsw_split(extract_dir)
 
     message = str(exc_info.value)
-    assert "split stdout" in message
-    assert "split stderr" in message
-    assert str(extract_dir) in message
-    assert "split_out" in message
+    assert message == f"ipsw dyld split failed for {extract_dir / 'dyld_shared_cache_arm64e'}"
 
 
 def test_ipsw_symsort_raises_detailed_error_when_symsorter_fails(
@@ -184,10 +213,7 @@ def test_ipsw_symsort_raises_detailed_error_when_symsorter_fails(
         extractor._symsort(split_dir)
 
     message = str(exc_info.value)
-    assert "symsort stdout" in message
-    assert "symsort stderr" in message
-    assert str(split_dir) in message
-    assert str(extractor.symbols_dir()) in message
+    assert message == f"Symsorter failed for bundle {extractor.bundle_id}"
 
 
 # --- parse_cryptex_patch_output tests ---
@@ -394,11 +420,7 @@ def test_extract_ota_raises_detailed_error_when_no_dsc_extracted(monkeypatch: py
             extract_ota(Path("/tmp/test.ota"), output_dir)
 
         message = str(exc_info.value)
-        assert "literal extract: exit=1" in message
-        assert "payloadv2 pattern extract: exit=0" in message
-        assert "literal stdout" in message
-        assert "pattern stderr" in message
-        assert str(image_dir) in message
+        assert message == "OTA extraction produced no dyld_shared_cache files for /tmp/test.ota"
 
 
 def test_extract_ota_falls_back_to_pattern_extract(monkeypatch: pytest.MonkeyPatch) -> None:

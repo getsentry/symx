@@ -7,7 +7,7 @@ import logging
 
 import sentry_sdk
 
-from symx.diagnostics import describe_directory, format_command, format_subprocess_output, format_subprocess_result
+from symx.diagnostics import directory_data, format_command, subprocess_result_data, truncate_text
 from symx.model import Arch
 from symx.tools import dyld_split, symsort
 from symx.ipsw.model import IpswPlatform
@@ -17,21 +17,18 @@ logger = logging.getLogger(__name__)
 mount_point_re = re.compile(r".*Press Ctrl\+C to unmount '(.*)'")
 
 
-def _format_ipsw_command_error(
-    reason: str,
+def _ipsw_command_data(
     command: list[str],
     stdout: str | bytes | None,
     stderr: str | bytes | None,
     directories: list[Path],
-) -> str:
-    details = [
-        reason,
-        f"command: {format_command(command)}",
-        format_subprocess_output("stdout", stdout),
-        format_subprocess_output("stderr", stderr),
-    ]
-    details.extend(describe_directory(directory) for directory in directories)
-    return "\n".join(details)
+) -> dict[str, object]:
+    return {
+        "command": format_command(command),
+        "stdout": truncate_text(stdout),
+        "stderr": truncate_text(stderr),
+        "directories": [directory_data(directory) for directory in directories],
+    }
 
 
 def _compress_directory(directory: Path) -> Path:
@@ -135,6 +132,8 @@ class IpswExtractor:
                 command.append("-a")
                 command.append(str(arch))
 
+            stdout: bytes | None = None
+            stderr: bytes | None = None
             with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
                 try:
                     # IPSW extraction is typically finished in a couple of minutes. Everything beyond 20 minutes is probably
@@ -143,43 +142,27 @@ class IpswExtractor:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     stdout, stderr = process.communicate()
+                    span.set_data("ipsw_extract", _ipsw_command_data(command, stdout, stderr, [self.processing_dir]))
                     span.set_status("deadline_exceeded")
-                    raise IpswExtractError(
-                        _format_ipsw_command_error(
-                            f"ipsw extract timed out after 1200s for {self.ipsw_path} ({arch_label})",
-                            command,
-                            stdout,
-                            stderr,
-                            [self.processing_dir],
-                        )
-                    )
+                    raise IpswExtractTimeoutError(f"ipsw extract timed out for {self.ipsw_path} ({arch_label})")
 
+                span.set_data("ipsw_extract", _ipsw_command_data(command, stdout, stderr, [self.processing_dir]))
                 if process.returncode != 0:
                     span.set_status("internal_error")
                     raise IpswExtractError(
-                        _format_ipsw_command_error(
-                            f"ipsw extract failed for {self.ipsw_path} ({arch_label}) with exit code {process.returncode}",
-                            command,
-                            stdout,
-                            stderr,
-                            [self.processing_dir],
-                        )
+                        f"ipsw extract failed for {self.ipsw_path} ({arch_label}) with exit code {process.returncode}"
                     )
 
             _log_directory_contents(self.processing_dir)
             extract_dir = find_extraction_dir(self.processing_dir)
             if extract_dir is None:
+                span.set_data("processing_dir", directory_data(self.processing_dir))
                 span.set_status("internal_error")
                 raise IpswExtractError(
-                    _format_ipsw_command_error(
-                        f"ipsw extract produced no dyld_shared_cache extraction directory for {self.ipsw_path} ({arch_label})",
-                        command,
-                        stdout,
-                        stderr,
-                        [self.processing_dir],
-                    )
+                    f"ipsw extract produced no dyld_shared_cache extraction directory for {self.ipsw_path} ({arch_label})"
                 )
 
+            span.set_data("extract_dir", directory_data(extract_dir))
             return extract_dir
 
     def run(self) -> Path:
@@ -271,11 +254,8 @@ class IpswExtractor:
             if mount_point:
                 mount_span.set_data("mount_point", str(mount_point))
             elif mount_output_lines:
-                logger.warning(
-                    "Could not determine sys image mount point for %s.\n%s",
-                    self.ipsw_path.name,
-                    format_subprocess_output("mount output", "\n".join(mount_output_lines)),
-                )
+                mount_span.set_data("mount_output_preview", mount_output_lines[:20])
+                logger.warning("Could not determine sys image mount point for %s", self.ipsw_path.name)
 
         try:
             # symsort the entire sys mount-point
@@ -303,63 +283,62 @@ class IpswExtractor:
                     logger.error("Failed to clean up mount point", extra={"mount_point": mount_point, "exception": e})
 
     def _ipsw_split(self, extract_dir: Path, arch: Arch | None = None) -> Path:
-        dsc_root_file = None
-        for item in extract_dir.iterdir():
-            if item.is_file() and not item.suffix:  # check if it is a file and has no extension
-                dsc_root_file = item
-                break
+        arch_label = str(arch) if arch is not None else "default"
+        with sentry_sdk.start_span(op="ipsw.dyld_split", name=f"Split IPSW DSC ({arch_label})") as span:
+            dsc_root_file = None
+            for item in extract_dir.iterdir():
+                if item.is_file() and not item.suffix:  # check if it is a file and has no extension
+                    dsc_root_file = item
+                    break
 
-        if dsc_root_file is None:
-            raise IpswExtractError(
-                f"Failed to find dyld_shared_cache root-file in {extract_dir}\n{describe_directory(extract_dir)}"
-            )
+            span.set_data("extract_dir", directory_data(extract_dir))
+            if dsc_root_file is None:
+                span.set_status("internal_error")
+                raise IpswExtractError(f"Failed to find dyld_shared_cache root-file in {extract_dir}")
 
-        split_dir = self.processing_dir / "split_out"
-        if arch is not None:
-            # each arch gets its own sub-dir, so that the split-dir can be symsorted in one go
-            split_dir_arch = split_dir / str(arch)
-        else:
-            split_dir_arch = split_dir
+            split_dir = self.processing_dir / "split_out"
+            if arch is not None:
+                # each arch gets its own sub-dir, so that the split-dir can be symsorted in one go
+                split_dir_arch = split_dir / str(arch)
+            else:
+                split_dir_arch = split_dir
 
-        result = dyld_split(dsc_root_file, split_dir_arch)
+            span.set_data("dsc_root_file", str(dsc_root_file))
+            result = dyld_split(dsc_root_file, split_dir_arch)
+            span.set_data("dyld_split", subprocess_result_data(result))
+            span.set_data("split_dir", directory_data(split_dir_arch))
 
-        if result.returncode != 0:
-            raise IpswExtractError(
-                "\n".join(
-                    [
-                        f"ipsw dyld split failed for {dsc_root_file}",
-                        format_subprocess_result("dyld split", result),
-                        describe_directory(extract_dir),
-                        describe_directory(split_dir_arch),
-                    ]
-                )
-            )
+            if result.returncode != 0:
+                span.set_status("internal_error")
+                raise IpswExtractError(f"ipsw dyld split failed for {dsc_root_file}")
 
-        # we have very limited space on the GHA runners, so get rid of processed input data
-        shutil.rmtree(extract_dir)
+            # we have very limited space on the GHA runners, so get rid of processed input data
+            shutil.rmtree(extract_dir)
 
-        return split_dir
+            return split_dir
 
     def _symsort(self, split_dir: Path, ignore_errors: bool = False) -> None:
         output_dir = self.symbols_dir()
         logger.info("Symsorting %s -> %s", split_dir, output_dir)
 
-        result = symsort(output_dir, self.prefix, self.bundle_id, split_dir, ignore_errors)
+        with sentry_sdk.start_span(op="ipsw.symsort", name=f"Symsort IPSW {self.bundle_id}") as span:
+            span.set_data("bundle_id", self.bundle_id)
+            span.set_data("split_dir", directory_data(split_dir))
+            span.set_data("output_dir", directory_data(output_dir))
 
-        if result.returncode != 0:
-            raise IpswExtractError(
-                "\n".join(
-                    [
-                        f"Symsorter failed for bundle {self.bundle_id}",
-                        format_subprocess_result("symsorter", result),
-                        describe_directory(split_dir),
-                        describe_directory(output_dir),
-                    ]
-                )
-            )
+            result = symsort(output_dir, self.prefix, self.bundle_id, split_dir, ignore_errors)
+            span.set_data("symsort", subprocess_result_data(result))
+
+            if result.returncode != 0:
+                span.set_status("internal_error")
+                raise IpswExtractError(f"Symsorter failed for bundle {self.bundle_id}")
 
 
 class IpswExtractError(Exception):
+    pass
+
+
+class IpswExtractTimeoutError(IpswExtractError, TimeoutError):
     pass
 
 

@@ -10,7 +10,13 @@ from pathlib import Path
 
 import sentry_sdk
 
-from symx.diagnostics import DEFAULT_DIRECTORY_SAMPLE_ENTRIES, describe_directory, format_subprocess_result
+from symx.diagnostics import (
+    DEFAULT_DIRECTORY_SAMPLE_ENTRIES,
+    decode_subprocess_output,
+    directory_data,
+    subprocess_result_data,
+    truncate_text,
+)
 from symx.model import Arch
 from symx.fs import list_dirs_in, rmdir_if_exists
 from symx.tools import dyld_split, symsort as common_symsort
@@ -257,8 +263,6 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
             ],
             capture_output=True,
         )
-        span.set_data("literal_extract.returncode", literal_result.returncode)
-
         pattern_result: subprocess.CompletedProcess[bytes] | None = None
         extract_dirs = list_dirs_in(output_dir)
         if not extract_dirs or not _dir_contains_dsc(extract_dirs[0]):
@@ -281,31 +285,20 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
                 ],
                 capture_output=True,
             )
-            span.set_data("pattern_extract.returncode", pattern_result.returncode)
             extract_dirs = list_dirs_in(output_dir)
+
+        span.set_data("literal_extract", subprocess_result_data(literal_result))
+        span.set_data("payloadv2_pattern_extract", subprocess_result_data(pattern_result))
+        span.set_data("extract_dirs", _extract_dirs_data(output_dir))
 
         if not extract_dirs:
             span.set_status("internal_error")
-            raise OtaExtractError(
-                _format_extract_ota_error(
-                    artifact,
-                    output_dir,
-                    f"Could not find {DYLD_SHARED_CACHE} in {artifact}",
-                    literal_result,
-                    pattern_result,
-                )
-            )
+            span.set_data("extract_failure_reason", f"Could not find {DYLD_SHARED_CACHE} in {artifact}")
+            raise OtaExtractError(f"Could not find {DYLD_SHARED_CACHE} in {artifact}")
         elif len(extract_dirs) > 1:
             span.set_status("internal_error")
-            raise OtaExtractError(
-                _format_extract_ota_error(
-                    artifact,
-                    output_dir,
-                    f"Found more than one image directory in {artifact}",
-                    literal_result,
-                    pattern_result,
-                )
-            )
+            span.set_data("extract_failure_reason", f"Found more than one image directory in {artifact}")
+            raise OtaExtractError(f"Found more than one image directory in {artifact}")
         elif not _dir_contains_dsc(extract_dirs[0]):
             span.set_status("internal_error")
             raise OtaExtractError(
@@ -317,6 +310,10 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
                     pattern_result,
                 )
             )
+            span.set_data(
+                "extract_failure_reason", f"OTA extraction produced no {DYLD_SHARED_CACHE} files for {artifact}"
+            )
+            raise OtaExtractError(f"OTA extraction produced no {DYLD_SHARED_CACHE} files for {artifact}")
 
         logger.info("Successfully extracted DSC from %s", artifact.name)
 
