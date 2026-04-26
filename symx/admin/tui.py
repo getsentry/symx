@@ -856,7 +856,9 @@ class AdminTui(App[None]):
                     result = _download_selected_item(
                         item.row,
                         self.cache_dir,
-                        status_callback=lambda message: self._download_progress_from_thread(item.task_id, message),
+                        status_callback=lambda message, tid=item.task_id: self._download_progress_from_thread(
+                            tid, message
+                        ),
                     )
                 except Exception as exc:
                     self._task_update_from_thread(item.task_id, status="failed", result_detail=str(exc))

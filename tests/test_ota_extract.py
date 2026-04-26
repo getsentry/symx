@@ -15,6 +15,7 @@ from symx.ota.model import (
     OtaExtractError,
     OtaMetaData,
     RecoveryOtaError,
+    UnsupportedOtaPayloadError,
 )
 from symx.ota.runners import OtaExtract
 from tests.fakes import FakeTimeout
@@ -183,6 +184,20 @@ def test_recovery_ota_skipped(tmp_path: Path) -> None:
     OtaExtract(storage, extractor=extractor).extract(FakeTimeout(timedelta(minutes=5)))
 
     assert storage.artifacts["key1"].processing_state == ArtifactProcessingState.RECOVERY_OTA
+
+
+def test_unsupported_payload_ota_skipped(tmp_path: Path) -> None:
+    """OTAs unsupported by current payload tooling are terminal-stated and skipped."""
+    storage = MockStorage({"key1": make_ota_artifact(id="key1")})
+    ota_file = tmp_path / "test.zip"
+    ota_file.touch()
+    storage.load_ota_returns = ota_file
+
+    extractor = FakeOtaExtractor(error=UnsupportedOtaPayloadError("unsupported payload"))
+
+    OtaExtract(storage, extractor=extractor).extract(FakeTimeout(timedelta(minutes=5)))
+
+    assert storage.artifacts["key1"].processing_state == ArtifactProcessingState.UNSUPPORTED_OTA_PAYLOAD
 
 
 def test_timeout_stops_processing(tmp_path: Path) -> None:

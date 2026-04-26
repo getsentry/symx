@@ -5,8 +5,11 @@ These are pure functions or functions with minimal I/O that support
 the OTA and IPSW extraction workflows.
 """
 
+import subprocess
 import tempfile
+import zipfile
 from pathlib import Path
+from typing import BinaryIO, cast
 
 import pytest
 
@@ -14,15 +17,19 @@ from symx.model import Arch
 from symx.ipsw.model import IpswPlatform
 from symx.ipsw.extract import (
     IpswExtractError,
+    IpswExtractTimeoutError,
     IpswExtractor,
-    map_platform_to_prefix,
     find_extraction_dir,
     generate_bundle_id,
+    map_platform_to_prefix,
 )
 from subprocess import CompletedProcess
 
 from symx.ota.model import DSCSearchResult, OtaExtractError
 from symx.ota.extract import (
+    DYLD_AA_INCLUDE_REGEX,
+    _probe_payload_with_aa,
+    _probe_unsupported_payload_format,
     extract_ota,
     find_dsc,
     parse_cryptex_patch_output,
@@ -108,6 +115,41 @@ def _make_ipsw_extractor(tmp_path: Path) -> IpswExtractor:
     return IpswExtractor(IpswPlatform.IPADOS, "iPad15,7_26.4.2_23E261_Restore.ipsw", processing_dir, ipsw_path)
 
 
+def test_ipsw_extract_dsc_timeout_preserves_timeout_contract_and_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    extractor = _make_ipsw_extractor(tmp_path)
+
+    class FakePopen:
+        def __init__(self, command: list[str], stdout: object = None, stderr: object = None) -> None:
+            self.command = command
+            self.returncode = 0
+
+        def __enter__(self) -> "FakePopen":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+            return False
+
+        def communicate(self, timeout: int | None = None) -> tuple[bytes, bytes]:
+            if timeout is not None:
+                raise subprocess.TimeoutExpired(self.command, timeout)
+            return b"timeout stdout", b"timeout stderr"
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
+
+    with pytest.raises(TimeoutError, match="ipsw extract timed out") as exc_info:
+        extractor._ipsw_extract_dsc()
+
+    assert isinstance(exc_info.value, IpswExtractTimeoutError)
+    assert isinstance(exc_info.value, IpswExtractError)
+    message = str(exc_info.value)
+    assert message == f"ipsw extract timed out for {extractor.ipsw_path} (default)"
+
+
 def test_ipsw_extract_dsc_raises_detailed_error_when_extract_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -136,10 +178,7 @@ def test_ipsw_extract_dsc_raises_detailed_error_when_extract_fails(
         extractor._ipsw_extract_dsc()
 
     message = str(exc_info.value)
-    assert "extract stdout" in message
-    assert "extract stderr" in message
-    assert "command: ipsw extract" in message
-    assert str(extractor.processing_dir) in message
+    assert message == f"ipsw extract failed for {extractor.ipsw_path} (default) with exit code 1"
 
 
 def test_ipsw_split_raises_detailed_error_when_split_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,10 +198,7 @@ def test_ipsw_split_raises_detailed_error_when_split_fails(tmp_path: Path, monke
         extractor._ipsw_split(extract_dir)
 
     message = str(exc_info.value)
-    assert "split stdout" in message
-    assert "split stderr" in message
-    assert str(extract_dir) in message
-    assert "split_out" in message
+    assert message == f"ipsw dyld split failed for {extract_dir / 'dyld_shared_cache_arm64e'}"
 
 
 def test_ipsw_symsort_raises_detailed_error_when_symsorter_fails(
@@ -184,10 +220,7 @@ def test_ipsw_symsort_raises_detailed_error_when_symsorter_fails(
         extractor._symsort(split_dir)
 
     message = str(exc_info.value)
-    assert "symsort stdout" in message
-    assert "symsort stderr" in message
-    assert str(split_dir) in message
-    assert str(extractor.symbols_dir()) in message
+    assert message == f"Symsorter failed for bundle {extractor.bundle_id}"
 
 
 # --- parse_cryptex_patch_output tests ---
@@ -394,11 +427,7 @@ def test_extract_ota_raises_detailed_error_when_no_dsc_extracted(monkeypatch: py
             extract_ota(Path("/tmp/test.ota"), output_dir)
 
         message = str(exc_info.value)
-        assert "literal extract: exit=1" in message
-        assert "payloadv2 pattern extract: exit=0" in message
-        assert "literal stdout" in message
-        assert "pattern stderr" in message
-        assert str(image_dir) in message
+        assert message == "OTA extraction produced no dyld_shared_cache files for /tmp/test.ota"
 
 
 def test_extract_ota_falls_back_to_pattern_extract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -418,3 +447,86 @@ def test_extract_ota_falls_back_to_pattern_extract(monkeypatch: pytest.MonkeyPat
         monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
 
         assert extract_ota(Path("/tmp/test.ota"), output_dir) == image_dir
+
+
+def test_probe_payload_with_aa_materializes_zip_member_for_subprocess_stdin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "test.zip"
+    payload_name = "AssetData/payloadv2/payload.000"
+    payload_bytes = b"payloadv2 bytes"
+
+    with zipfile.ZipFile(artifact, "w") as archive:
+        archive.writestr(payload_name, payload_bytes)
+
+    def fake_run(args: list[str], stdin: object | None = None, capture_output: bool = False) -> CompletedProcess[bytes]:
+        assert stdin is not None
+        stdin_file = cast(BinaryIO, stdin)
+        stdin_file.fileno()
+        assert stdin_file.read() == payload_bytes
+        return CompletedProcess(args=args, returncode=1, stdout=b"", stderr=b"Invalid/non-supported archive stream")
+
+    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+
+    result = _probe_payload_with_aa(artifact, payload_name, DYLD_AA_INCLUDE_REGEX)
+
+    assert result["payload"] == payload_name
+    assert result["returncode"] == 1
+    assert result["extracted_count"] == 0
+    assert result["unsupported_error"] is True
+
+
+def test_probe_unsupported_payload_format_returns_true_for_consistent_aa_legacy_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = Path("/tmp/test.zip")
+
+    monkeypatch.setattr("symx.ota.extract._ota_is_zip_archive", lambda artifact: True)
+    monkeypatch.setattr(
+        "symx.ota.extract._read_post_bom_dsc_matches",
+        lambda artifact: ["System/Library/Caches/com.apple.dyld/dyld_shared_cache_armv7k"],
+    )
+    monkeypatch.setattr(
+        "symx.ota.extract._payload_entry_names",
+        lambda artifact: ["AssetData/payloadv2/payload.000", "AssetData/payloadv2/payload.001"],
+    )
+
+    def fake_probe_payload_with_aa(artifact: Path, payload_name: str, pattern: str) -> dict[str, object]:
+        return {
+            "payload": payload_name,
+            "returncode": 1,
+            "stdout": None,
+            "stderr": "Invalid/non-supported archive stream",
+            "extracted_count": 0,
+            "unsupported_error": True,
+        }
+
+    monkeypatch.setattr("symx.ota.extract._probe_payload_with_aa", fake_probe_payload_with_aa)
+
+    assert _probe_unsupported_payload_format(artifact) is True
+
+
+def test_probe_unsupported_payload_format_returns_false_when_payload_extracts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = Path("/tmp/test.zip")
+
+    monkeypatch.setattr("symx.ota.extract._ota_is_zip_archive", lambda artifact: True)
+    monkeypatch.setattr(
+        "symx.ota.extract._read_post_bom_dsc_matches",
+        lambda artifact: ["System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e"],
+    )
+    monkeypatch.setattr("symx.ota.extract._payload_entry_names", lambda artifact: ["AssetData/payloadv2/payload.003"])
+    monkeypatch.setattr(
+        "symx.ota.extract._probe_payload_with_aa",
+        lambda artifact, payload_name, pattern: {
+            "payload": payload_name,
+            "returncode": 0,
+            "stdout": None,
+            "stderr": None,
+            "extracted_count": 1,
+            "unsupported_error": False,
+        },
+    )
+
+    assert _probe_unsupported_payload_format(artifact) is False

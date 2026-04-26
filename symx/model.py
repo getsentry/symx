@@ -77,6 +77,11 @@ class ArtifactProcessingState(StrEnum):
     # boot environment (kernel + small rootfs + firmware) with no DSC
     RECOVERY_OTA = "recovery_ota"
 
+    # the artifact appears to reference a full DSC in post.bom, but the current extractor tooling
+    # (payloadv2 + Apple Archive handling) cannot materialize it. This is terminal for current
+    # automation, but semantically distinct from delta/recovery OTAs which inherently have no full DSC.
+    UNSUPPORTED_OTA_PAYLOAD = "unsupported_ota_payload"
+
     # the symx goal: symbols are stored for symbolicator to grab
     SYMBOLS_EXTRACTED = "symbols_extracted"
 
