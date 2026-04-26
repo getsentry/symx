@@ -411,7 +411,7 @@ stateDiagram-v2
     mirrored --> delta_ota: payload is a delta OTA
     mirrored --> recovery_ota: payload is a recovery OTA
     mirrored --> unsupported_ota_payload: DSC referenced but current payload tooling cannot extract it
-    mirrored --> indexed: mirrored zip missing; clear download_path and retry later
+    mirrored --> indexed: mirrored zip missing
 
     symbol_extraction_failed --> mirrored: migrate-storage / manual retry
 ```
