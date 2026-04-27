@@ -1,13 +1,26 @@
+import json
+import logging
+import plistlib
 import re
 import shutil
 import signal
 import subprocess
+import tempfile
+import zipfile
+from functools import lru_cache
 from pathlib import Path
-import logging
+from typing import Any, cast
+from urllib.parse import urlparse
 
 import sentry_sdk
 
-from symx.diagnostics import directory_data, format_command, subprocess_result_data, truncate_text
+from symx.diagnostics import (
+    decode_subprocess_output,
+    directory_data,
+    format_command,
+    subprocess_result_data,
+    truncate_text,
+)
 from symx.model import Arch
 from symx.tools import dyld_split, symsort
 from symx.ipsw.model import IpswPlatform
@@ -37,8 +50,111 @@ def _ipsw_command_data(
         "command": format_command(command),
         "stdout": truncate_text(stdout),
         "stderr": truncate_text(stderr),
+        "stderr_summary": _summarize_ipsw_stderr(stderr),
         "directories": [directory_data(directory) for directory in directories],
     }
+
+
+def _manifest_component_path(component: object) -> str | None:
+    if not isinstance(component, dict):
+        return None
+
+    component_dict = cast(dict[str, Any], component)
+    info = component_dict.get("Info")
+    if not isinstance(info, dict):
+        return None
+
+    info_dict = cast(dict[str, Any], info)
+    path = info_dict.get("Path")
+    if isinstance(path, str) and path:
+        return path
+    return None
+
+
+def inspect_ipsw_dmg_paths(ipsw_path: Path) -> dict[str, str | None]:
+    with zipfile.ZipFile(ipsw_path) as archive:
+        build_manifest_obj = plistlib.loads(archive.read("BuildManifest.plist"))
+
+    if not isinstance(build_manifest_obj, dict):
+        raise ValueError(f"Unexpected BuildManifest.plist structure in {ipsw_path}")
+
+    build_manifest = cast(dict[str, Any], build_manifest_obj)
+    build_identities_obj = build_manifest.get("BuildIdentities")
+    if not isinstance(build_identities_obj, list):
+        raise ValueError(f"BuildManifest.plist has no BuildIdentities list in {ipsw_path}")
+
+    build_identities = cast(list[object], build_identities_obj)
+    system_dmg: str | None = None
+    filesystem_dmgs: list[str] = []
+
+    for build_identity_obj in build_identities:
+        if not isinstance(build_identity_obj, dict):
+            continue
+
+        build_identity = cast(dict[str, Any], build_identity_obj)
+        manifest_obj = build_identity.get("Manifest")
+        if not isinstance(manifest_obj, dict):
+            continue
+
+        manifest = cast(dict[str, Any], manifest_obj)
+        if system_dmg is None:
+            system_dmg = _manifest_component_path(manifest.get("Cryptex1,SystemOS"))
+
+        filesystem_dmg = _manifest_component_path(manifest.get("OS"))
+        if filesystem_dmg is None:
+            continue
+
+        info_obj = build_identity.get("Info")
+        variant = None
+        if isinstance(info_obj, dict):
+            info = cast(dict[str, Any], info_obj)
+            variant_obj = info.get("Variant")
+            if isinstance(variant_obj, str):
+                variant = variant_obj
+        if variant is not None and "Recovery" in variant:
+            continue
+
+        if filesystem_dmg not in filesystem_dmgs:
+            filesystem_dmgs.append(filesystem_dmg)
+
+    filesystem_dmg = filesystem_dmgs[0] if len(filesystem_dmgs) == 1 else None
+    selected_dmg = system_dmg if system_dmg is not None else filesystem_dmg
+
+    return {
+        "system": system_dmg,
+        "filesystem": filesystem_dmg,
+        "selected": selected_dmg,
+    }
+
+
+def _extract_ipsw_member(ipsw_path: Path, member_name: str, output_path: Path) -> Path:
+    with zipfile.ZipFile(ipsw_path) as archive:
+        with archive.open(member_name) as src, output_path.open("wb") as dst:
+            shutil.copyfileobj(src, dst)
+    return output_path
+
+
+def _parse_fcs_key_url(output: str | bytes | None) -> str | None:
+    text = _strip_ansi(decode_subprocess_output(output))
+    if not text:
+        return None
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for idx, line in enumerate(lines):
+        if line != _FCS_KEY_URL_LABEL:
+            continue
+        if idx + 1 < len(lines):
+            return lines[idx + 1]
+
+    return None
+
+
+def _fcs_key_id_from_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    parsed = urlparse(url)
+    key_id = Path(parsed.path).name
+    return key_id or None
 
 
 def _compress_directory(directory: Path) -> Path:
@@ -115,6 +231,96 @@ class IpswExtractor:
             raise ValueError(f"IPSW path is expected to be a file: {ipsw_path}")
 
         self.ipsw_path = ipsw_path
+        self._aea_preflight_complete = False
+
+    def _ipsw_aea_preflight(self) -> None:
+        if self._aea_preflight_complete:
+            return
+
+        with sentry_sdk.start_span(op="ipsw.preflight.aea", name="IPSW AEA preflight") as span:
+            span.set_data("ipsw_path", str(self.ipsw_path))
+
+            try:
+                dmg_paths = inspect_ipsw_dmg_paths(self.ipsw_path)
+            except Exception as error:
+                span.set_data("preflight_error", f"failed to inspect IPSW DMG metadata: {error}")
+                logger.warning("Failed to inspect IPSW AEA metadata for %s: %s", self.ipsw_path.name, error)
+                self._aea_preflight_complete = True
+                return
+
+            span.set_data("ipsw_dmg_paths", dmg_paths)
+            selected_dmg = dmg_paths.get("selected")
+            if not isinstance(selected_dmg, str) or not selected_dmg.endswith(".aea"):
+                self._aea_preflight_complete = True
+                return
+
+            probe_data: dict[str, object] = {
+                "selected_dmg": selected_dmg,
+                "system_dmg": dmg_paths.get("system"),
+                "filesystem_dmg": dmg_paths.get("filesystem"),
+            }
+            pem_db_path = vendored_ipsw_pem_db_path()
+            if pem_db_path is not None:
+                probe_data["pem_db_path"] = str(pem_db_path)
+
+            with tempfile.TemporaryDirectory(suffix="_ipsw_aea_probe") as tmpdir:
+                temp_dir = Path(tmpdir)
+                extracted_aea = temp_dir / Path(selected_dmg).name
+
+                try:
+                    _extract_ipsw_member(self.ipsw_path, selected_dmg, extracted_aea)
+                except Exception as error:
+                    span.set_data("preflight_error", f"failed to extract AEA member {selected_dmg}: {error}")
+                    logger.warning(
+                        "Failed to extract IPSW AEA preflight member %s from %s: %s",
+                        selected_dmg,
+                        self.ipsw_path.name,
+                        error,
+                    )
+                    self._aea_preflight_complete = True
+                    return
+
+                info_command = ["ipsw", "--no-color", "fw", "aea", "--info", str(extracted_aea)]
+                info_result = subprocess.run(info_command, capture_output=True)
+                info_command_data = _ipsw_command_data(info_command, info_result.stdout, info_result.stderr, [temp_dir])
+                info_command_data.update(probe_data)
+                span.set_data("aea_info", info_command_data)
+                if info_result.returncode != 0:
+                    span.set_status("internal_error")
+                    summary = _summarize_ipsw_stderr(info_result.stderr) or "ipsw fw aea --info failed"
+                    raise IpswExtractError(f"IPSW AEA preflight failed for {self.ipsw_path}: {summary}")
+
+                fcs_key_url = _parse_fcs_key_url(info_result.stdout)
+                fcs_key_id = _fcs_key_id_from_url(fcs_key_url)
+                vendored_db_hit = False
+                if fcs_key_id is not None:
+                    vendored_db_hit = fcs_key_id in _vendored_ipsw_pem_db_keys()
+
+                probe_data["fcs_key_url"] = fcs_key_url
+                probe_data["fcs_key_id"] = fcs_key_id
+                probe_data["vendored_db_hit"] = vendored_db_hit
+                span.set_data("aea_probe", probe_data)
+
+                key_command = ["ipsw", "--no-color", "fw", "aea", "--key"]
+                if pem_db_path is not None:
+                    key_command.extend(["--pem-db", str(pem_db_path)])
+                key_command.append(str(extracted_aea))
+
+                key_result = subprocess.run(key_command, capture_output=True)
+                key_command_data = _ipsw_command_data(key_command, key_result.stdout, key_result.stderr, [temp_dir])
+                key_command_data.update(probe_data)
+                span.set_data("aea_key_probe", key_command_data)
+                if key_result.returncode != 0:
+                    span.set_status("internal_error")
+                    summary = _summarize_ipsw_stderr(key_result.stderr) or "ipsw fw aea --key failed"
+                    raise IpswExtractError(
+                        f"IPSW AEA preflight failed for {self.ipsw_path}: "
+                        f"selected_dmg={selected_dmg}; system_dmg={dmg_paths.get('system')}; "
+                        f"filesystem_dmg={dmg_paths.get('filesystem')}; fcs_key={fcs_key_id or '<unknown>'}; "
+                        f"vendored_db_hit={vendored_db_hit}; {summary}"
+                    )
+
+        self._aea_preflight_complete = True
 
     def symbols_dir(self) -> Path:
         return self.processing_dir / "symbols"
@@ -163,8 +369,10 @@ class IpswExtractor:
                 span.set_data("ipsw_extract", _ipsw_command_data(command, stdout, stderr, [self.processing_dir]))
                 if process.returncode != 0:
                     span.set_status("internal_error")
+                    stderr_summary = _summarize_ipsw_stderr(stderr)
+                    detail = f": {stderr_summary}" if stderr_summary else ""
                     raise IpswExtractError(
-                        f"ipsw extract failed for {self.ipsw_path} ({arch_label}) with exit code {process.returncode}"
+                        f"ipsw extract failed for {self.ipsw_path} ({arch_label}) with exit code {process.returncode}{detail}"
                     )
 
             _log_directory_contents(self.processing_dir)
@@ -180,6 +388,7 @@ class IpswExtractor:
             return extract_dir
 
     def run(self) -> Path:
+        self._ipsw_aea_preflight()
         with sentry_sdk.start_span(op="ipsw.extract.sys_image", name="Symsort sys image"):
             self._symsort_sys_image()
         with sentry_sdk.start_span(op="ipsw.extract.dsc", name=f"Extract+split+symsort DSC ({self.platform})"):
@@ -273,8 +482,16 @@ class IpswExtractor:
             if mount_point:
                 mount_span.set_data("mount_point", str(mount_point))
             elif mount_output_lines:
+                mount_output = "\n".join(mount_output_lines)
+                mount_summary = _summarize_ipsw_stderr(mount_output)
                 mount_span.set_data("mount_output_preview", mount_output_lines[:20])
-                logger.warning("Could not determine sys image mount point for %s", self.ipsw_path.name)
+                mount_span.set_data("mount_output_summary", mount_summary)
+                if mount_summary:
+                    logger.warning(
+                        "Could not determine sys image mount point for %s: %s", self.ipsw_path.name, mount_summary
+                    )
+                else:
+                    logger.warning("Could not determine sys image mount point for %s", self.ipsw_path.name)
 
         try:
             # symsort the entire sys mount-point
@@ -282,14 +499,15 @@ class IpswExtractor:
                 self._symsort(mount_point, ignore_errors=True)
         finally:
             # SIGINT the mount process and wait for it to unmount
-            mount_proc.send_signal(signal.SIGINT)
-            try:
-                # Wait for process to cleanly unmount (timeout after 60 seconds)
-                mount_proc.wait(timeout=60)
-            except subprocess.TimeoutExpired:
-                logger.warning("Mount process did not terminate after SIGINT, killing it")
-                mount_proc.kill()
-                mount_proc.wait()
+            if mount_proc.poll() is None:
+                mount_proc.send_signal(signal.SIGINT)
+                try:
+                    # Wait for process to cleanly unmount (timeout after 60 seconds)
+                    mount_proc.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    logger.warning("Mount process did not terminate after SIGINT, killing it")
+                    mount_proc.kill()
+                    mount_proc.wait()
 
             # Clean up mount point directory if it still exists (in case unmount failed)
             if mount_point and mount_point.exists():
@@ -375,6 +593,65 @@ def find_extraction_dir(processing_dir: Path) -> Path | None:
                 extra={"directory": item},
             )
             return item
+    return None
+
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+_LEADING_IPSW_GLYPH_RE = re.compile(r"^\s*[•⨯]\s*")
+_ERROR_SUMMARY_MARKERS = (
+    "error",
+    "failed",
+    "invalid",
+    "not found",
+    "unable",
+    "unknown flag",
+    "must specify",
+)
+_IGNORED_IPSW_HELP_PREFIXES = ("Usage:", "Aliases:", "Examples:", "Flags:", "Global Flags:")
+_FCS_KEY_URL_LABEL = "[com.apple.wkms.fcs-key-url]:"
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", text)
+
+
+def _normalize_ipsw_output_line(line: str) -> str:
+    return _LEADING_IPSW_GLYPH_RE.sub("", line).strip()
+
+
+@lru_cache(maxsize=1)
+def _vendored_ipsw_pem_db_keys() -> frozenset[str]:
+    pem_db_path = vendored_ipsw_pem_db_path()
+    if pem_db_path is None:
+        return frozenset()
+
+    with pem_db_path.open() as handle:
+        raw_data_obj = json.load(handle)
+
+    if not isinstance(raw_data_obj, dict):
+        raise ValueError(f"Vendored IPSW PEM DB must be a JSON object: {pem_db_path}")
+
+    raw_data = cast(dict[object, object], raw_data_obj)
+    return frozenset(str(key) for key in raw_data)
+
+
+def _summarize_ipsw_stderr(stderr: str | bytes | None) -> str | None:
+    text = decode_subprocess_output(stderr)
+    if not text:
+        return None
+
+    stripped = _strip_ansi(text)
+    lines = [_normalize_ipsw_output_line(line) for line in stripped.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    for line in reversed(lines):
+        if line.startswith(_IGNORED_IPSW_HELP_PREFIXES):
+            continue
+        lowered = line.lower()
+        if any(marker in lowered for marker in _ERROR_SUMMARY_MARKERS):
+            return line
+
     return None
 
 
