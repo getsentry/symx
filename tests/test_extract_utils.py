@@ -181,6 +181,106 @@ def test_ipsw_extract_dsc_raises_detailed_error_when_extract_fails(
     assert message == f"ipsw extract failed for {extractor.ipsw_path} (default) with exit code 1"
 
 
+def test_ipsw_extract_dsc_passes_vendored_pem_db_when_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    extractor = _make_ipsw_extractor(tmp_path)
+    pem_db = tmp_path / "fcs-keys.json"
+    pem_db.write_text("{}")
+    expected_extract_dir = extractor.processing_dir / "23E261__iPad15,7"
+    expected_extract_dir.mkdir()
+    commands: list[list[str]] = []
+
+    class FakePopen:
+        def __init__(self, command: list[str], stdout: object = None, stderr: object = None) -> None:
+            commands.append(command)
+            self.command = command
+            self.returncode = 0
+
+        def __enter__(self) -> "FakePopen":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+            return False
+
+        def communicate(self, timeout: int | None = None) -> tuple[bytes, bytes]:
+            return b"extract stdout", b"extract stderr"
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    monkeypatch.setattr("symx.ipsw.extract.vendored_ipsw_pem_db_path", lambda: pem_db)
+    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
+
+    assert extractor._ipsw_extract_dsc() == expected_extract_dir
+    assert commands == [
+        [
+            "ipsw",
+            "extract",
+            str(extractor.ipsw_path),
+            "-d",
+            "-o",
+            str(extractor.processing_dir),
+            "-V",
+            "--pem-db",
+            str(pem_db),
+        ]
+    ]
+
+
+def test_ipsw_symsort_sys_image_passes_vendored_pem_db_when_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    extractor = _make_ipsw_extractor(tmp_path)
+    pem_db = tmp_path / "fcs-keys.json"
+    pem_db.write_text("{}")
+    mount_point = tmp_path / "mount-point"
+    mount_point.mkdir()
+    commands: list[list[str]] = []
+    symsort_calls: list[tuple[Path, bool]] = []
+
+    class FakeStdout:
+        def __init__(self, lines: list[str]) -> None:
+            self._lines = iter(lines)
+
+        def readline(self) -> str:
+            return next(self._lines, "")
+
+    class FakePopen:
+        def __init__(
+            self,
+            command: list[str],
+            stdout: object = None,
+            stderr: object = None,
+            bufsize: int | None = None,
+            text: bool | None = None,
+        ) -> None:
+            commands.append(command)
+            self.stdout = FakeStdout([f"Press Ctrl+C to unmount '{mount_point}'\n", ""])
+
+        def send_signal(self, sig: int) -> None:
+            return None
+
+        def wait(self, timeout: int | None = None) -> int:
+            return 0
+
+        def kill(self) -> None:
+            return None
+
+    monkeypatch.setattr("symx.ipsw.extract.vendored_ipsw_pem_db_path", lambda: pem_db)
+    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
+    monkeypatch.setattr(
+        IpswExtractor,
+        "_symsort",
+        lambda self, split_dir, ignore_errors=False: symsort_calls.append((split_dir, ignore_errors)),
+    )
+
+    extractor._symsort_sys_image()
+
+    assert commands == [["ipsw", "mount", "sys", str(extractor.ipsw_path), "-V", "--pem-db", str(pem_db)]]
+    assert symsort_calls == [(mount_point, True)]
+
+
 def test_ipsw_split_raises_detailed_error_when_split_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     extractor = _make_ipsw_extractor(tmp_path)
     extract_dir = extractor.processing_dir / "23E261__iPad15,7"

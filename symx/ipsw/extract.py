@@ -17,6 +17,16 @@ logger = logging.getLogger(__name__)
 mount_point_re = re.compile(r".*Press Ctrl\+C to unmount '(.*)'")
 
 
+_VENDORED_PEM_DB = Path(__file__).resolve().parent / "data" / "fcs-keys.json"
+
+
+def vendored_ipsw_pem_db_path() -> Path | None:
+    """Return the vendored IPSW AEA PEM DB if it is available in the checkout/package."""
+    if _VENDORED_PEM_DB.is_file():
+        return _VENDORED_PEM_DB
+    return None
+
+
 def _ipsw_command_data(
     command: list[str],
     stdout: str | bytes | None,
@@ -128,6 +138,10 @@ class IpswExtractor:
                 "-V",
             ]
 
+            pem_db_path = vendored_ipsw_pem_db_path()
+            if pem_db_path is not None:
+                command.extend(["--pem-db", str(pem_db_path)])
+
             if arch is not None:
                 command.append("-a")
                 command.append(str(arch))
@@ -229,8 +243,13 @@ class IpswExtractor:
         # mount the sys image (the process waits for sigint)
         mount_output_lines: list[str] = []
         with sentry_sdk.start_span(op="subprocess.ipsw_mount", name="Mount sys image") as mount_span:
+            mount_command = ["ipsw", "mount", "sys", str(self.ipsw_path), "-V"]
+            pem_db_path = vendored_ipsw_pem_db_path()
+            if pem_db_path is not None:
+                mount_command.extend(["--pem-db", str(pem_db_path)])
+
             mount_proc = subprocess.Popen(
-                ["ipsw", "mount", "sys", str(self.ipsw_path), "-V"],
+                mount_command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 bufsize=1,
