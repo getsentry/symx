@@ -166,6 +166,36 @@ def test_preview_target_against_snapshot_uses_snapshot_rows_and_blocks_missing_e
     assert ota_preview.note == "download_path is required to queue extract"
 
 
+def test_preview_target_against_snapshot_uses_ipsw_mirror_path_label_for_extract_errors() -> None:
+    ipsw_row = IpswSourceRow(
+        last_modified="2024-09-03T12:34:56",
+        processing_state=ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED,
+        platform="iOS",
+        version="18.0",
+        build="22A100",
+        artifact_key="iOS_18.0_22A100",
+        file_name="test.ipsw",
+        link="https://updates.cdn-apple.com/test.ipsw",
+        sha1="abc123",
+        last_run=123,
+        mirror_path=None,
+    )
+
+    ipsw_preview = preview_target_against_snapshot(
+        AdminStore.IPSW,
+        AdminActionKind.QUEUE_EXTRACT,
+        IpswTarget(artifact_key=ipsw_row.artifact_key, link=ipsw_row.link),
+        {f"{ipsw_row.artifact_key}::{ipsw_row.link}": ipsw_row},
+        {},
+    )
+
+    assert ipsw_preview.allowed is False
+    assert ipsw_preview.current_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
+    assert ipsw_preview.resulting_state is None
+    assert ipsw_preview.row_label == "test.ipsw"
+    assert ipsw_preview.note == "mirror_path is required to queue extract"
+
+
 def test_validate_pending_batch_against_snapshot_reports_missing_rows() -> None:
     batch = PendingBatch(
         store=AdminStore.OTA,

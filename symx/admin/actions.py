@@ -225,13 +225,17 @@ def snapshot_generation_for_store(snapshot_info: SnapshotInfo, store: AdminStore
 
 
 def _create_target_preview(
-    action: AdminActionKind, processing_state: ArtifactProcessingState, mirror_path: str | None, label: str
+    store: AdminStore,
+    action: AdminActionKind,
+    processing_state: ArtifactProcessingState,
+    required_path: str | None,
+    label: str,
 ) -> SnapshotTargetPreview:
     preview = preview_action(
-        AdminStore.OTA,
+        store,
         action,
         processing_state,
-        has_required_path=mirror_path is not None,
+        has_required_path=required_path is not None,
     )
     return SnapshotTargetPreview(
         allowed=preview.allowed,
@@ -257,7 +261,13 @@ def preview_target_against_snapshot(
         if row is None:
             return SnapshotTargetPreview(False, None, None, "missing from current snapshot")
         else:
-            return _create_target_preview(action, row.processing_state, row.mirror_path, row.file_name)
+            return _create_target_preview(
+                store,
+                action,
+                row.processing_state,
+                row.mirror_path,
+                row.file_name,
+            )
 
     if not isinstance(target, OtaTarget):
         return SnapshotTargetPreview(False, None, None, "unexpected target type for ota batch")
@@ -266,7 +276,13 @@ def preview_target_against_snapshot(
     if row is None:
         return SnapshotTargetPreview(False, None, None, "missing from current snapshot")
     else:
-        return _create_target_preview(action, row.processing_state, row.download_path, row.artifact_id)
+        return _create_target_preview(
+            store,
+            action,
+            row.processing_state,
+            row.download_path,
+            row.artifact_id,
+        )
 
 
 def validate_pending_batch_against_snapshot(
