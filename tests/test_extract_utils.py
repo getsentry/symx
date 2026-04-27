@@ -75,6 +75,7 @@ def test_find_extraction_dir_finds_dsc_dir() -> None:
         processing_dir = Path(tmpdir)
         (processing_dir / "split_out").mkdir()
         (processing_dir / "symbols").mkdir()
+        (processing_dir / "sys_mount").mkdir()
         expected = processing_dir / "iPhone14,7_18.2_22C152"
         expected.mkdir()
 
@@ -88,6 +89,7 @@ def test_find_extraction_dir_ignores_reserved_dirs() -> None:
         processing_dir = Path(tmpdir)
         (processing_dir / "split_out").mkdir()
         (processing_dir / "symbols").mkdir()
+        (processing_dir / "sys_mount").mkdir()
         # No other directory
 
         result = find_extraction_dir(processing_dir)

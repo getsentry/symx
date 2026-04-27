@@ -622,15 +622,19 @@ class IpswExtractTimeoutError(IpswExtractError, TimeoutError):
     pass
 
 
+_RESERVED_PROCESSING_DIR_NAMES = frozenset({"split_out", "symbols", "sys_mount"})
+
+
 def find_extraction_dir(processing_dir: Path) -> Path | None:
     """
     Find the DSC extraction directory in the processing directory.
 
     After ipsw extract, the DSC ends up in a directory with an unpredictable name.
-    We find it by looking for the only directory that isn't "split_out" or "symbols".
+    We find it by looking for the only directory that isn't one of symx's reserved
+    processing directories.
     """
     for item in processing_dir.iterdir():
-        if item.is_dir() and item.name not in ["split_out", "symbols"]:
+        if item.is_dir() and item.name not in _RESERVED_PROCESSING_DIR_NAMES:
             logger.info(
                 "Found IPSW dyld extraction directory",
                 extra={"directory": item},
