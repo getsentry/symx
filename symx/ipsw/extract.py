@@ -28,6 +28,7 @@ from symx.ipsw.model import IpswPlatform
 logger = logging.getLogger(__name__)
 
 mount_point_re = re.compile(r".*Press Ctrl\+C to unmount '(.*)'")
+extracted_mount_artifact_re = re.compile(r"^Extracted (.+?)(?: from .*)?$")
 
 
 _VENDORED_PEM_DB = Path(__file__).resolve().parent / "data" / "fcs-keys.json"
@@ -448,11 +449,34 @@ class IpswExtractor:
         # we have very limited space on the GHA runners, so get rid of processed input data
         shutil.rmtree(split_dir)
 
+    def _sys_mount_point(self) -> Path:
+        return self.processing_dir / "sys_mount"
+
     def _symsort_sys_image(self) -> None:
         # mount the sys image (the process waits for sigint)
+        mount_point = self._sys_mount_point()
+        if mount_point.exists():
+            logger.warning("Removing stale sys image mount point before mount", extra={"mount_point": mount_point})
+            if mount_point.is_dir():
+                shutil.rmtree(mount_point)
+            else:
+                mount_point.unlink()
+
         mount_output_lines: list[str] = []
+        extracted_mount_artifact_paths: list[Path] = []
+        active_mount_point: Path | None = None
+        mount_error: str | None = None
         with sentry_sdk.start_span(op="subprocess.ipsw_mount", name="Mount sys image") as mount_span:
-            mount_command = ["ipsw", "mount", "sys", str(self.ipsw_path), "-V"]
+            mount_span.set_data("requested_mount_point", str(mount_point))
+            mount_command = [
+                "ipsw",
+                "mount",
+                "sys",
+                str(self.ipsw_path),
+                "-V",
+                "--mount-point",
+                str(mount_point),
+            ]
             pem_db_path = vendored_ipsw_pem_db_path()
             if pem_db_path is not None:
                 mount_command.extend(["--pem-db", str(pem_db_path)])
@@ -466,37 +490,48 @@ class IpswExtractor:
             )
 
             # read mount-output until we get the mount-point
-            mount_point = None
             while mount_proc.stdout:
                 line = mount_proc.stdout.readline()
                 if not line:
                     break
                 mount_output_lines.append(line.rstrip())
+
+                extracted_mount_artifact_path = _parse_extracted_mount_artifact_path(line)
+                if (
+                    extracted_mount_artifact_path is not None
+                    and extracted_mount_artifact_path not in extracted_mount_artifact_paths
+                ):
+                    extracted_mount_artifact_paths.append(extracted_mount_artifact_path)
+
                 mount_point_match = mount_point_re.match(line)
                 if not mount_point_match:
                     continue
 
-                mount_point = Path(mount_point_match.group(1))
+                active_mount_point = Path(mount_point_match.group(1))
                 break
 
-            if mount_point:
-                mount_span.set_data("mount_point", str(mount_point))
-            elif mount_output_lines:
+            if active_mount_point:
+                mount_span.set_data("mount_point", str(active_mount_point))
+            else:
                 mount_output = "\n".join(mount_output_lines)
                 mount_summary = _summarize_ipsw_stderr(mount_output)
                 mount_span.set_data("mount_output_preview", mount_output_lines[:20])
                 mount_span.set_data("mount_output_summary", mount_summary)
+                mount_span.set_status("internal_error")
                 if mount_summary:
-                    logger.warning(
-                        "Could not determine sys image mount point for %s: %s", self.ipsw_path.name, mount_summary
-                    )
+                    mount_error = f"ipsw mount sys failed for {self.ipsw_path}: {mount_summary}"
                 else:
-                    logger.warning("Could not determine sys image mount point for %s", self.ipsw_path.name)
+                    mount_error = f"Could not determine sys image mount point for {self.ipsw_path}"
 
         try:
+            if mount_error is not None:
+                raise IpswExtractError(mount_error)
+
+            if active_mount_point is None:
+                raise IpswExtractError(f"Could not determine sys image mount point for {self.ipsw_path}")
+
             # symsort the entire sys mount-point
-            if mount_point:
-                self._symsort(mount_point, ignore_errors=True)
+            self._symsort(active_mount_point, ignore_errors=True)
         finally:
             # SIGINT the mount process and wait for it to unmount
             if mount_proc.poll() is None:
@@ -510,7 +545,7 @@ class IpswExtractor:
                     mount_proc.wait()
 
             # Clean up mount point directory if it still exists (in case unmount failed)
-            if mount_point and mount_point.exists():
+            if mount_point.exists():
                 logger.warning(
                     "Mount point still exists after unmount, attempting cleanup", extra={"mount_point": mount_point}
                 )
@@ -518,6 +553,14 @@ class IpswExtractor:
                     shutil.rmtree(mount_point)
                 except Exception as e:
                     logger.error("Failed to clean up mount point", extra={"mount_point": mount_point, "exception": e})
+
+            for extracted_mount_artifact_path in extracted_mount_artifact_paths:
+                _cleanup_mount_artifact(extracted_mount_artifact_path)
+                if extracted_mount_artifact_path.suffix == ".aea":
+                    _cleanup_mount_artifact(
+                        extracted_mount_artifact_path.with_suffix(""),
+                        description="decrypted DMG artifact left by ipsw mount",
+                    )
 
     def _ipsw_split(self, extract_dir: Path, arch: Arch | None = None) -> Path:
         arch_label = str(arch) if arch is not None else "default"
@@ -579,15 +622,19 @@ class IpswExtractTimeoutError(IpswExtractError, TimeoutError):
     pass
 
 
+_RESERVED_PROCESSING_DIR_NAMES = frozenset({"split_out", "symbols", "sys_mount"})
+
+
 def find_extraction_dir(processing_dir: Path) -> Path | None:
     """
     Find the DSC extraction directory in the processing directory.
 
     After ipsw extract, the DSC ends up in a directory with an unpredictable name.
-    We find it by looking for the only directory that isn't "split_out" or "symbols".
+    We find it by looking for the only directory that isn't one of symx's reserved
+    processing directories.
     """
     for item in processing_dir.iterdir():
-        if item.is_dir() and item.name not in ["split_out", "symbols"]:
+        if item.is_dir() and item.name not in _RESERVED_PROCESSING_DIR_NAMES:
             logger.info(
                 "Found IPSW dyld extraction directory",
                 extra={"directory": item},
@@ -617,6 +664,32 @@ def _strip_ansi(text: str) -> str:
 
 def _normalize_ipsw_output_line(line: str) -> str:
     return _LEADING_IPSW_GLYPH_RE.sub("", line).strip()
+
+
+def _parse_extracted_mount_artifact_path(line: str) -> Path | None:
+    normalized_line = _normalize_ipsw_output_line(_strip_ansi(line))
+    match = extracted_mount_artifact_re.match(normalized_line)
+    if not match:
+        return None
+    return Path(match.group(1))
+
+
+def _cleanup_mount_artifact(path: Path, description: str = "mount artifact left by ipsw mount") -> None:
+    if not path.exists():
+        return
+
+    logger.warning("Removing %s", description, extra={"artifact_path": path})
+    try:
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    except Exception as e:
+        logger.error(
+            "Failed to remove %s",
+            description,
+            extra={"artifact_path": path, "exception": e},
+        )
 
 
 @lru_cache(maxsize=1)
