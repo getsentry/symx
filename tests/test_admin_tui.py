@@ -4,6 +4,7 @@ from pathlib import Path
 
 from rich.text import Text
 
+from symx.admin.actions import AdminActionKind, AdminStore, OtaTarget, PendingBatch
 from symx.admin.github import GithubRunInfo
 from symx.admin.tui import (
     AdminTui,
@@ -153,3 +154,75 @@ def test_format_ota_detail_includes_resolved_run_time() -> None:
     assert "last_run: #456" in detail
     assert "last_run_at: 2024-09-03 12:34Z" in detail
     assert "run_title: Extract OTA symbols" in detail
+
+
+def test_queue_selected_rejects_extract_batch_item_without_snapshot_download_path(tmp_path: Path, monkeypatch) -> None:
+    app = AdminTui(cache_dir=tmp_path)
+    row = OtaFailureRow(
+        last_run=456,
+        processing_state=ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED,
+        platform="ios",
+        version="18.0",
+        build="22A100",
+        ota_key="ota-key",
+        artifact_id="ota-id",
+        url="https://updates.cdn-apple.com/test.zip",
+        hash="def456",
+        hash_algorithm="SHA-1",
+        download_path=None,
+    )
+    statuses: list[str] = []
+
+    app._active_table_id = "ota-failures"
+    app._selected_ota_row_key = row.ota_key
+    app._ota_rows_by_key = {row.ota_key: row}
+    app._all_ota_rows_by_key = {row.ota_key: row}
+    monkeypatch.setattr(app, "_set_status", lambda message: statuses.append(message))
+    monkeypatch.setattr(app, "_refresh_pending_batch", lambda: None)
+
+    app._queue_selected(AdminActionKind.QUEUE_EXTRACT)
+
+    assert app._pending_batch is None
+    assert statuses == ["Cannot add ota-key to queue extract batch: download_path is required to queue extract."]
+
+
+def test_action_apply_batch_rejects_pending_batch_invalid_for_current_snapshot(tmp_path: Path, monkeypatch) -> None:
+    app = AdminTui(cache_dir=tmp_path)
+    row = OtaFailureRow(
+        last_run=456,
+        processing_state=ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED,
+        platform="ios",
+        version="18.0",
+        build="22A100",
+        ota_key="ota-key",
+        artifact_id="ota-id",
+        url="https://updates.cdn-apple.com/test.zip",
+        hash="def456",
+        hash_algorithm="SHA-1",
+        download_path=None,
+    )
+    statuses: list[str] = []
+    push_calls: list[tuple[object, ...]] = []
+
+    app._current_snapshot_info = SnapshotInfo(
+        snapshot_id="ipsw-101__ota-202",
+        created_at="2024-09-03T12:00:00+00:00",
+        workflow_run_id=1,
+        workflow_run_url=None,
+        ipsw_generation=101,
+        ota_generation=202,
+    )
+    app._all_ota_rows_by_key = {row.ota_key: row}
+    app._pending_batch = PendingBatch(
+        store=AdminStore.OTA,
+        action=AdminActionKind.QUEUE_EXTRACT,
+        targets=(OtaTarget(ota_key=row.ota_key),),
+        reason="",
+    )
+    monkeypatch.setattr(app, "_set_status", lambda message: statuses.append(message))
+    monkeypatch.setattr(app, "push_screen", lambda *args, **kwargs: push_calls.append(args))
+
+    app.action_apply_batch()
+
+    assert push_calls == []
+    assert statuses == ["Cannot apply pending batch: ota-key: download_path is required to queue extract"]

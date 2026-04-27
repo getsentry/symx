@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from symx.admin.actions import AdminStore, ApplyBatchRequest, IpswTarget, OtaTarget, preview_action, target_label
+from symx.admin.actions import (
+    AdminStore,
+    ApplyBatchRequest,
+    IpswTarget,
+    OtaTarget,
+    ValidationIssue,
+    format_validation_issues,
+    preview_action,
+    target_label,
+)
 from symx.ipsw.model import IpswArtifactDb, IpswSource
 from symx.model import ArtifactProcessingState
 from symx.ota.model import OtaArtifact
-
-
-@dataclass(frozen=True)
-class ValidationIssue:
-    target: str
-    reason: str
 
 
 class AdminApplyValidationError(RuntimeError):
@@ -97,10 +98,6 @@ def apply_request_to_ota_meta(ota_meta: dict[str, OtaArtifact], request: ApplyBa
         artifact.update_last_run()
 
     return len(resolved_targets)
-
-
-def format_validation_issues(issues: tuple[ValidationIssue, ...]) -> str:
-    return "; ".join(f"{issue.target}: {issue.reason}" for issue in issues)
 
 
 def _find_ipsw_source(sources: list[IpswSource], link: str) -> IpswSource | None:

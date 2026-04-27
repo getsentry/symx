@@ -2,8 +2,5 @@
   "strict": [
     "symx/**"
   ],
-  "stubPath": "typings",
-  "ignore": [
-    "symx/ipsw/meta_sync/meta_df.py"
-  ]
+  "stubPath": "typings"
 }

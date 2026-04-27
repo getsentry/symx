@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from typing import cast
 
-from symx.admin.db import SnapshotInfo
+from symx.admin.db import IpswSourceRow, OtaArtifactRow, SnapshotInfo
 from symx.model import ArtifactProcessingState
 
 
@@ -68,18 +69,14 @@ class ApplyBatchRequest:
         return json.dumps(asdict(self), separators=(",", ":"), sort_keys=True)
 
     @classmethod
-    def from_json(cls, payload: str) -> ApplyBatchRequest:
-        raw_payload: object = json.loads(payload)
-        if not isinstance(raw_payload, dict):
-            raise ValueError("Unexpected apply batch payload")
-
-        payload_dict = cast(dict[str, object], raw_payload)
-        store = AdminStore(str(payload_dict["store"]))
-        action = AdminActionKind(str(payload_dict["action"]))
-        snapshot_id = str(payload_dict["snapshot_id"])
-        base_generation = _coerce_int(payload_dict["base_generation"])
-        reason = str(payload_dict["reason"])
-        raw_targets = payload_dict.get("targets")
+    def from_json(cls, payload_raw: str) -> ApplyBatchRequest:
+        payload: dict[str, object] = json.loads(payload_raw)
+        store = AdminStore(str(payload["store"]))
+        action = AdminActionKind(str(payload["action"]))
+        snapshot_id = str(payload["snapshot_id"])
+        base_generation = _coerce_int(payload["base_generation"])
+        reason = str(payload["reason"])
+        raw_targets = payload.get("targets")
         if not isinstance(raw_targets, list):
             raise ValueError("Unexpected targets payload")
 
@@ -118,14 +115,10 @@ class ApplyBatchResult:
         return json.dumps(asdict(self), separators=(",", ":"), sort_keys=True)
 
     @classmethod
-    def from_json(cls, payload: str) -> ApplyBatchResult:
-        raw_payload: object = json.loads(payload)
-        if not isinstance(raw_payload, dict):
-            raise ValueError("Unexpected apply result payload")
-
-        payload_dict = cast(dict[str, object], raw_payload)
-        store = AdminStore(str(payload_dict["store"]))
-        worker_payload = payload_dict.get("worker")
+    def from_json(cls, payload_raw: str) -> ApplyBatchResult:
+        payload: dict[str, object] = json.loads(payload_raw)
+        store = AdminStore(str(payload["store"]))
+        worker_payload = payload.get("worker")
         worker: WorkerDispatchResult | None = None
         if isinstance(worker_payload, dict):
             worker_dict = cast(dict[str, object], worker_payload)
@@ -135,21 +128,21 @@ class ApplyBatchResult:
                 detail=_optional_str(worker_dict.get("detail")),
             )
 
-        raw_targets = payload_dict.get("targets")
+        raw_targets = payload.get("targets")
         if not isinstance(raw_targets, list):
             raise ValueError("Unexpected targets payload")
 
         return cls(
-            status=ApplyBatchStatus(str(payload_dict["status"])),
+            status=ApplyBatchStatus(str(payload["status"])),
             store=store,
-            action=AdminActionKind(str(payload_dict["action"])),
-            snapshot_id=str(payload_dict["snapshot_id"]),
-            base_generation=_coerce_int(payload_dict["base_generation"]),
-            remote_generation=_coerce_int(payload_dict["remote_generation"]),
+            action=AdminActionKind(str(payload["action"])),
+            snapshot_id=str(payload["snapshot_id"]),
+            base_generation=_coerce_int(payload["base_generation"]),
+            remote_generation=_coerce_int(payload["remote_generation"]),
             targets=_parse_targets(store, cast(list[object], raw_targets)),
-            reason=str(payload_dict["reason"]),
-            applied_count=_coerce_int(payload_dict["applied_count"]),
-            message=str(payload_dict["message"]),
+            reason=str(payload["reason"]),
+            applied_count=_coerce_int(payload["applied_count"]),
+            message=str(payload["message"]),
             worker=worker,
         )
 
@@ -159,6 +152,21 @@ class ActionPreview:
     allowed: bool
     resulting_state: ArtifactProcessingState | None
     note: str
+
+
+@dataclass(frozen=True)
+class SnapshotTargetPreview:
+    allowed: bool
+    current_state: ArtifactProcessingState | None
+    resulting_state: ArtifactProcessingState | None
+    note: str
+    row_label: str | None = None
+
+
+@dataclass(frozen=True)
+class ValidationIssue:
+    target: str
+    reason: str
 
 
 def add_target_to_pending_batch(batch: PendingBatch | None, target: AdminTarget) -> PendingBatch:
@@ -216,6 +224,90 @@ def snapshot_generation_for_store(snapshot_info: SnapshotInfo, store: AdminStore
     return snapshot_info.ota_generation
 
 
+def _create_target_preview(
+    store: AdminStore,
+    action: AdminActionKind,
+    processing_state: ArtifactProcessingState,
+    required_path: str | None,
+    label: str,
+) -> SnapshotTargetPreview:
+    preview = preview_action(
+        store,
+        action,
+        processing_state,
+        has_required_path=required_path is not None,
+    )
+    return SnapshotTargetPreview(
+        allowed=preview.allowed,
+        current_state=processing_state,
+        resulting_state=preview.resulting_state,
+        note=preview.note,
+        row_label=label,
+    )
+
+
+def preview_target_against_snapshot(
+    store: AdminStore,
+    action: AdminActionKind,
+    target: AdminTarget,
+    ipsw_rows_by_key: Mapping[str, IpswSourceRow],
+    ota_rows_by_key: Mapping[str, OtaArtifactRow],
+) -> SnapshotTargetPreview:
+    if store == AdminStore.IPSW:
+        if not isinstance(target, IpswTarget):
+            return SnapshotTargetPreview(False, None, None, "unexpected target type for ipsw batch")
+
+        row = ipsw_rows_by_key.get(_ipsw_target_row_key(target))
+        if row is None:
+            return SnapshotTargetPreview(False, None, None, "missing from current snapshot")
+        else:
+            return _create_target_preview(
+                store,
+                action,
+                row.processing_state,
+                row.mirror_path,
+                row.file_name,
+            )
+
+    if not isinstance(target, OtaTarget):
+        return SnapshotTargetPreview(False, None, None, "unexpected target type for ota batch")
+
+    row = ota_rows_by_key.get(target.ota_key)
+    if row is None:
+        return SnapshotTargetPreview(False, None, None, "missing from current snapshot")
+    else:
+        return _create_target_preview(
+            store,
+            action,
+            row.processing_state,
+            row.download_path,
+            row.artifact_id,
+        )
+
+
+def validate_pending_batch_against_snapshot(
+    batch: PendingBatch,
+    ipsw_rows_by_key: Mapping[str, IpswSourceRow],
+    ota_rows_by_key: Mapping[str, OtaArtifactRow],
+) -> tuple[ValidationIssue, ...]:
+    issues: list[ValidationIssue] = []
+    for target in batch.targets:
+        preview = preview_target_against_snapshot(
+            batch.store,
+            batch.action,
+            target,
+            ipsw_rows_by_key,
+            ota_rows_by_key,
+        )
+        if not preview.allowed or preview.resulting_state is None:
+            issues.append(ValidationIssue(target=target_label(target), reason=preview.note))
+    return tuple(issues)
+
+
+def format_validation_issues(issues: tuple[ValidationIssue, ...]) -> str:
+    return "; ".join(f"{issue.target}: {issue.reason}" for issue in issues)
+
+
 def worker_workflow_for_action(store: AdminStore, action: AdminActionKind) -> str:
     if store == AdminStore.IPSW and action == AdminActionKind.QUEUE_EXTRACT:
         return "symx-ipsw-extract.yml"
@@ -268,6 +360,10 @@ def _excluded_states(store: AdminStore) -> frozenset[ArtifactProcessingState]:
             ArtifactProcessingState.UNSUPPORTED_OTA_PAYLOAD,
         }
     )
+
+
+def _ipsw_target_row_key(target: IpswTarget) -> str:
+    return f"{target.artifact_key}::{target.link}"
 
 
 def _parse_targets(store: AdminStore, raw_targets: list[object]) -> tuple[AdminTarget, ...]:

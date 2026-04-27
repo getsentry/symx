@@ -13,9 +13,11 @@ from symx.admin.actions import (
     WorkerDispatchStatus,
     bind_pending_batch,
     preview_action,
+    preview_target_against_snapshot,
     snapshot_generation_for_store,
+    validate_pending_batch_against_snapshot,
 )
-from symx.admin.db import SnapshotInfo
+from symx.admin.db import IpswSourceRow, OtaArtifactRow, SnapshotInfo
 from symx.model import ArtifactProcessingState
 
 
@@ -108,3 +110,102 @@ def test_apply_batch_request_rejects_boolean_integer_payloads() -> None:
             '{"store":"ota","action":"queue_mirror","snapshot_id":"ipsw-1__ota-2","base_generation":true,'
             '"reason":"retry mirror","targets":[{"ota_key":"ota-key"}]}'
         )
+
+
+def test_preview_target_against_snapshot_uses_snapshot_rows_and_blocks_missing_extract_path() -> None:
+    ipsw_row = IpswSourceRow(
+        last_modified="2024-09-03T12:34:56",
+        processing_state=ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED,
+        platform="iOS",
+        version="18.0",
+        build="22A100",
+        artifact_key="iOS_18.0_22A100",
+        file_name="test.ipsw",
+        link="https://updates.cdn-apple.com/test.ipsw",
+        sha1="abc123",
+        last_run=123,
+        mirror_path="mirror/ipsw/iOS/18.0/22A100/test.ipsw",
+    )
+    ota_row = OtaArtifactRow(
+        last_run=456,
+        processing_state=ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED,
+        platform="ios",
+        version="18.0",
+        build="22A100",
+        ota_key="ota-key",
+        artifact_id="ota-id",
+        url="https://updates.cdn-apple.com/test.zip",
+        hash="def456",
+        hash_algorithm="SHA-1",
+        download_path=None,
+    )
+
+    ipsw_preview = preview_target_against_snapshot(
+        AdminStore.IPSW,
+        AdminActionKind.QUEUE_EXTRACT,
+        IpswTarget(artifact_key=ipsw_row.artifact_key, link=ipsw_row.link),
+        {f"{ipsw_row.artifact_key}::{ipsw_row.link}": ipsw_row},
+        {},
+    )
+    ota_preview = preview_target_against_snapshot(
+        AdminStore.OTA,
+        AdminActionKind.QUEUE_EXTRACT,
+        OtaTarget(ota_key=ota_row.ota_key),
+        {},
+        {ota_row.ota_key: ota_row},
+    )
+
+    assert ipsw_preview.allowed is True
+    assert ipsw_preview.current_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
+    assert ipsw_preview.resulting_state == ArtifactProcessingState.MIRRORED
+    assert ipsw_preview.row_label == "test.ipsw"
+    assert ota_preview.allowed is False
+    assert ota_preview.current_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
+    assert ota_preview.resulting_state is None
+    assert ota_preview.row_label == "ota-id"
+    assert ota_preview.note == "download_path is required to queue extract"
+
+
+def test_preview_target_against_snapshot_uses_ipsw_mirror_path_label_for_extract_errors() -> None:
+    ipsw_row = IpswSourceRow(
+        last_modified="2024-09-03T12:34:56",
+        processing_state=ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED,
+        platform="iOS",
+        version="18.0",
+        build="22A100",
+        artifact_key="iOS_18.0_22A100",
+        file_name="test.ipsw",
+        link="https://updates.cdn-apple.com/test.ipsw",
+        sha1="abc123",
+        last_run=123,
+        mirror_path=None,
+    )
+
+    ipsw_preview = preview_target_against_snapshot(
+        AdminStore.IPSW,
+        AdminActionKind.QUEUE_EXTRACT,
+        IpswTarget(artifact_key=ipsw_row.artifact_key, link=ipsw_row.link),
+        {f"{ipsw_row.artifact_key}::{ipsw_row.link}": ipsw_row},
+        {},
+    )
+
+    assert ipsw_preview.allowed is False
+    assert ipsw_preview.current_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
+    assert ipsw_preview.resulting_state is None
+    assert ipsw_preview.row_label == "test.ipsw"
+    assert ipsw_preview.note == "mirror_path is required to queue extract"
+
+
+def test_validate_pending_batch_against_snapshot_reports_missing_rows() -> None:
+    batch = PendingBatch(
+        store=AdminStore.OTA,
+        action=AdminActionKind.QUEUE_EXTRACT,
+        targets=(OtaTarget(ota_key="missing-ota-key"),),
+        reason="retry extract",
+    )
+
+    issues = validate_pending_batch_against_snapshot(batch, {}, {})
+
+    assert len(issues) == 1
+    assert issues[0].target == "missing-ota-key"
+    assert issues[0].reason == "missing from current snapshot"
