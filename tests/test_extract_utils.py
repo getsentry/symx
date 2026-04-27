@@ -413,7 +413,6 @@ def test_ipsw_extract_dsc_includes_stderr_summary_when_available(
     )
 
 
-
 def test_ipsw_split_raises_detailed_error_when_split_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     extractor = _make_ipsw_extractor(tmp_path)
     extract_dir = extractor.processing_dir / "23E261__iPad15,7"
