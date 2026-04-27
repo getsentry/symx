@@ -27,8 +27,10 @@ from symx.admin.actions import (
     add_target_to_pending_batch,
     batch_summary,
     bind_pending_batch,
-    preview_action,
+    format_validation_issues,
+    preview_target_against_snapshot,
     target_label,
+    validate_pending_batch_against_snapshot,
     with_pending_batch_reason,
 )
 from symx.admin.db import (
@@ -369,6 +371,10 @@ class AdminTui(App[None]):
         if self._current_snapshot_info is None:
             self._set_status("No snapshot is loaded yet.")
             return
+        validation_error = self._pending_batch_validation_error(self._pending_batch)
+        if validation_error is not None:
+            self._set_status(f"Cannot apply pending batch: {validation_error}")
+            return
         if self._pending_batch.reason.strip():
             self._start_apply_thread(self._pending_batch)
             return
@@ -563,32 +569,18 @@ class AdminTui(App[None]):
         if batch is None:
             return target_label(target)
 
-        if isinstance(target, IpswTarget):
-            row = self._all_ipsw_rows_by_key.get(f"{target.artifact_key}::{target.link}")
-            if row is None:
-                return f"{target_label(target)} (missing from current snapshot)"
-            preview = preview_action(
-                AdminStore.IPSW,
-                batch.action,
-                row.processing_state,
-                has_required_path=row.mirror_path is not None,
-            )
-            if preview.resulting_state is None:
-                return f"{target_label(target)} ({preview.note})"
-            return f"{row.file_name}: {row.processing_state.value} -> {preview.resulting_state.value} ({preview.note})"
-
-        row = self._all_ota_rows_by_key.get(target.ota_key)
-        if row is None:
-            return f"{target_label(target)} (missing from current snapshot)"
-        preview = preview_action(
-            AdminStore.OTA,
+        preview = preview_target_against_snapshot(
+            batch.store,
             batch.action,
-            row.processing_state,
-            has_required_path=row.download_path is not None,
+            target,
+            self._all_ipsw_rows_by_key,
+            self._all_ota_rows_by_key,
         )
-        if preview.resulting_state is None:
+        if preview.current_state is None or preview.row_label is None:
             return f"{target_label(target)} ({preview.note})"
-        return f"{row.artifact_id}: {row.processing_state.value} -> {preview.resulting_state.value} ({preview.note})"
+        if preview.resulting_state is None:
+            return f"{preview.row_label}: {preview.current_state.value} ({preview.note})"
+        return f"{preview.row_label}: {preview.current_state.value} -> {preview.resulting_state.value} ({preview.note})"
 
     def _detail_text(self) -> str:
         if self._active_table_id == "tasks" and self._selected_task_id is not None:
@@ -656,12 +648,28 @@ class AdminTui(App[None]):
             return
 
         store, target = selected
+        if self._pending_batch is not None and (
+            self._pending_batch.store != store or self._pending_batch.action != action
+        ):
+            self._set_status("Pending batch already targets a different store or action. Clear it first.")
+            return
+
+        preview = preview_target_against_snapshot(
+            store,
+            action,
+            target,
+            self._all_ipsw_rows_by_key,
+            self._all_ota_rows_by_key,
+        )
+        if not preview.allowed or preview.resulting_state is None:
+            self._set_status(
+                f"Cannot add {target_label(target)} to {action_label(action).lower()} batch: {preview.note}."
+            )
+            return
+
         if self._pending_batch is None:
             self._pending_batch = PendingBatch(store=store, action=action, targets=(target,))
         else:
-            if self._pending_batch.store != store or self._pending_batch.action != action:
-                self._set_status("Pending batch already targets a different store or action. Clear it first.")
-                return
             previous_count = len(self._pending_batch.targets)
             self._pending_batch = add_target_to_pending_batch(self._pending_batch, target)
             if len(self._pending_batch.targets) == previous_count:
@@ -754,6 +762,11 @@ class AdminTui(App[None]):
         self._set_status(f"New snapshot {result.snapshot_id} is ready. Press 'u' to switch.")
 
     def _start_apply_thread(self, batch: PendingBatch) -> None:
+        validation_error = self._pending_batch_validation_error(batch)
+        if validation_error is not None:
+            self._set_status(f"Cannot apply pending batch: {validation_error}")
+            return
+
         if self._apply_thread is not None and self._apply_thread.is_alive():
             self._set_status("Apply already running…")
             return
@@ -999,6 +1012,16 @@ class AdminTui(App[None]):
         self._selected_task_id = self._restore_task_selection(table, previous_task_id, task_ids)
         self._ensure_active_table()
 
+    def _pending_batch_validation_error(self, batch: PendingBatch) -> str | None:
+        issues = validate_pending_batch_against_snapshot(
+            batch,
+            self._all_ipsw_rows_by_key,
+            self._all_ota_rows_by_key,
+        )
+        if not issues:
+            return None
+        return format_validation_issues(issues)
+
     def _status_from_thread(self, message: str) -> None:
         self.call_from_thread(self._set_status, message)
 
@@ -1023,6 +1046,10 @@ class AdminTui(App[None]):
             return
         self._pending_batch = with_pending_batch_reason(self._pending_batch, result)
         self._refresh_pending_batch()
+        validation_error = self._pending_batch_validation_error(self._pending_batch)
+        if validation_error is not None:
+            self._set_status(f"Cannot apply pending batch: {validation_error}")
+            return
         self._start_apply_thread(self._pending_batch)
 
     def _subtitle(self) -> str:
