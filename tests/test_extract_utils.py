@@ -5,6 +5,8 @@ These are pure functions or functions with minimal I/O that support
 the OTA and IPSW extraction workflows.
 """
 
+import json
+import plistlib
 import subprocess
 import tempfile
 import zipfile
@@ -21,6 +23,7 @@ from symx.ipsw.extract import (
     IpswExtractor,
     find_extraction_dir,
     generate_bundle_id,
+    inspect_ipsw_dmg_paths,
     map_platform_to_prefix,
 )
 from subprocess import CompletedProcess
@@ -105,6 +108,36 @@ def test_find_extraction_dir_returns_first_match() -> None:
 
 
 # --- IPSW diagnostics tests ---
+
+
+def test_inspect_ipsw_dmg_paths_prefers_systemos_and_skips_recovery_filesystem(tmp_path: Path) -> None:
+    ipsw_path = tmp_path / "test.ipsw"
+    build_manifest = {
+        "BuildIdentities": [
+            {
+                "Manifest": {
+                    "Cryptex1,SystemOS": {"Info": {"Path": "system.dmg.aea"}},
+                    "OS": {"Info": {"Path": "filesystem.dmg.aea"}},
+                },
+                "Info": {"Variant": "Customer Erase Install (IPSW)"},
+            },
+            {
+                "Manifest": {
+                    "OS": {"Info": {"Path": "recovery.dmg"}},
+                },
+                "Info": {"Variant": "Recovery Customer Erase Install (IPSW)"},
+            },
+        ]
+    }
+
+    with zipfile.ZipFile(ipsw_path, "w") as archive:
+        archive.writestr("BuildManifest.plist", plistlib.dumps(build_manifest))
+
+    assert inspect_ipsw_dmg_paths(ipsw_path) == {
+        "system": "system.dmg.aea",
+        "filesystem": "filesystem.dmg.aea",
+        "selected": "system.dmg.aea",
+    }
 
 
 def _make_ipsw_extractor(tmp_path: Path) -> IpswExtractor:
@@ -257,6 +290,205 @@ def test_ipsw_symsort_sys_image_passes_vendored_pem_db_when_available(
         ) -> None:
             commands.append(command)
             self.stdout = FakeStdout([f"Press Ctrl+C to unmount '{mount_point}'\n", ""])
+
+        def send_signal(self, sig: int) -> None:
+            return None
+
+        def wait(self, timeout: int | None = None) -> int:
+            return 0
+
+        def kill(self) -> None:
+            return None
+
+    monkeypatch.setattr("symx.ipsw.extract.vendored_ipsw_pem_db_path", lambda: pem_db)
+    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
+    monkeypatch.setattr(
+        IpswExtractor,
+        "_symsort",
+        lambda self, split_dir, ignore_errors=False: symsort_calls.append((split_dir, ignore_errors)),
+    )
+
+    extractor._symsort_sys_image()
+
+    assert commands == [["ipsw", "mount", "sys", str(extractor.ipsw_path), "-V", "--pem-db", str(pem_db)]]
+    assert symsort_calls == [(mount_point, True)]
+
+
+def test_ipsw_aea_preflight_classifies_missing_key_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    processing_dir = tmp_path / "processing"
+    processing_dir.mkdir()
+    ipsw_path = tmp_path / "test.ipsw"
+    build_manifest = {
+        "BuildIdentities": [
+            {
+                "Manifest": {
+                    "Cryptex1,SystemOS": {"Info": {"Path": "system.dmg.aea"}},
+                    "OS": {"Info": {"Path": "filesystem.dmg.aea"}},
+                },
+                "Info": {"Variant": "Customer Erase Install (IPSW)"},
+            }
+        ]
+    }
+
+    with zipfile.ZipFile(ipsw_path, "w") as archive:
+        archive.writestr("BuildManifest.plist", plistlib.dumps(build_manifest))
+        archive.writestr("system.dmg.aea", b"dummy")
+
+    extractor = IpswExtractor(IpswPlatform.IPADOS, "iPad15,7_26.4.2_23E261_Restore.ipsw", processing_dir, ipsw_path)
+    pem_db = tmp_path / "fcs-keys.json"
+    pem_db.write_text(json.dumps({"known-key": "known-value"}))
+
+    def fake_run(command: list[str], capture_output: bool = False) -> CompletedProcess[bytes]:
+        if "--info" in command:
+            return CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout=(
+                    "[com.apple.wkms.fcs-key-url]:\nhttps://wkms-public.apple.com/fcs-keys/missing-key=\n"
+                ).encode(),
+                stderr=b"",
+            )
+
+        return CompletedProcess(
+            args=command,
+            returncode=1,
+            stdout=b"",
+            stderr=b"\xe2\xa8\xaf failed to HPKE decrypt fcs-key: failed to connect to fcs-key URL: 403 Forbidden\n",
+        )
+
+    monkeypatch.setattr("symx.ipsw.extract.vendored_ipsw_pem_db_path", lambda: pem_db)
+    monkeypatch.setattr("symx.ipsw.extract._vendored_ipsw_pem_db_keys", lambda: frozenset({"known-key"}))
+    monkeypatch.setattr("symx.ipsw.extract.subprocess.run", fake_run)
+
+    with pytest.raises(IpswExtractError, match="IPSW AEA preflight failed") as exc_info:
+        extractor._ipsw_aea_preflight()
+
+    message = str(exc_info.value)
+    assert "selected_dmg=system.dmg.aea" in message
+    assert "system_dmg=system.dmg.aea" in message
+    assert "filesystem_dmg=filesystem.dmg.aea" in message
+    assert "fcs_key=missing-key=" in message
+    assert "vendored_db_hit=False" in message
+    assert "failed to HPKE decrypt fcs-key: failed to connect to fcs-key URL: 403 Forbidden" in message
+
+
+def test_ipsw_extract_dsc_includes_stderr_summary_when_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    extractor = _make_ipsw_extractor(tmp_path)
+
+    class FakePopen:
+        def __init__(self, command: list[str], stdout: object = None, stderr: object = None) -> None:
+            self.command = command
+            self.returncode = 1
+
+        def __enter__(self) -> "FakePopen":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+            return False
+
+        def communicate(self, timeout: int | None = None) -> tuple[bytes, bytes]:
+            return (
+                b"extract stdout",
+                b"Usage:\n  ipsw extract <IPSW/OTA | URL> [flags]\n\nError: failed to mount DMG /tmp/test.dmg",
+            )
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
+
+    with pytest.raises(IpswExtractError, match="failed to mount DMG /tmp/test.dmg") as exc_info:
+        extractor._ipsw_extract_dsc()
+
+    message = str(exc_info.value)
+    assert message == (
+        f"ipsw extract failed for {extractor.ipsw_path} (default) with exit code 1: "
+        "Error: failed to mount DMG /tmp/test.dmg"
+    )
+
+
+def test_ipsw_extract_dsc_passes_vendored_pem_db_when_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    extractor = _make_ipsw_extractor(tmp_path)
+    pem_db = tmp_path / "fcs-keys.json"
+    pem_db.write_text("{}")
+    expected_extract_dir = extractor.processing_dir / "23E261__iPad15,7"
+    expected_extract_dir.mkdir()
+    commands: list[list[str]] = []
+
+    class FakePopen:
+        def __init__(self, command: list[str], stdout: object = None, stderr: object = None) -> None:
+            commands.append(command)
+            self.command = command
+            self.returncode = 0
+
+        def __enter__(self) -> "FakePopen":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+            return False
+
+        def communicate(self, timeout: int | None = None) -> tuple[bytes, bytes]:
+            return b"extract stdout", b"extract stderr"
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    monkeypatch.setattr("symx.ipsw.extract.vendored_ipsw_pem_db_path", lambda: pem_db)
+    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
+
+    assert extractor._ipsw_extract_dsc() == expected_extract_dir
+    assert commands == [
+        [
+            "ipsw",
+            "extract",
+            str(extractor.ipsw_path),
+            "-d",
+            "-o",
+            str(extractor.processing_dir),
+            "-V",
+            "--pem-db",
+            str(pem_db),
+        ]
+    ]
+
+
+def test_ipsw_symsort_sys_image_passes_vendored_pem_db_when_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    extractor = _make_ipsw_extractor(tmp_path)
+    pem_db = tmp_path / "fcs-keys.json"
+    pem_db.write_text("{}")
+    mount_point = tmp_path / "mount-point"
+    mount_point.mkdir()
+    commands: list[list[str]] = []
+    symsort_calls: list[tuple[Path, bool]] = []
+
+    class FakeStdout:
+        def __init__(self, lines: list[str]) -> None:
+            self._lines = iter(lines)
+
+        def readline(self) -> str:
+            return next(self._lines, "")
+
+    class FakePopen:
+        def __init__(
+            self,
+            command: list[str],
+            stdout: object = None,
+            stderr: object = None,
+            bufsize: int | None = None,
+            text: bool | None = None,
+        ) -> None:
+            commands.append(command)
+            self.stdout = FakeStdout([f"Press Ctrl+C to unmount '{mount_point}'\n", ""])
+            self.returncode = 0
+
+        def poll(self) -> int | None:
+            return None
 
         def send_signal(self, sig: int) -> None:
             return None

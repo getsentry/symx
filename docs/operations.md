@@ -75,7 +75,7 @@ Requirements:
 - `ipsw` installed and on `PATH`
 - executable `./symsorter` at the repository root
 
-For IPSW extraction, Symx also ships a vendored AEA PEM DB snapshot at `symx/ipsw/data/fcs-keys.json` and passes it to `ipsw` via `--pem-db` before `ipsw` falls back to live Apple FCS-key lookup. Refresh that file from upstream `ipsw/pkg/aea/data/fcs-keys.gz` when newly mirrored IPSWs start failing with AEA/FCS-key 403s on GitHub macOS runners.
+For IPSW extraction, Symx also ships a vendored AEA PEM DB snapshot at `symx/ipsw/data/fcs-keys.json` and passes it to `ipsw` via `--pem-db` before `ipsw` falls back to live Apple FCS-key lookup. Refresh that file from upstream `ipsw/pkg/aea/data/fcs-keys.gz` when newly mirrored IPSWs start failing with AEA/FCS-key 403s on GitHub macOS runners. Before the high-level `ipsw mount sys` / `ipsw extract --dyld` steps, Symx also does a small AEA preflight against the selected DMG member so failures can be classified as key-resolution problems earlier.
 
 In practice, the extraction paths are run on **macOS** in production because they rely on the `ipsw` toolchain, DMG mount flows, and the platform-specific `symsorter` binary.
 
@@ -119,6 +119,7 @@ What it does:
 - validates `ipsw` and `./symsorter`,
 - runs the IPSW extraction pipeline locally,
 - uses the vendored IPSW PEM DB snapshot before any live Apple FCS-key lookup,
+- performs an AEA preflight on the selected IPSW DMG member before the higher-level `ipsw` mount/extract helpers,
 - prints the output directory containing the symsorter result.
 
 ### OTA
