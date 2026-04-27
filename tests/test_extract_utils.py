@@ -267,7 +267,7 @@ def test_ipsw_symsort_sys_image_passes_vendored_pem_db_when_available(
     extractor = _make_ipsw_extractor(tmp_path)
     pem_db = tmp_path / "fcs-keys.json"
     pem_db.write_text("{}")
-    mount_point = tmp_path / "mount-point"
+    mount_point = extractor._sys_mount_point()
     mount_point.mkdir()
     commands: list[list[str]] = []
     symsort_calls: list[tuple[Path, bool]] = []
@@ -314,8 +314,142 @@ def test_ipsw_symsort_sys_image_passes_vendored_pem_db_when_available(
 
     extractor._symsort_sys_image()
 
-    assert commands == [["ipsw", "mount", "sys", str(extractor.ipsw_path), "-V", "--pem-db", str(pem_db)]]
+    assert commands == [
+        [
+            "ipsw",
+            "mount",
+            "sys",
+            str(extractor.ipsw_path),
+            "-V",
+            "--mount-point",
+            str(mount_point),
+            "--pem-db",
+            str(pem_db),
+        ]
+    ]
     assert symsort_calls == [(mount_point, True)]
+
+
+def test_ipsw_symsort_sys_image_cleans_extracted_aea_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    extractor = _make_ipsw_extractor(tmp_path)
+    mount_point = extractor._sys_mount_point()
+    mount_point.mkdir()
+    extracted_aea = tmp_path / "tmp" / "043-01053-377.dmg.aea"
+    extracted_aea.parent.mkdir()
+    extracted_aea.write_bytes(b"aea")
+
+    class FakeStdout:
+        def __init__(self, lines: list[str]) -> None:
+            self._lines = iter(lines)
+
+        def readline(self) -> str:
+            return next(self._lines, "")
+
+    class FakePopen:
+        def __init__(
+            self,
+            command: list[str],
+            stdout: object = None,
+            stderr: object = None,
+            bufsize: int | None = None,
+            text: bool | None = None,
+        ) -> None:
+            self.stdout = FakeStdout(
+                [
+                    f"Extracted {extracted_aea} from {extractor.ipsw_path}\n",
+                    f"Press Ctrl+C to unmount '{mount_point}'\n",
+                    "",
+                ]
+            )
+            self.returncode = 0
+
+        def poll(self) -> int | None:
+            return None
+
+        def send_signal(self, sig: int) -> None:
+            return None
+
+        def wait(self, timeout: int | None = None) -> int:
+            return 0
+
+        def kill(self) -> None:
+            return None
+
+    def fake_symsort(self: IpswExtractor, split_dir: Path, ignore_errors: bool = False) -> None:
+        raise IpswExtractError("boom")
+
+    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
+    monkeypatch.setattr(IpswExtractor, "_symsort", fake_symsort)
+
+    with pytest.raises(IpswExtractError, match="boom"):
+        extractor._symsort_sys_image()
+
+    assert not mount_point.exists()
+    assert not extracted_aea.exists()
+
+
+def test_ipsw_symsort_sys_image_raises_on_mount_failure_and_cleans_mount_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    extractor = _make_ipsw_extractor(tmp_path)
+    mount_point = extractor._sys_mount_point()
+    mount_point.mkdir()
+    extracted_aea = tmp_path / "tmp" / "043-01053-377.dmg.aea"
+    extracted_aea.parent.mkdir()
+    extracted_aea.write_bytes(b"aea")
+    decrypted_dmg = extracted_aea.with_suffix("")
+    decrypted_dmg.write_bytes(b"dmg")
+
+    class FakeStdout:
+        def __init__(self, lines: list[str]) -> None:
+            self._lines = iter(lines)
+
+        def readline(self) -> str:
+            return next(self._lines, "")
+
+    class FakePopen:
+        def __init__(
+            self,
+            command: list[str],
+            stdout: object = None,
+            stderr: object = None,
+            bufsize: int | None = None,
+            text: bool | None = None,
+        ) -> None:
+            self.stdout = FakeStdout(
+                [
+                    f"Extracted {extracted_aea} from {extractor.ipsw_path}\n",
+                    (
+                        "failed to mount sys DMG: failed to mount "
+                        f"{decrypted_dmg}: exit status 1: hdiutil: attach failed - Permission denied\n"
+                    ),
+                    "",
+                ]
+            )
+            self.returncode = 1
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def send_signal(self, sig: int) -> None:
+            return None
+
+        def wait(self, timeout: int | None = None) -> int:
+            return self.returncode
+
+        def kill(self) -> None:
+            return None
+
+    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
+
+    with pytest.raises(IpswExtractError, match="failed to mount sys DMG"):
+        extractor._symsort_sys_image()
+
+    assert not mount_point.exists()
+    assert not extracted_aea.exists()
+    assert not decrypted_dmg.exists()
 
 
 def test_ipsw_aea_preflight_classifies_missing_key_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
