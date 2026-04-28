@@ -1,10 +1,12 @@
 name: Extract GHA Simulator symbols
-permissions: {}
+permissions:
+  actions: read
+  contents: read
 
 on:
   workflow_dispatch:
   schedule:
-    - cron:  '0 4 * * *'
+    - cron: '0 4 * * *'
 
 concurrency:
   group: symx-extract-gha-simulator
@@ -12,53 +14,100 @@ concurrency:
 
 jobs:
   symx-macos-job:
-    runs-on: ${{matrix.runs-on}}
+    name: Extract simulator symbols (${{ matrix.runs-on }})
+    runs-on: ${{ matrix.runs-on }}
     permissions:
-      contents: "read"
-      id-token: "write"
+      actions: read
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
-        runs-on: [ macos-14, macos-15, macos-26 ]
+        runs-on: [macos-14, macos-15, macos-26]
 
     steps:
       - name: Checkout sources
         uses: actions/checkout@v4
 
       - name: Auth
+        id: auth
+        continue-on-error: true
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: projects/868781662168/locations/global/workloadIdentityPools/prod-github/providers/github-oidc-pool
           service_account: symx-downloader@sac-prod-sa.iam.gserviceaccount.com
 
       - name: Set up Cloud SDK
+        id: setup_gcloud
+        if: ${{ steps.auth.outcome == 'success' }}
+        continue-on-error: true
         uses: google-github-actions/setup-gcloud@v2
         with:
           version: ">= 363.0.0"
 
       - name: Install dependencies
+        id: install_dependencies
+        if: ${{ steps.auth.outcome == 'success' && steps.setup_gcloud.outcome == 'success' }}
+        continue-on-error: true
         run: |
-          curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors https://astral.sh/uv/install.sh | sh
-          echo "PATH=/Users/runner/.local/bin:$PATH" >> $GITHUB_ENV
-          export PATH="/Users/runner/.local/bin:$PATH"
-          uv --version
-          uv sync
-          # Install ipsw from the release tarball to avoid Homebrew dependency issues on macOS runners.
-          IPSW_VERSION="3.1.672"
-          curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors \
-            "https://github.com/blacktop/ipsw/releases/download/v${IPSW_VERSION}/ipsw_${IPSW_VERSION}_macOS_universal.tar.gz" \
-            -o /tmp/ipsw.tar.gz
-          sudo tar -xzf /tmp/ipsw.tar.gz -C /usr/local/bin ipsw
-          rm /tmp/ipsw.tar.gz
-          ipsw version
-          brew install tree
-          curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors https://github.com/getsentry/symbolicator/releases/latest/download/symsorter-Darwin-universal > symsorter
-          chmod +x symsorter
-          pwd
-          ls -la
+          mkdir -p .github/logs
+          set -o pipefail
+          {
+            set -euo pipefail
+            curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors https://astral.sh/uv/install.sh | sh
+            echo "PATH=/Users/runner/.local/bin:$PATH" >> $GITHUB_ENV
+            export PATH="/Users/runner/.local/bin:$PATH"
+            uv --version
+            uv sync
+            # Install ipsw from the release tarball to avoid Homebrew dependency issues on macOS runners.
+            IPSW_VERSION="3.1.672"
+            curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors \
+              "https://github.com/blacktop/ipsw/releases/download/v${IPSW_VERSION}/ipsw_${IPSW_VERSION}_macOS_universal.tar.gz" \
+              -o /tmp/ipsw.tar.gz
+            sudo tar -xzf /tmp/ipsw.tar.gz -C /usr/local/bin ipsw
+            rm /tmp/ipsw.tar.gz
+            ipsw version
+            brew install tree
+            curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors https://github.com/getsentry/symbolicator/releases/latest/download/symsorter-Darwin-universal > symsorter
+            chmod +x symsorter
+            pwd
+            ls -la
+          } 2>&1 | tee .github/logs/install-dependencies.log
 
-      - name: Extract Simulator from ${{matrix.runs-on}}
-        run: uv run python -m symx sim extract -s ${{ vars.SYMX_STORE }}
+      - name: Extract Simulator from ${{ matrix.runs-on }}
+        id: extract_simulator
+        if: ${{ steps.auth.outcome == 'success' && steps.setup_gcloud.outcome == 'success' && steps.install_dependencies.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          mkdir -p .github/logs
+          set -o pipefail
+          {
+            set -euo pipefail
+            uv run python scripts/run_symx_gha.py
+          } 2>&1 | tee .github/logs/extract-simulator.log
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SYMX_RUN: sim extract -s ${{ vars.SYMX_STORE }}
+
+      - name: Notify on failure
+        id: notify_failure
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: ./.github/actions/notify-slack-on-failure
+        with:
+          github_token: ${{ github.token }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          workflow_name: ${{ github.workflow }}
+          job_name: Extract simulator symbols (${{ matrix.runs-on }})
+          steps_json: >-
+            [
+              {"name":"Auth","outcome":${{ toJSON(steps.auth.outcome) }},"fallback_snippet":"uses google-github-actions/auth@v2"},
+              {"name":"Set up Cloud SDK","outcome":${{ toJSON(steps.setup_gcloud.outcome) }},"fallback_snippet":"uses google-github-actions/setup-gcloud@v2"},
+              {"name":"Install dependencies","outcome":${{ toJSON(steps.install_dependencies.outcome) }},"log_path":"install-dependencies.log","fallback_snippet":"Install uv dependencies, ipsw, and symsorter."},
+              {"name":${{ toJSON(format('Extract Simulator from {0}', matrix.runs-on)) }},"outcome":${{ toJSON(steps.extract_simulator.outcome) }},"log_path":"extract-simulator.log","fallback_snippet":${{ toJSON(format('sim extract -s {0}', vars.SYMX_STORE)) }}}
+            ]
+
+      - name: Fail workflow after notification
+        if: ${{ always() && (steps.auth.outcome == 'failure' || steps.setup_gcloud.outcome == 'failure' || steps.install_dependencies.outcome == 'failure' || steps.extract_simulator.outcome == 'failure') }}
+        run: exit 1

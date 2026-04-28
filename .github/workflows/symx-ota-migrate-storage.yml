@@ -1,5 +1,6 @@
 name: Migrate OTA storage
 permissions:
+  actions: read
   contents: read
   id-token: write
 

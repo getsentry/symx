@@ -1,5 +1,6 @@
 name: symx on Ubuntu
 permissions:
+  actions: read
   contents: read
 
 on:
@@ -17,12 +18,16 @@ on:
     secrets:
       SENTRY_DSN:
         required: true
+      SLACK_WEBHOOK_URL:
+        required: false
 
 jobs:
   symx-ubuntu-job:
     name: ${{ inputs.job_name }}
     runs-on: "ubuntu-24.04"
     permissions:
+      actions: "read"
+      contents: "read"
       id-token: "write"
 
     steps:
@@ -30,49 +35,111 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Auth
+        id: auth
+        continue-on-error: true
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: projects/868781662168/locations/global/workloadIdentityPools/prod-github/providers/github-oidc-pool
           service_account: symx-downloader@sac-prod-sa.iam.gserviceaccount.com
 
       - name: Set up Cloud SDK
+        id: setup_gcloud
+        if: ${{ steps.auth.outcome == 'success' }}
+        continue-on-error: true
         uses: google-github-actions/setup-gcloud@v2
         with:
           version: ">= 363.0.0"
 
       - name: Install dependencies
+        id: install_dependencies
+        if: ${{ steps.auth.outcome == 'success' && steps.setup_gcloud.outcome == 'success' }}
+        continue-on-error: true
         run: |
-          curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors https://astral.sh/uv/install.sh | sh
-          echo "PATH=/Users/runner/.local/bin:$PATH" >> $GITHUB_ENV
-          export PATH="/Users/runner/.local/bin:$PATH"
-          uv --version
-          uv sync
-          IPSW_VERSION="3.1.672"
-          curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors \
-            "https://github.com/blacktop/ipsw/releases/download/v${IPSW_VERSION}/ipsw_${IPSW_VERSION}_linux_x86_64.tar.gz" \
-            -o /tmp/ipsw.tar.gz
-          sudo tar -xzf /tmp/ipsw.tar.gz -C /usr/local/bin ipsw
-          rm /tmp/ipsw.tar.gz
-          ipsw version
+          mkdir -p .github/logs
+          set -o pipefail
+          {
+            set -euo pipefail
+            curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors https://astral.sh/uv/install.sh | sh
+            echo "PATH=/Users/runner/.local/bin:$PATH" >> $GITHUB_ENV
+            export PATH="/Users/runner/.local/bin:$PATH"
+            uv --version
+            uv sync
+            IPSW_VERSION="3.1.672"
+            curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors \
+              "https://github.com/blacktop/ipsw/releases/download/v${IPSW_VERSION}/ipsw_${IPSW_VERSION}_linux_x86_64.tar.gz" \
+              -o /tmp/ipsw.tar.gz
+            sudo tar -xzf /tmp/ipsw.tar.gz -C /usr/local/bin ipsw
+            rm /tmp/ipsw.tar.gz
+            ipsw version
+          } 2>&1 | tee .github/logs/install-dependencies.log
 
       - name: Install Apple Inc. Root
+        id: install_apple_root
+        if: ${{ steps.auth.outcome == 'success' && steps.setup_gcloud.outcome == 'success' && steps.install_dependencies.outcome == 'success' }}
+        continue-on-error: true
         run: |
-          wget --tries=6 --waitretry=10 https://www.apple.com/appleca/AppleIncRootCertificate.cer
-          openssl x509 -inform DER -in AppleIncRootCertificate.cer -out AppleIncRootCertificate.crt
-          sudo cp AppleIncRootCertificate.crt /usr/local/share/ca-certificates
-          sudo update-ca-certificates
+          mkdir -p .github/logs
+          set -o pipefail
+          {
+            set -euo pipefail
+            wget --tries=6 --waitretry=10 https://www.apple.com/appleca/AppleIncRootCertificate.cer
+            openssl x509 -inform DER -in AppleIncRootCertificate.cer -out AppleIncRootCertificate.crt
+            sudo cp AppleIncRootCertificate.crt /usr/local/share/ca-certificates
+            sudo update-ca-certificates
+          } 2>&1 | tee .github/logs/install-apple-root.log
 
       - name: Cleanup runner-image
+        id: cleanup_runner_image
+        if: ${{ steps.auth.outcome == 'success' && steps.setup_gcloud.outcome == 'success' && steps.install_dependencies.outcome == 'success' && steps.install_apple_root.outcome == 'success' }}
+        continue-on-error: true
         run: |
-          sudo rm -rf /usr/local/lib/android || true
-          sudo rm -rf /usr/share/swift || true
-          sudo rm -rf /usr/share/dotnet || true
-          sudo rm -rf /usr/lib/jvm || true
-          sudo rm -rf /home/linuxbrew/.linuxbrew || true
+          mkdir -p .github/logs
+          set -o pipefail
+          {
+            set -euo pipefail
+            sudo rm -rf /usr/local/lib/android || true
+            sudo rm -rf /usr/share/swift || true
+            sudo rm -rf /usr/share/dotnet || true
+            sudo rm -rf /usr/lib/jvm || true
+            sudo rm -rf /home/linuxbrew/.linuxbrew || true
+          } 2>&1 | tee .github/logs/cleanup-runner-image.log
 
       - name: ${{ inputs.symx_step }}
-        run: uv run python scripts/run_symx_gha.py
+        id: symx
+        if: ${{ steps.auth.outcome == 'success' && steps.setup_gcloud.outcome == 'success' && steps.install_dependencies.outcome == 'success' && steps.install_apple_root.outcome == 'success' && steps.cleanup_runner_image.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          mkdir -p .github/logs
+          set -o pipefail
+          {
+            set -euo pipefail
+            uv run python scripts/run_symx_gha.py
+          } 2>&1 | tee .github/logs/symx.log
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SYMX_RUN: ${{ inputs.symx_run }}
+
+      - name: Notify on failure
+        id: notify_failure
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: ./.github/actions/notify-slack-on-failure
+        with:
+          github_token: ${{ github.token }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          workflow_name: ${{ github.workflow }}
+          job_name: ${{ inputs.job_name }}
+          steps_json: >-
+            [
+              {"name":"Auth","outcome":${{ toJSON(steps.auth.outcome) }},"fallback_snippet":"uses google-github-actions/auth@v2"},
+              {"name":"Set up Cloud SDK","outcome":${{ toJSON(steps.setup_gcloud.outcome) }},"fallback_snippet":"uses google-github-actions/setup-gcloud@v2"},
+              {"name":"Install dependencies","outcome":${{ toJSON(steps.install_dependencies.outcome) }},"log_path":"install-dependencies.log","fallback_snippet":"Install uv dependencies and ipsw tool."},
+              {"name":"Install Apple Inc. Root","outcome":${{ toJSON(steps.install_apple_root.outcome) }},"log_path":"install-apple-root.log","fallback_snippet":"Install Apple Inc. root certificate."},
+              {"name":"Cleanup runner-image","outcome":${{ toJSON(steps.cleanup_runner_image.outcome) }},"log_path":"cleanup-runner-image.log","fallback_snippet":"Remove large preinstalled runner image components."},
+              {"name":${{ toJSON(inputs.symx_step) }},"outcome":${{ toJSON(steps.symx.outcome) }},"log_path":"symx.log","fallback_snippet":${{ toJSON(inputs.symx_run) }}}
+            ]
+
+      - name: Fail workflow after notification
+        if: ${{ always() && (steps.auth.outcome == 'failure' || steps.setup_gcloud.outcome == 'failure' || steps.install_dependencies.outcome == 'failure' || steps.install_apple_root.outcome == 'failure' || steps.cleanup_runner_image.outcome == 'failure' || steps.symx.outcome == 'failure') }}
+        run: exit 1
