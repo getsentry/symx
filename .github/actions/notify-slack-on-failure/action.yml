@@ -1,0 +1,62 @@
+name: Notify Slack on workflow failure
+description: Resolve workflow failure context and send a Slack notification.
+
+inputs:
+  github_token:
+    description: GitHub token used to resolve the failed step URL.
+    required: true
+  slack_webhook_url:
+    description: Slack incoming webhook URL.
+    required: false
+  workflow_name:
+    description: GitHub Actions workflow name.
+    required: true
+  job_name:
+    description: GitHub Actions job name.
+    required: true
+  steps_json:
+    description: JSON array describing workflow steps and their outcomes.
+    required: true
+  logs_root:
+    description: Directory containing captured workflow step logs.
+    required: false
+    default: .github/logs
+
+outputs:
+  failed:
+    description: Whether a tracked step failed.
+    value: ${{ steps.failure_context.outputs.failed }}
+  failed_step_name:
+    description: Name of the first failed tracked step.
+    value: ${{ steps.failure_context.outputs.failed_step_name }}
+  failed_step_snippet:
+    description: Snippet describing the first failed tracked step.
+    value: ${{ steps.failure_context.outputs.failed_step_snippet }}
+  failed_step_url:
+    description: URL to the first failed tracked step.
+    value: ${{ steps.failure_context.outputs.failed_step_url }}
+  slack_payload_json:
+    description: Slack payload JSON for the failed tracked step.
+    value: ${{ steps.failure_context.outputs.slack_payload_json }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve failure context
+      id: failure_context
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        FAILURE_CONTEXT_WORKFLOW_NAME: ${{ inputs.workflow_name }}
+        FAILURE_CONTEXT_JOB_NAME: ${{ inputs.job_name }}
+        FAILURE_CONTEXT_LOGS_ROOT: ${{ inputs.logs_root }}
+        FAILURE_CONTEXT_STEPS_JSON: ${{ inputs.steps_json }}
+      run: python3 scripts/resolve_workflow_failure_context.py
+
+    - name: Send Slack failure notification
+      if: ${{ steps.failure_context.outputs.failed == 'true' && inputs.slack_webhook_url != '' }}
+      uses: slackapi/slack-github-action@v2
+      with:
+        webhook: ${{ inputs.slack_webhook_url }}
+        webhook-type: incoming-webhook
+        payload: ${{ steps.failure_context.outputs.slack_payload_json }}

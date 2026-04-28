@@ -19,3 +19,4 @@ jobs:
       symx_run: ota extract -t 330 -s ${{ vars.SYMX_STORE }}
     secrets:
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
