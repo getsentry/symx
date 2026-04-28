@@ -124,6 +124,22 @@ def test_main_emits_failure_details_from_log(tmp_path):
     }
 
 
+def test_write_output_uses_non_colliding_marker(tmp_path, monkeypatch):
+    class FakeUuid:
+        def __init__(self, hex_value):
+            self.hex = hex_value
+
+    generated = iter([FakeUuid("collision"), FakeUuid("safe")])
+    monkeypatch.setattr(MODULE.uuid, "uuid4", lambda: next(generated))
+
+    output_path = tmp_path / "github_output.txt"
+    MODULE.write_output(output_path, "failed_step_snippet", "before\nEOF_collision\nafter")
+
+    assert output_path.read_text(encoding="utf-8") == (
+        "failed_step_snippet<<EOF_safe\nbefore\nEOF_collision\nafter\nEOF_safe\n"
+    )
+
+
 def test_resolve_step_url_uses_step_anchor():
     env = {
         "GITHUB_SERVER_URL": "https://github.com",

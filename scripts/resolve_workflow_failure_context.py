@@ -7,6 +7,7 @@ import re
 import sys
 import urllib.error
 import urllib.request
+import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,10 +30,18 @@ class FailureContextConfigError(ValueError):
     pass
 
 
+def output_marker(value: str) -> str:
+    value_lines = set(value.splitlines())
+    while True:
+        marker = f"EOF_{uuid.uuid4().hex}"
+        if marker not in value_lines:
+            return marker
+
+
 def write_output(output_path: Path, name: str, value: str) -> None:
-    marker = f"EOF_{name}"
     with output_path.open("a", encoding="utf-8") as handle:
         if "\n" in value:
+            marker = output_marker(value)
             handle.write(f"{name}<<{marker}\n{value}\n{marker}\n")
         else:
             handle.write(f"{name}={value}\n")

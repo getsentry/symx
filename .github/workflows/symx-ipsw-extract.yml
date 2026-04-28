@@ -1,5 +1,6 @@
 name: Extract IPSW symbols
 permissions:
+  actions: read
   contents: read
   id-token: write
 

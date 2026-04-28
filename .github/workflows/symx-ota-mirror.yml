@@ -1,5 +1,6 @@
 name: Mirror OTA images
 permissions:
+  actions: read
   contents: read
   id-token: write
 
