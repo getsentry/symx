@@ -3,6 +3,7 @@
 import json
 import logging
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 
 import sentry_sdk
 import sentry_sdk.metrics
@@ -67,27 +68,39 @@ def parse_download_meta_output(
             )
 
 
+def _download_meta_job(job: tuple[str, bool]) -> OtaMetaData:
+    platform, beta = job
+    label = f"{platform} (beta)" if beta else platform
+
+    with sentry_sdk.start_span(op="subprocess.ipsw_download_meta", name=f"Fetch OTA meta for {label}") as span:
+        span.set_data("platform", platform)
+        span.set_data("beta", beta)
+        logger.info("Downloading OTA meta for %s%s", platform, " (beta)" if beta else "")
+        cmd = [
+            "ipsw",
+            "download",
+            "ota",
+            "--platform",
+            platform,
+            "--urls",
+            "--json",
+        ]
+        if beta:
+            cmd.append("--beta")
+
+        result = subprocess.run(cmd, capture_output=True)
+        meta: OtaMetaData = {}
+        parse_download_meta_output(platform, result, meta, beta)
+        return meta
+
+
 def retrieve_current_meta() -> OtaMetaData:
     meta: OtaMetaData = {}
-    for platform in PLATFORMS:
-        with sentry_sdk.start_span(op="subprocess.ipsw_download_meta", name=f"Fetch OTA meta for {platform}") as span:
-            span.set_data("platform", platform)
-            logger.info("Downloading OTA meta for %s", platform)
-            cmd = [
-                "ipsw",
-                "download",
-                "ota",
-                "--platform",
-                platform,
-                "--urls",
-                "--json",
-            ]
+    jobs = [(platform, beta) for platform in PLATFORMS for beta in (False, True)]
 
-            parse_download_meta_output(platform, subprocess.run(cmd, capture_output=True), meta, False)
-
-            beta_cmd = cmd.copy()
-            beta_cmd.append("--beta")
-            parse_download_meta_output(platform, subprocess.run(beta_cmd, capture_output=True), meta, True)
+    with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+        for job_meta in executor.map(_download_meta_job, jobs):
+            meta.update(job_meta)
 
     sentry_sdk.metrics.distribution("ota.meta_sync.total_artifacts", len(meta))
     return meta
