@@ -4,10 +4,12 @@ Tests for OTA metadata parsing from ipsw command output.
 
 import json
 import subprocess
+import threading
+import time
 
 from symx.model import ArtifactProcessingState
 from symx.ota.model import OtaMetaData
-from symx.ota.meta import parse_download_meta_output
+from symx.ota.meta import parse_download_meta_output, retrieve_current_meta
 
 
 def make_completed_process(
@@ -171,3 +173,52 @@ def test_parse_download_meta_output_multiple_artifacts() -> None:
     assert len(meta) == 2
     assert "a" * 40 in meta
     assert "b" * 40 in meta
+
+
+def test_retrieve_current_meta_fetches_all_platform_variants_in_parallel_and_preserves_order(monkeypatch) -> None:
+    platforms = ["ios", "watchos", "tvos"]
+    monkeypatch.setattr("symx.ota.meta.PLATFORMS", platforms)
+
+    release_id = "a" * 40
+    beta_id = "b" * 40
+    active = 0
+    max_active = 0
+    active_lock = threading.Lock()
+
+    def fake_run(cmd: list[str], capture_output: bool = False) -> subprocess.CompletedProcess[bytes]:
+        assert capture_output is True
+        platform = cmd[cmd.index("--platform") + 1]
+        beta = "--beta" in cmd
+
+        nonlocal active, max_active
+        with active_lock:
+            active += 1
+            max_active = max(max_active, active)
+
+        time.sleep(0.05)
+
+        try:
+            artifact_id = beta_id if beta else release_id
+            payload = [
+                {
+                    "url": f"https://updates.apple.com/{artifact_id}.zip",
+                    "build": f"{platform}-{'beta' if beta else 'release'}",
+                    "version": "17.0",
+                    "hash": f"{platform}-{'beta' if beta else 'release'}",
+                    "hash_algorithm": "SHA-1",
+                }
+            ]
+            return make_completed_process(stdout=json.dumps(payload).encode())
+        finally:
+            with active_lock:
+                active -= 1
+
+    monkeypatch.setattr("symx.ota.meta.subprocess.run", fake_run)
+
+    meta = retrieve_current_meta()
+
+    assert max_active > 1
+    assert meta[release_id].platform == "tvos"
+    assert meta[release_id].build == "tvos-release"
+    assert meta[f"{beta_id}_beta"].platform == "tvos"
+    assert meta[f"{beta_id}_beta"].build == "tvos-beta"
