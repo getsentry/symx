@@ -221,6 +221,27 @@ Available tables:
 - `ipsw_sources`
 - `ota_artifacts`
 
+### Generate the coverage HTML page
+
+This report counts only rows in `symbols_extracted`, using the active local snapshot:
+
+```bash
+uv run symx stats coverage-html --output /tmp/symx-coverage.html
+```
+
+The current coverage page groups by `platform` and `version` for both IPSW and OTA.
+
+It embeds the grouped rows as JSON and enhances the static tables with client-side filters plus a reset button for each table:
+
+- platform
+- major version
+- minor version
+- patch version
+
+Selectors with no values for the current parent selection are hidden.
+
+Table order is prepared in Python before HTML generation. Rows are sorted by platform, then by numeric version parts in descending order, with release-train tiebreakers within the same numeric base version such as release → RC → beta.
+
 ## 2.4 GitHub Actions inspection with `gh`
 
 Use the GitHub CLI directly when you want to inspect workflow runs outside the admin TUI.
@@ -260,20 +281,23 @@ There is no always-on service and no separate relational production database beh
 
 ## 3.2 Workflow entrypoints
 
-| Workflow file                                    | Purpose                              | Command run inside workflow                                                           |
-|--------------------------------------------------|--------------------------------------|---------------------------------------------------------------------------------------|
-| `.github/workflows/symx-ipsw-meta-sync.yml`      | refresh IPSW metadata                | `symx ipsw meta-sync -s $SYMX_STORE`                                                  |
-| `.github/workflows/symx-ipsw-mirror.yml`         | mirror IPSWs                         | `symx ipsw mirror -t 315 -s $SYMX_STORE`                                              |
-| `.github/workflows/symx-ipsw-extract.yml`        | extract IPSW symbols                 | `symx ipsw extract -t 315 -s $SYMX_STORE`                                             |
-| `.github/workflows/symx-ota-mirror.yml`          | refresh OTA metadata and mirror OTAs | `symx ota mirror -s $SYMX_STORE`                                                      |
-| `.github/workflows/symx-ota-extract.yml`         | extract OTA symbols                  | `symx ota extract -t 330 -s $SYMX_STORE`                                              |
-| `.github/workflows/symx-ota-migrate-storage.yml` | reset failed OTA extractions         | `symx ota migrate-storage -s $SYMX_STORE`                                             |
-| `.github/workflows/symx-ipsw-migrate.yml`        | manual IPSW migration entrypoint     | `symx ipsw migrate -s $SYMX_STORE`                                                    |
-| `.github/workflows/symx-simulator-extract.yml`   | upload simulator symbols             | `symx sim extract -s $SYMX_STORE`                                                     |
-| `.github/workflows/symx-admin-meta-sync.yml`     | build admin snapshot inputs          | shell script using `gcloud storage`                                                   |
-| `.github/workflows/symx-admin-apply.yml`         | apply curated admin rerun batches    | `symx admin apply-batch --storage "$SYMX_STORE" --request-json ... --result-path ...` |
+| Workflow file                                    | Purpose                                | Command run inside workflow                                                                |
+|--------------------------------------------------|----------------------------------------|--------------------------------------------------------------------------------------------|
+| `.github/workflows/symx-ipsw-meta-sync.yml`      | refresh IPSW metadata                  | `symx ipsw meta-sync -s $SYMX_STORE`                                                       |
+| `.github/workflows/symx-ipsw-mirror.yml`         | mirror IPSWs                           | `symx ipsw mirror -t 315 -s $SYMX_STORE`                                                   |
+| `.github/workflows/symx-ipsw-extract.yml`        | extract IPSW symbols                   | `symx ipsw extract -t 315 -s $SYMX_STORE`                                                  |
+| `.github/workflows/symx-ota-mirror.yml`          | refresh OTA metadata and mirror OTAs   | `symx ota mirror -s $SYMX_STORE`                                                           |
+| `.github/workflows/symx-ota-extract.yml`         | extract OTA symbols                    | `symx ota extract -t 330 -s $SYMX_STORE`                                                   |
+| `.github/workflows/symx-ota-migrate-storage.yml` | reset failed OTA extractions           | `symx ota migrate-storage -s $SYMX_STORE`                                                  |
+| `.github/workflows/symx-ipsw-migrate.yml`        | manual IPSW migration entrypoint       | `symx ipsw migrate -s $SYMX_STORE`                                                         |
+| `.github/workflows/symx-simulator-extract.yml`   | upload simulator symbols               | `symx sim extract -s $SYMX_STORE`                                                          |
+| `.github/workflows/symx-admin-meta-sync.yml`     | build admin snapshot inputs            | shell script using `gcloud storage`                                                        |
+| `.github/workflows/symx-admin-apply.yml`         | apply curated admin rerun batches      | `symx admin apply-batch --storage "$SYMX_STORE" --request-json ... --result-path ...`      |
+| `.github/workflows/symx-coverage-pages.yml`      | publish coverage stats to GitHub Pages | `symx admin sync --cache-dir ...` then `symx stats coverage-html --output site/index.html` |
 
-For the workflows that use the reusable Symx runner wrappers, the command is not shell-interpolated directly. Those reusable workflows pass `SYMX_RUN` into `scripts/run_symx_gha.py`, which safely tokenizes it and executes `python -m symx ...`. The admin meta-sync, admin apply, and simulator workflows are custom wrappers around the same CLI.
+For the workflows that use the reusable Symx runner wrappers, the command is not shell-interpolated directly. Those reusable workflows pass `SYMX_RUN` into `scripts/run_symx_gha.py`, which safely tokenizes it and executes `python -m symx ...`. The admin meta-sync, admin apply, coverage-pages, and simulator workflows are custom wrappers around the same CLI.
+
+The GitHub Pages deployment assumes the repository Pages source is set to **GitHub Actions**.
 
 ## 3.3 Reusable workflow layers
 

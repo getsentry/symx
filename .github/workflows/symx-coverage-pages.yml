@@ -1,0 +1,67 @@
+name: Publish coverage stats page
+permissions:
+  actions: write
+  contents: read
+  pages: write
+  id-token: write
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 8 * * *"
+
+concurrency:
+  group: symx-coverage-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build coverage stats page
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install dependencies
+        run: |
+          curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors https://astral.sh/uv/install.sh | sh
+          echo "PATH=/home/runner/.local/bin:$PATH" >> "$GITHUB_ENV"
+          export PATH="/home/runner/.local/bin:$PATH"
+          uv --version
+          uv sync
+
+      - name: Build coverage page
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SYMX_ADMIN_CACHE_DIR: ${{ runner.temp }}/symx-admin
+        run: |
+          export PATH="/home/runner/.local/bin:$PATH"
+          uv run symx admin sync --cache-dir "$SYMX_ADMIN_CACHE_DIR"
+          uv run symx stats coverage-html \
+            --cache-dir "$SYMX_ADMIN_CACHE_DIR" \
+            --output site/index.html
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    name: Deploy coverage stats page
+    runs-on: ubuntu-24.04
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
