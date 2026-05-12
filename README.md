@@ -13,6 +13,7 @@ In practice, Symx is **not** a long-running service. Today it consists of:
 
 - [Architecture and state model](docs/architecture.md)
 - [Operations, local setup, deployment, and debugging](docs/operations.md)
+- [Coverage stats page](https://getsentry.github.io/symx/)
 
 If you only read one thing after this README, read **[docs/architecture.md](docs/architecture.md)**.
 
