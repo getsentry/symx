@@ -73,16 +73,17 @@ More detail, including the "who processes what when" walkthrough and the state d
 
 ## Production workflows at a glance
 
-| Workflow                                                                                                                 | Runner              | Purpose                                       |
-|--------------------------------------------------------------------------------------------------------------------------|---------------------|-----------------------------------------------|
-| [`symx-ipsw-meta-sync.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ipsw-meta-sync.yml)       | Ubuntu              | Refresh `ipsw_meta.json` from AppleDB         |
-| [`symx-ipsw-mirror.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ipsw-mirror.yml)             | Ubuntu              | Mirror recent indexed IPSWs into GCS          |
-| [`symx-ipsw-extract.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ipsw-extract.yml)           | macOS               | Extract symbols from mirrored IPSWs           |
-| [`symx-ota-mirror.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ota-mirror.yml)               | Ubuntu              | Refresh OTA metadata and mirror indexed OTAs  |
-| [`symx-ota-extract.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ota-extract.yml)             | macOS               | Extract symbols from mirrored OTAs            |
-| [`symx-simulator-extract.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-simulator-extract.yml) | GitHub macOS matrix | Upload simulator-cache symbols                |
-| [`symx-admin-meta-sync.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-admin-meta-sync.yml)     | Ubuntu              | Build admin snapshot inputs for the local TUI |
-| [`symx-admin-apply.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-admin-apply.yml)             | Ubuntu              | Apply curated admin rerun batches             |
+| Workflow                                                                                                                 | Runner              | Purpose                                         |
+|--------------------------------------------------------------------------------------------------------------------------|---------------------|-------------------------------------------------|
+| [`symx-ipsw-meta-sync.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ipsw-meta-sync.yml)       | Ubuntu              | Refresh `ipsw_meta.json` from AppleDB           |
+| [`symx-ipsw-mirror.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ipsw-mirror.yml)             | Ubuntu              | Mirror recent indexed IPSWs into GCS            |
+| [`symx-ipsw-extract.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ipsw-extract.yml)           | macOS               | Extract symbols from mirrored IPSWs             |
+| [`symx-ota-mirror.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ota-mirror.yml)               | Ubuntu              | Refresh OTA metadata and mirror indexed OTAs    |
+| [`symx-ota-extract.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ota-extract.yml)             | macOS               | Extract symbols from mirrored OTAs              |
+| [`symx-simulator-extract.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-simulator-extract.yml) | GitHub macOS matrix | Upload simulator-cache symbols                  |
+| [`symx-admin-meta-sync.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-admin-meta-sync.yml)     | Ubuntu              | Build admin snapshot inputs for the local TUI   |
+| [`symx-admin-apply.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-admin-apply.yml)             | Ubuntu              | Apply curated admin rerun batches               |
+| [`symx-coverage-pages.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-coverage-pages.yml)       | Ubuntu              | Publish the coverage stats page to GitHub Pages |
 
 The workflow files in [`.github/workflows/`](.github/workflows/) are the authoritative deployment config.
 
@@ -90,7 +91,7 @@ The workflow files in [`.github/workflows/`](.github/workflows/) are the authori
 
 ### 1. Install dependencies
 
-Symx uses [`uv`](https://docs.astral.sh/uv/) for everything.
+Symx uses `uv` for everything.
 
 Helpful install/download links:
 
@@ -107,13 +108,13 @@ uv sync --dev
 ### 2. Optional local prerequisites depending on what you want to do
 
 - **Admin / workflow inspection only**
-  - [`gh` CLI](https://cli.github.com/) installed and authenticated
+  - `gh` installed and authenticated
 - **GCS-backed runs** (`ipsw meta-sync`, `ipsw mirror`, `ipsw extract`, `ota mirror`, `ota extract`, `sim extract`)
-  - [Google Cloud CLI / `gcloud`](https://cloud.google.com/sdk/docs/install) credentials available via ADC / `GOOGLE_APPLICATION_CREDENTIALS`
+  - `gcloud` credentials available via ADC / `GOOGLE_APPLICATION_CREDENTIALS`
   - a storage URI such as `gs://my-bucket` or `gs://my-project@my-bucket`
 - **Extraction commands**
-  - [`ipsw`](https://github.com/blacktop/ipsw/releases/latest) installed and on `PATH` (or via the [`ipsw` Homebrew formula](https://formulae.brew.sh/formula/ipsw))
-  - executable `./symsorter` in the repo root (from the latest [`symbolicator` release](https://github.com/getsentry/symbolicator/releases/latest))
+  - `ipsw` installed and on `PATH`
+  - executable `./symsorter` in the repo root
   - in practice, extraction is run on **macOS** in production
 
 ### 3. Common local commands
@@ -136,6 +137,12 @@ Sync the admin cache without starting the TUI:
 
 ```bash
 uv run symx admin sync
+```
+
+Generate the coverage HTML page from the active admin snapshot:
+
+```bash
+uv run symx stats coverage-html --output /tmp/symx-coverage.html
 ```
 
 Reproduce extraction from a local file:
@@ -185,12 +192,15 @@ A few things are important to know up front:
 
 ## Repository layout
 
-- `symx/ipsw/` – IPSW metadata import, mirroring, extraction, storage backends
-- `symx/ota/` – OTA metadata retrieval, mirroring, extraction, storage backends
-- `symx/sim/` – simulator-runtime extraction
-- `symx/admin/` – local admin cache, SQLite snapshot builder, TUI, download helpers
-- `.github/workflows/` – production scheduling and deployment wiring
-- `tests/` – unit tests
+| Directory            | Description                                                       |           
+|----------------------|-------------------------------------------------------------------|
+| `symx/ipsw/`         | IPSW metadata import, mirroring, extraction, storage backends     |
+| `symx/ota/`          | OTA metadata retrieval, mirroring, extraction, storage backends   |
+| `symx/sim/`          | simulator-runtime extraction                                      |
+| `symx/admin/`        | local admin cache, SQLite snapshot builder, TUI, download helpers |
+| `symx/stats/`        | snapshot-based reporting and HTML generation                      |
+| `.github/workflows/` | production scheduling and deployment wiring                       |
+| `tests/`             | unit tests                                                        |
 
 ## Development and verification
 
