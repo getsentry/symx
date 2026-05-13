@@ -6,7 +6,9 @@ Date: 2026-05-12
 
 Recorded the main insight from the first real bootstrap experiments: metadata-v2 is not an obviously superior replacement for the current JSON metadata model. It is a trade-off.
 
-The current monolithic JSON model is awkward and makes individual metadata writes high-stakes, but it also provides a cheap full-domain aggregate snapshot by default. Metadata-v2 maps better to per-artifact GCS mutation semantics, but it makes aggregate reads and cache/projection strategies explicit costs.
+The current monolithic JSON model is awkward and makes individual metadata writes high-stakes, but it also provides a cheap full-domain aggregate snapshot by default. Object-per-artifact metadata-v2 maps better to per-artifact GCS mutation semantics, but it makes aggregate reads and cache/projection strategies explicit costs.
+
+The evaluation also corrected the importance of write contention. The initial design overweighted object-level mutation blast radius. In the actual workload, mirroring and extraction are minutes-long operations that move large payloads. Moving a compressed metadata database in a few seconds may be operationally insignificant compared with that processing timescale.
 
 Without accounting for those costs, the v2 model looks artificially cheap.
 
@@ -44,7 +46,9 @@ Concrete experiment data:
 - full object-per-artifact/detail bootstrap wrote `121410` objects,
 - full bootstrap took about `660s` locally with `--max-workers 32` before connection-pool tuning,
 - listing only the OTA detail prefix (`45135` objects) took about `9.5s`, before downloading/parsing any object contents,
-- the optional SQLite snapshot was `85MiB` uncompressed and `18MiB` gzipped.
+- building a local snapshot by reading all v2 artifact/detail objects took about `378s`,
+- the optional SQLite snapshot was `85MiB` uncompressed and `18MiB` gzipped,
+- downloading the uncompressed SQLite snapshot object took about `5s`.
 
 ## Valid outcomes
 
@@ -58,6 +62,14 @@ Another good outcome is a decision document that records:
 - what smaller changes would capture the most important benefits with lower cost.
 
 That document would still be useful because it prevents future redesign attempts from treating the same costs as unknown or negligible.
+
+## Contention reframing
+
+Whole-object metadata CAS is not beautiful, but it may be good enough.
+
+If a compressed SQLite metadata DB is well below 100MiB and transfers in seconds, while artifact processing takes minutes and moves gigabytes, then avoiding whole-object metadata contention may not be worth a design that makes aggregate reads take minutes or requires generation tracking for tens of thousands of objects.
+
+This does not prove whole-object CAS is free. It means we should measure real conflict frequency and retry cost instead of treating per-artifact object updates as an automatic win.
 
 ## Corrected framing
 

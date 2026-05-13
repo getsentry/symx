@@ -11,7 +11,13 @@ from symx.artifacts.report import (
     report_to_json,
     write_parity_report_json,
 )
-from symx.artifacts.storage import ArtifactGcsPrefixStore, ArtifactStorageError, BootstrapResult, SnapshotViewResult
+from symx.artifacts.storage import (
+    ArtifactGcsPrefixStore,
+    ArtifactStorageError,
+    BootstrapResult,
+    LocalV2SnapshotResult,
+    SnapshotViewResult,
+)
 
 artifacts_app = typer.Typer(help="Artifact metadata migration and validation helpers")
 v2_app = typer.Typer(help="metadata-v2 shadow-model helpers")
@@ -46,6 +52,25 @@ def bootstrap_command(
     typer.echo(_bootstrap_summary_json(result).rstrip())
     if not result.parity_report.ok:
         raise typer.Exit(code=2)
+
+
+@v2_app.command("snapshot-from-v2")
+def snapshot_from_v2_command(
+    storage: str = typer.Option(..., "--storage", "-s", help="URI to the GCS bucket containing v2 metadata"),
+    prefix: str = typer.Option(..., "--prefix", help="V2 metadata prefix to read from"),
+    output: Path = typer.Option(..., "--output", "-o", help="Local SQLite snapshot path to write"),
+    max_workers: int = typer.Option(16, "--max-workers", help="Maximum concurrent GCS object reads"),
+) -> None:
+    """Build a local SQLite snapshot by reading v2 artifact/detail objects."""
+
+    try:
+        store = ArtifactGcsPrefixStore.from_storage_uri(storage, prefix, connection_pool_size=max_workers)
+        result = store.write_local_snapshot_from_v2(output, max_workers=max_workers)
+    except ArtifactStorageError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(_local_v2_snapshot_summary_json(result).rstrip())
 
 
 @v2_app.command("snapshot")
@@ -97,6 +122,16 @@ def report_command(
 
     if not report.ok:
         raise typer.Exit(code=2)
+
+
+def _local_v2_snapshot_summary_json(result: LocalV2SnapshotResult) -> str:
+    payload = {
+        "prefix": result.prefix,
+        "output_path": result.output_path,
+        "artifact_count": result.artifact_count,
+        "snapshot_counts": result.snapshot_counts.model_dump(),
+    }
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
 def _snapshot_summary_json(result: SnapshotViewResult) -> str:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -15,7 +16,14 @@ from requests.adapters import HTTPAdapter
 
 from symx.admin.meta_json import parse_ota_meta_json
 from symx.artifacts.convert import convert_ipsw_db, convert_ota_meta
-from symx.artifacts.model import ArtifactBundle
+from symx.artifacts.model import (
+    ArtifactBundle,
+    ArtifactKind,
+    ArtifactRecord,
+    IpswArtifactDetail,
+    OtaArtifactDetail,
+    SimArtifactDetail,
+)
 from symx.artifacts.report import ArtifactParityReport, ArtifactReportError, build_parity_report
 from symx.artifacts.snapshot import ArtifactSnapshotCounts, build_snapshot_db, snapshot_counts
 from symx.gcs import parse_gcs_url
@@ -29,6 +37,14 @@ BOOTSTRAP_MANIFEST_SCHEMA_VERSION = 1
 
 class _MountableSession(Protocol):
     def mount(self, prefix: str, adapter: HTTPAdapter) -> None: ...
+
+
+class _BytesDownloadableBlob(Protocol):
+    def download_as_bytes(self) -> bytes: ...
+
+
+class _BlobLister(Protocol):
+    def list_blobs(self, prefix: str) -> Iterable[Blob]: ...
 
 
 class ArtifactStorageError(RuntimeError):
@@ -86,6 +102,13 @@ class SnapshotViewResult(BaseModel):
     snapshot_db_path: str
     dry_run: bool
     written_object_count: int = 0
+    snapshot_counts: ArtifactSnapshotCounts
+
+
+class LocalV2SnapshotResult(BaseModel):
+    prefix: str
+    output_path: str
+    artifact_count: int
     snapshot_counts: ArtifactSnapshotCounts
 
 
@@ -174,6 +197,50 @@ class ArtifactGcsPrefixStore:
                 sample_written_objects=[f"{object_count} objects would be written"],
             )
         return self.write_bootstrap(bundles, report, manifest, max_workers=max_workers)
+
+    def write_local_snapshot_from_v2(self, output_path: Path, max_workers: int = 16) -> LocalV2SnapshotResult:
+        bundles = self.load_v2_bundles(max_workers=max_workers)
+        build_snapshot_db(output_path, bundles, report=None, storage=self.storage_uri, prefix=self.prefix)
+        return LocalV2SnapshotResult(
+            prefix=self.prefix,
+            output_path=str(output_path),
+            artifact_count=len(bundles),
+            snapshot_counts=snapshot_counts(output_path),
+        )
+
+    def load_v2_bundles(self, max_workers: int = 16) -> list[ArtifactBundle]:
+        artifact_object_names = self.list_artifact_object_names()
+        if max_workers <= 1:
+            return [self._download_v2_bundle(object_name) for object_name in artifact_object_names]
+
+        bundles: list[ArtifactBundle] = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(self._download_v2_bundle, object_name) for object_name in artifact_object_names]
+            for future in as_completed(futures):
+                bundles.append(future.result())
+        return sorted(bundles, key=lambda bundle: bundle.artifact.artifact_uid)
+
+    def list_artifact_object_names(self) -> list[str]:
+        artifact_prefix = self.object_name("artifacts/")
+        lister = cast(_BlobLister, self.bucket)
+        return sorted(blob.name for blob in lister.list_blobs(prefix=artifact_prefix) if blob.name.endswith(".json"))
+
+    def _download_v2_bundle(self, artifact_object_name: str) -> ArtifactBundle:
+        artifact = ArtifactRecord.model_validate_json(self._download_json_text(artifact_object_name))
+        detail_text = self._download_json_text(self.object_name(artifact.detail_path))
+        match artifact.kind:
+            case ArtifactKind.IPSW:
+                return ArtifactBundle(
+                    artifact=artifact, ipsw_detail=IpswArtifactDetail.model_validate_json(detail_text)
+                )
+            case ArtifactKind.OTA:
+                return ArtifactBundle(artifact=artifact, ota_detail=OtaArtifactDetail.model_validate_json(detail_text))
+            case ArtifactKind.SIM:
+                return ArtifactBundle(artifact=artifact, sim_detail=SimArtifactDetail.model_validate_json(detail_text))
+
+    def _download_json_text(self, object_name: str) -> str:
+        blob = cast(_BytesDownloadableBlob, self.bucket.blob(object_name))
+        return blob.download_as_bytes().decode("utf-8")
 
     def write_snapshot_view(self, dry_run: bool = False) -> SnapshotViewResult:
         bundles, report, manifest = self.build_bootstrap()

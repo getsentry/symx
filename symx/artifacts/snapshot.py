@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -19,16 +19,25 @@ class ArtifactSnapshotCounts(BaseModel):
     sim_details: int
 
 
+class _SnapshotMetadata(BaseModel):
+    generated_at: str
+    artifact_count: int
+    parity_ok: bool
+    parity_mismatch_count: int
+
+
 def build_snapshot_db(
     db_path: Path,
     bundles: list[ArtifactBundle],
-    report: ArtifactParityReport,
+    report: ArtifactParityReport | None,
     storage: str,
     prefix: str,
 ) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     if db_path.exists():
         db_path.unlink()
+
+    snapshot_metadata = _snapshot_metadata(bundles, report)
 
     conn = sqlite3.connect(db_path)
     try:
@@ -49,12 +58,12 @@ def build_snapshot_db(
                 VALUES (1, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    report.generated_at,
+                    snapshot_metadata.generated_at,
                     storage,
                     prefix,
-                    report.total_artifacts,
-                    int(report.ok),
-                    len(report.mismatches),
+                    snapshot_metadata.artifact_count,
+                    int(snapshot_metadata.parity_ok),
+                    snapshot_metadata.parity_mismatch_count,
                 ),
             )
             for bundle in bundles:
@@ -206,6 +215,23 @@ def snapshot_counts(db_path: Path) -> ArtifactSnapshotCounts:
         )
     finally:
         conn.close()
+
+
+def _snapshot_metadata(bundles: list[ArtifactBundle], report: ArtifactParityReport | None) -> _SnapshotMetadata:
+    if report is not None:
+        return _SnapshotMetadata(
+            generated_at=report.generated_at,
+            artifact_count=report.total_artifacts,
+            parity_ok=report.ok,
+            parity_mismatch_count=len(report.mismatches),
+        )
+
+    return _SnapshotMetadata(
+        generated_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        artifact_count=len(bundles),
+        parity_ok=True,
+        parity_mismatch_count=0,
+    )
 
 
 def _init_schema(conn: sqlite3.Connection) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any, cast
 
 from google.api_core.exceptions import PreconditionFailed
@@ -38,6 +39,9 @@ class FakeBlob:
     def download_to_filename(self, filename: str) -> None:
         with open(filename, "w") as f:
             f.write(self._bucket.objects[self.name].payload)
+
+    def download_as_bytes(self) -> bytes:
+        return self._bucket.objects[self.name].payload.encode("utf-8")
 
     def upload_from_string(
         self,
@@ -87,6 +91,11 @@ class FakeBucket:
     def blob(self, name: str) -> FakeBlob:
         return FakeBlob(self, name)
 
+    def list_blobs(self, prefix: str):
+        for name in sorted(self.objects):
+            if name.startswith(prefix):
+                yield FakeBlob(self, name)
+
 
 def test_normalize_prefix_rejects_empty_prefix() -> None:
     try:
@@ -122,6 +131,31 @@ def test_bootstrap_writes_normalized_objects_create_only() -> None:
     assert result.manifest.parity_report_path in bucket.objects
     assert bucket.write_order[-1] == result.manifest.manifest_path
     assert all(name.startswith("experiments/meta-v2/test-run/") for name in result.sample_written_objects)
+
+
+def test_write_local_snapshot_from_v2_reads_bootstrapped_v2_objects(tmp_path: Path) -> None:
+    bucket = FakeBucket(
+        {
+            "ipsw_meta.json": _ipsw_db_json(),
+            "ota_image_meta.json": _ota_meta_json(),
+        }
+    )
+    store = ArtifactGcsPrefixStore(
+        cast(Bucket, cast(Any, bucket)),
+        "experiments/meta-v2/test-run",
+        "gs://apple_symbols",
+    )
+    store.bootstrap(max_workers=1)
+
+    output_path = tmp_path / "snapshot.db"
+    result = store.write_local_snapshot_from_v2(output_path, max_workers=1)
+
+    assert result.output_path == str(output_path)
+    assert result.artifact_count == 2
+    assert result.snapshot_counts.artifacts == 2
+    assert result.snapshot_counts.ipsw_details == 1
+    assert result.snapshot_counts.ota_details == 1
+    assert output_path.exists()
 
 
 def test_write_snapshot_view_writes_one_snapshot_object() -> None:
