@@ -36,6 +36,8 @@ A new symbolicator-facing symbol-store interface is out of scope. However, read-
 
 The current IPSW and OTA metadata stores can coexist with a v2 artifact store for a long time.
 
+A key read-path principle: the canonical store should not require global materialized snapshots by default. Consumers that need queryable aggregate data can maintain consumer-owned local caches/projections. For example, admin sync can build a local SQLite cache from artifact/detail objects and then update only remote objects whose GCS generation changed.
+
 The useful migration shape is not a delayed, offline-only model replacement. It is:
 
 1. Keep v1 production-authoritative initially.
@@ -323,6 +325,21 @@ Guidance:
 - Admin/stats dataclasses should be converted opportunistically when touched for v2 parity or projection work, not as a blocking prerequisite for the metadata migration.
 
 See [`004-pydantic-model-normalization.md`](004-pydantic-model-normalization.md).
+
+## Aggregate read and admin-sync model
+
+Object-per-artifact metadata is optimized for low-contention mutation, not for full aggregate scans. But a globally consistent snapshot is rarely required.
+
+For admin usage, prefer a local incremental cache:
+
+1. initial sync lists artifact/detail objects and downloads all rows,
+2. the local SQLite cache stores the GCS object generation for each artifact/detail object,
+3. later syncs list remote object metadata and download only objects whose generation is new or changed,
+4. apply changed rows to the local SQLite cache in a transaction,
+5. tolerate that the view is not a perfectly consistent point-in-time snapshot,
+6. validate expected state/generation again before applying any admin mutation.
+
+This preserves the main v2 benefit: no default store-level materialization that can go out of sync. Expensive aggregate work is paid by consumers that need it, and even those consumers can be incremental after the first sync.
 
 ## Production storage invariants
 

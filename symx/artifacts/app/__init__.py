@@ -11,7 +11,7 @@ from symx.artifacts.report import (
     report_to_json,
     write_parity_report_json,
 )
-from symx.artifacts.storage import ArtifactGcsPrefixStore, ArtifactStorageError, BootstrapResult
+from symx.artifacts.storage import ArtifactGcsPrefixStore, ArtifactStorageError, BootstrapResult, SnapshotViewResult
 
 artifacts_app = typer.Typer(help="Artifact metadata migration and validation helpers")
 v2_app = typer.Typer(help="metadata-v2 shadow-model helpers")
@@ -37,7 +37,7 @@ def bootstrap_command(
         raise typer.Exit(code=1)
 
     try:
-        store = ArtifactGcsPrefixStore.from_storage_uri(storage, prefix)
+        store = ArtifactGcsPrefixStore.from_storage_uri(storage, prefix, connection_pool_size=max_workers)
         result = store.bootstrap(dry_run=dry_run, max_workers=max_workers)
     except ArtifactStorageError as exc:
         typer.echo(str(exc), err=True)
@@ -46,6 +46,33 @@ def bootstrap_command(
     typer.echo(_bootstrap_summary_json(result).rstrip())
     if not result.parity_report.ok:
         raise typer.Exit(code=2)
+
+
+@v2_app.command("snapshot")
+def snapshot_command(
+    storage: str = typer.Option(..., "--storage", "-s", help="URI to the GCS bucket containing legacy metadata"),
+    prefix: str = typer.Option(..., "--prefix", help="Experiment prefix to write the snapshot view under"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Read and report without writing the snapshot DB"),
+    allow_non_experiment_prefix: bool = typer.Option(
+        False,
+        "--allow-non-experiment-prefix",
+        help="Allow prefixes outside experiments/ for explicit cutover testing",
+    ),
+) -> None:
+    """Materialize a single SQLite snapshot DB for a metadata-v2 prefix."""
+
+    if not allow_non_experiment_prefix and not prefix.strip("/").startswith("experiments/"):
+        typer.echo("Refusing to write outside experiments/ without --allow-non-experiment-prefix", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        store = ArtifactGcsPrefixStore.from_storage_uri(storage, prefix)
+        result = store.write_snapshot_view(dry_run=dry_run)
+    except ArtifactStorageError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(_snapshot_summary_json(result).rstrip())
 
 
 @v2_app.command("report")
@@ -70,6 +97,17 @@ def report_command(
 
     if not report.ok:
         raise typer.Exit(code=2)
+
+
+def _snapshot_summary_json(result: SnapshotViewResult) -> str:
+    payload = {
+        "dry_run": result.dry_run,
+        "prefix": result.prefix,
+        "snapshot_db_path": result.snapshot_db_path,
+        "snapshot_counts": result.snapshot_counts.model_dump(),
+        "written_object_count": result.written_object_count,
+    }
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
 def _bootstrap_summary_json(result: BootstrapResult) -> str:

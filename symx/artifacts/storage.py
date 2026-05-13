@@ -5,16 +5,19 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
+from typing import Protocol, cast
 
 from google.api_core.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Bucket, Client
 from pydantic import BaseModel, Field
+from requests.adapters import HTTPAdapter
 
 from symx.admin.meta_json import parse_ota_meta_json
 from symx.artifacts.convert import convert_ipsw_db, convert_ota_meta
 from symx.artifacts.model import ArtifactBundle
 from symx.artifacts.report import ArtifactParityReport, ArtifactReportError, build_parity_report
+from symx.artifacts.snapshot import ArtifactSnapshotCounts, build_snapshot_db, snapshot_counts
 from symx.gcs import parse_gcs_url
 from symx.ipsw.model import ARTIFACTS_META_JSON as IPSW_ARTIFACTS_META_JSON
 from symx.ipsw.model import IpswArtifactDb
@@ -22,6 +25,10 @@ from symx.ota.model import ARTIFACTS_META_JSON as OTA_ARTIFACTS_META_JSON
 from symx.ota.model import OtaArtifact
 
 BOOTSTRAP_MANIFEST_SCHEMA_VERSION = 1
+
+
+class _MountableSession(Protocol):
+    def mount(self, prefix: str, adapter: HTTPAdapter) -> None: ...
 
 
 class ArtifactStorageError(RuntimeError):
@@ -74,6 +81,14 @@ class BootstrapResult(BaseModel):
     sample_written_objects: list[str] = Field(default_factory=list)
 
 
+class SnapshotViewResult(BaseModel):
+    prefix: str
+    snapshot_db_path: str
+    dry_run: bool
+    written_object_count: int = 0
+    snapshot_counts: ArtifactSnapshotCounts
+
+
 class ArtifactGcsPrefixStore:
     def __init__(self, bucket: Bucket, prefix: str, storage_uri: str) -> None:
         self.bucket = bucket
@@ -81,17 +96,21 @@ class ArtifactGcsPrefixStore:
         self.storage_uri = storage_uri
 
     @classmethod
-    def from_storage_uri(cls, storage: str, prefix: str) -> "ArtifactGcsPrefixStore":
+    def from_storage_uri(cls, storage: str, prefix: str, connection_pool_size: int = 10) -> "ArtifactGcsPrefixStore":
         uri = parse_gcs_url(storage)
         if uri is None or uri.hostname is None:
             raise ArtifactStorageError(f"Unsupported storage URI: {storage}")
 
         client: Client = Client(project=uri.username)
+        configure_gcs_connection_pool(client, connection_pool_size)
         return cls(client.bucket(uri.hostname), prefix, storage)
 
     def object_name(self, relative_path: str) -> str:
         normalized_relative = normalize_relative_path(relative_path)
         return str(PurePosixPath(self.prefix) / normalized_relative)
+
+    def snapshot_db_path(self) -> str:
+        return self.object_name("views/snapshot.db")
 
     def load_legacy_meta(self) -> LegacyMetaSnapshot:
         ipsw_text, ipsw_object = self._download_text_with_generation(IPSW_ARTIFACTS_META_JSON)
@@ -119,13 +138,17 @@ class ArtifactGcsPrefixStore:
     ) -> BootstrapResult:
         self._ensure_bootstrap_markers_absent(manifest)
         objects = self._bootstrap_objects(bundles, report, manifest)
+        manifest_payload = objects.pop(manifest.manifest_path)
         written = write_json_objects_create_only(self.bucket, objects, max_workers=max_workers)
+        written.extend(
+            write_json_objects_create_only(self.bucket, {manifest.manifest_path: manifest_payload}, max_workers=1)
+        )
         return BootstrapResult(
             manifest=manifest,
             parity_report=report,
             dry_run=False,
             written_object_count=len(written),
-            sample_written_objects=written[:20],
+            sample_written_objects=sorted(written)[:20],
         )
 
     def dry_run_bootstrap(self) -> BootstrapResult:
@@ -151,6 +174,34 @@ class ArtifactGcsPrefixStore:
                 sample_written_objects=[f"{object_count} objects would be written"],
             )
         return self.write_bootstrap(bundles, report, manifest, max_workers=max_workers)
+
+    def write_snapshot_view(self, dry_run: bool = False) -> SnapshotViewResult:
+        bundles, report, manifest = self.build_bootstrap()
+        snapshot_object_path = self.snapshot_db_path()
+        if dry_run:
+            return SnapshotViewResult(
+                prefix=self.prefix,
+                snapshot_db_path=snapshot_object_path,
+                dry_run=True,
+                snapshot_counts=_expected_snapshot_counts(manifest),
+            )
+
+        if self.bucket.blob(snapshot_object_path).exists():
+            raise ExistingObjectError(snapshot_object_path)
+
+        with TemporaryDirectory(prefix="symx_artifacts_snapshot_") as temp_dir:
+            snapshot_path = Path(temp_dir) / "snapshot.db"
+            build_snapshot_db(snapshot_path, bundles, report, storage=self.storage_uri, prefix=self.prefix)
+            counts = snapshot_counts(snapshot_path)
+            upload_file_create_only(self.bucket, snapshot_object_path, snapshot_path)
+
+        return SnapshotViewResult(
+            prefix=self.prefix,
+            snapshot_db_path=snapshot_object_path,
+            dry_run=False,
+            written_object_count=1,
+            snapshot_counts=counts,
+        )
 
     def _ensure_bootstrap_markers_absent(self, manifest: BootstrapManifest) -> None:
         for object_name in (manifest.manifest_path, manifest.parity_report_path):
@@ -215,6 +266,20 @@ class ArtifactGcsPrefixStore:
         return objects
 
 
+def configure_gcs_connection_pool(client: Client, pool_size: int) -> None:
+    if pool_size <= 0:
+        raise ArtifactStorageError("GCS connection pool size must be positive")
+
+    http = getattr(client, "_http", None)
+    if not hasattr(http, "mount"):
+        return
+
+    session = cast(_MountableSession, http)
+    adapter = HTTPAdapter(pool_connections=pool_size, pool_maxsize=pool_size)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+
+
 def normalize_prefix(prefix: str) -> str:
     normalized = prefix.strip().strip("/")
     if not normalized:
@@ -229,6 +294,24 @@ def normalize_relative_path(path: str) -> str:
     if not normalized or normalized.startswith("../") or "/../" in normalized:
         raise ArtifactStorageError(f"Invalid relative object path: {path}")
     return normalized
+
+
+def _expected_snapshot_counts(manifest: BootstrapManifest) -> ArtifactSnapshotCounts:
+    return ArtifactSnapshotCounts(
+        artifacts=manifest.artifact_count,
+        ipsw_details=manifest.totals_by_kind.get("ipsw", 0),
+        ota_details=manifest.totals_by_kind.get("ota", 0),
+        sim_details=manifest.totals_by_kind.get("sim", 0),
+    )
+
+
+def upload_file_create_only(bucket: Bucket, object_name: str, local_file: Path) -> str:
+    blob: Blob = bucket.blob(object_name)
+    try:
+        blob.upload_from_filename(str(local_file), if_generation_match=0)
+    except PreconditionFailed as exc:
+        raise ExistingObjectError(object_name) from exc
+    return object_name
 
 
 def write_json_objects_create_only(bucket: Bucket, objects: dict[str, str], max_workers: int = 16) -> list[str]:

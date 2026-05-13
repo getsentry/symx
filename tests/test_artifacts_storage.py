@@ -46,10 +46,23 @@ class FakeBlob:
         retry: object | None = None,
         if_generation_match: int | None = None,
     ) -> None:
+        self._upload_payload(data, content_type, if_generation_match)
+
+    def upload_from_filename(self, filename: str, if_generation_match: int | None = None) -> None:
+        with open(filename, "rb") as f:
+            self._upload_payload(f.read().decode("latin1"), None, if_generation_match)
+
+    def _upload_payload(
+        self,
+        data: str,
+        content_type: str | None = None,
+        if_generation_match: int | None = None,
+    ) -> None:
         if if_generation_match == 0 and self.name in self._bucket.objects:
             raise PreconditionFailed("exists")
         self._bucket.generation += 1
         self._bucket.objects[self.name] = FakeObject(data, self._bucket.generation, content_type)
+        self._bucket.write_order.append(self.name)
         self._hydrate_metadata()
 
     def _hydrate_metadata(self) -> None:
@@ -65,6 +78,7 @@ class FakeBlob:
 class FakeBucket:
     def __init__(self, objects: dict[str, str]) -> None:
         self.generation = 100
+        self.write_order: list[str] = []
         self.objects = {
             name: FakeObject(payload=payload, generation=index + 1)
             for index, (name, payload) in enumerate(objects.items())
@@ -106,7 +120,30 @@ def test_bootstrap_writes_normalized_objects_create_only() -> None:
     assert "ota_image_meta.json" in bucket.objects
     assert result.manifest.manifest_path in bucket.objects
     assert result.manifest.parity_report_path in bucket.objects
+    assert bucket.write_order[-1] == result.manifest.manifest_path
     assert all(name.startswith("experiments/meta-v2/test-run/") for name in result.sample_written_objects)
+
+
+def test_write_snapshot_view_writes_one_snapshot_object() -> None:
+    bucket = FakeBucket(
+        {
+            "ipsw_meta.json": _ipsw_db_json(),
+            "ota_image_meta.json": _ota_meta_json(),
+        }
+    )
+    store = ArtifactGcsPrefixStore(
+        cast(Bucket, cast(Any, bucket)),
+        "experiments/meta-v2/test-run",
+        "gs://apple_symbols",
+    )
+
+    result = store.write_snapshot_view()
+
+    assert result.written_object_count == 1
+    assert result.snapshot_counts.artifacts == 2
+    assert result.snapshot_db_path == "experiments/meta-v2/test-run/views/snapshot.db"
+    assert result.snapshot_db_path in bucket.objects
+    assert bucket.write_order == [result.snapshot_db_path]
 
 
 def test_bootstrap_refuses_existing_experiment_objects() -> None:
