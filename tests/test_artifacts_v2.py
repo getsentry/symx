@@ -7,7 +7,7 @@ from pydantic import HttpUrl, ValidationError
 
 from symx.artifacts.convert import convert_ipsw_db, convert_ota_meta, ota_filename
 from symx.artifacts.ids import ipsw_artifact_uid, ota_artifact_uid
-from symx.artifacts.model import ArtifactBundle, ArtifactKind, ArtifactSourceKind, LegacyStore
+from symx.artifacts.model import ArtifactBundle, ArtifactKind, LegacyStore, MetadataSource
 from symx.artifacts.report import build_parity_report
 from symx.ipsw.model import (
     IpswArtifact,
@@ -89,7 +89,7 @@ def test_convert_ipsw_db_creates_one_artifact_per_source_and_round_trips_json() 
     record = bundles[0].artifact
     detail = bundles[0].ipsw_detail
     assert record.kind == ArtifactKind.IPSW
-    assert record.source_kind == ArtifactSourceKind.APPLEDB
+    assert record.metadata_source == MetadataSource.APPLEDB
     assert record.platform == "iOS"
     assert record.version == "18.2"
     assert record.build == "22C152"
@@ -120,7 +120,7 @@ def test_convert_ota_meta_creates_artifact_and_detail() -> None:
     record = bundles[0].artifact
     detail = bundles[0].ota_detail
     assert record.kind == ArtifactKind.OTA
-    assert record.source_kind == ArtifactSourceKind.APPLE_OTA_FEED
+    assert record.metadata_source == MetadataSource.APPLE_OTA_FEED
     assert record.platform == "ios"
     assert record.source_key == "ota-key"
     assert record.filename == ota_filename(ota)

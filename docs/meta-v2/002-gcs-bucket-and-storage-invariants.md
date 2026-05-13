@@ -57,8 +57,8 @@ Production Symx storage code should not overwrite or remove data casually.
 
 Important invariants:
 
-- Mirrored artifacts are durable replay inputs and should be treated as immutable once verified.
-- Symbol output should remain additive/create-only until a deliberate replacement model exists.
+- Mirrored artifacts are durable replay inputs and should be treated as immutable once verified; changing mirror storage layout/lifecycle is out of scope for this investigation.
+- Symbol output is the symbolicator-facing interface; existing symbol-store data must not be migrated or rekeyed. If future uploads ever use artifact IDs as bundle IDs, metadata must record the actual bundle ID used because the store will contain both legacy and new bundle-id forms.
 - Metadata updates are the critical mutable path and must use conditional writes / optimistic concurrency.
 - v1 metadata writes rewrite a whole domain metadata blob, so each writer must preserve many unrelated invariants.
 - v2 artifact writes should usually touch one artifact object plus optional event/projection objects, reducing contention and blast radius.

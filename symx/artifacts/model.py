@@ -19,7 +19,7 @@ class ArtifactKind(StrEnum):
     SIM = "sim"
 
 
-class ArtifactSourceKind(StrEnum):
+class MetadataSource(StrEnum):
     APPLEDB = "appledb"
     APPLE_OTA_FEED = "apple_ota_feed"
     RUNNER_SIM_CACHE = "runner_sim_cache"
@@ -59,7 +59,7 @@ class ArtifactRecord(BaseModel):
     release_status: str | None = None
     released_at: date | None = None
 
-    source_kind: ArtifactSourceKind
+    metadata_source: MetadataSource
     source_url: str | None
     source_key: str
     filename: str

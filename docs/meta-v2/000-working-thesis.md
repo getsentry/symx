@@ -15,6 +15,23 @@ Build a normalized artifact metadata layer while still operating within the curr
 
 The target normalized artifact is the downloadable/storable/processable file plus storage/state metadata. Domain-specific ingestion/update details remain domain-specific.
 
+## Explicit non-goals
+
+This investigation is about metadata structure and metadata update semantics.
+
+It explicitly does **not** investigate changing:
+
+- mirror object storage layout or mirror object lifecycle,
+- symbol-storage layout,
+- the symbolicator-facing symbol store interface,
+- migrating/rekeying existing symbol-store data.
+
+`artifact_uid` is a metadata identity. The normalized metadata records the actual symbol-store prefix and bundle ID used for a given artifact so existing symbols can still be related back to metadata.
+
+Changing future symsorter bundle IDs to use `artifact_uid` is not ruled out as a design option, but it would be a forward-only behavior change. Existing symbol-store data must not be migrated, so choosing that option means the symbol store will permanently contain both legacy bundle IDs and artifact-UID-based bundle IDs. Any metadata/debug tooling must model the bundle ID that was actually used for each artifact instead of assuming a single derivation rule.
+
+A new symbolicator-facing symbol-store interface is out of scope. However, read-optimized metadata/symbol debugging materializations are not ruled out as future experiments, as long as they do not change symbolicator's contract.
+
 ## Current thesis
 
 The current IPSW and OTA metadata stores can coexist with a v2 artifact store for a long time.
@@ -86,6 +103,7 @@ Sketch:
   "release_status": "rel",
   "released_at": "2024-12-11",
 
+  "metadata_source": "appledb",
   "source_url": "https://...",
   "source_key": "legacy-source-identity",
   "filename": "...ipsw",
@@ -95,6 +113,9 @@ Sketch:
 
   "mirror_path": "mirror/ipsw/...",
   "processing_state": "mirrored",
+
+  "symbol_store_prefix": "ios",
+  "symbol_bundle_id": "ipsw_...",
 
   "last_run": 123456789,
   "last_modified": "2026-05-12T12:00:00Z",
@@ -113,18 +134,19 @@ The core artifact record owns:
 - artifact UID,
 - kind/domain,
 - platform/version/build,
-- source URL/key,
+- metadata source plus source URL/key; `source_url` may be absent for source listings that expose an identity but not a stable URL,
 - filename,
 - hash/size,
-- mirror path,
+- mirror path pointer,
 - resting processing state,
+- existing symbol-store prefix/bundle-id pointer,
 - last mutation/run metadata.
 
 Domain-specific detail objects own source interpretation:
 
 - IPSW: AppleDB grouping, release hierarchy, devices, source index/link, raw/source fields.
-- OTA: OTA key/id, description, duplicate classification inputs, devices, raw feed fields.
-- Simulator: runtime/package/cache identity, host image, Xcode/macOS context, arch.
+- OTA: OTA key/id, description, duplicate classification inputs, devices, raw feed fields. Current OTA metadata comes from Apple's OTA feed via `ipsw`, but the model should allow AppleDB to become an OTA source later.
+- Simulator: runtime/package/cache identity, host image, Xcode/macOS context, arch. The model should allow both current runner-local simulator cache discovery and future simulator image/package metadata sourced from whatever backs `ipsw download xcode --sim`.
 
 ## Proposed GCS layout
 
@@ -281,7 +303,7 @@ Possible evidence-gathering order:
 | Admin sync           | can consume normalized snapshot projection once parity mode exists; not special-cased away from cross-checking            |
 | Admin apply          | eventually CAS-patches artifact rows with expected generation/state; before cutover, shadow-applies comparable v2 updates |
 | Coverage page        | can query normalized snapshot projection once v1/v2 coverage parity is checked                                            |
-| Symbol store         | initially unchanged; later symbol indexes can become read-optimized materializations                                      |
+| Symbol store         | no migration/rekeying and no symbolicator interface changes; metadata records the bundle ID actually used                 |
 
 ## Model-system hygiene
 
