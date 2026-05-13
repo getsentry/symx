@@ -1,0 +1,61 @@
+name: Install ipsw
+description: Install blacktop/ipsw from a GitHub release tarball.
+
+inputs:
+  version:
+    description: ipsw release version to install, without the leading v.
+    required: false
+    default: "3.1.676"
+  platform:
+    description: Release archive platform to install. Supported values are macos and linux.
+    required: true
+  logs_root:
+    description: Directory for the install log consumed by failure notifications.
+    required: false
+    default: .github/logs
+
+runs:
+  using: composite
+  steps:
+    - name: Install ipsw
+      shell: bash
+      env:
+        IPSW_VERSION: ${{ inputs.version }}
+        IPSW_PLATFORM: ${{ inputs.platform }}
+        IPSW_LOGS_ROOT: ${{ inputs.logs_root }}
+      run: |
+        mkdir -p "$IPSW_LOGS_ROOT"
+        set -o pipefail
+        {
+          set -euo pipefail
+
+          version="${IPSW_VERSION#v}"
+          if [ -z "$version" ]; then
+            echo "ipsw version input must not be empty"
+            exit 1
+          fi
+
+          case "$IPSW_PLATFORM" in
+            macos|darwin|macOS_universal)
+              archive_platform="macOS_universal"
+              ;;
+            linux|ubuntu|linux_x86_64)
+              archive_platform="linux_x86_64"
+              ;;
+            *)
+              echo "Unknown ipsw platform: $IPSW_PLATFORM"
+              echo "Expected one of: macos, linux"
+              exit 1
+              ;;
+          esac
+
+          tmp_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/ipsw.XXXXXX")"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          archive_path="$tmp_dir/ipsw.tar.gz"
+          archive_url="https://github.com/blacktop/ipsw/releases/download/v${version}/ipsw_${version}_${archive_platform}.tar.gz"
+
+          echo "Installing ipsw ${version} from ${archive_url}"
+          curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors "$archive_url" -o "$archive_path"
+          sudo tar -xzf "$archive_path" -C /usr/local/bin ipsw
+          ipsw version
+        } 2>&1 | tee "$IPSW_LOGS_ROOT/install-ipsw.log"
