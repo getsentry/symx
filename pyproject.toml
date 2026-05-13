@@ -9,14 +9,12 @@ authors = [
 license = {text = "MIT"}
 requires-python = ">=3.14"
 dependencies = [
-    "typer==0.21.1",
-    "sentry-sdk>=2.54.0",
-    "google-cloud-storage==3.8.0",
-    "protobuf==6.33.5", # TODO: explicitly bump protobuf to the CVE fix until google-cloud-storage bumps
-    "pydantic==2.12.5",
-    "pandas>=3",
-    "deepdiff==8.6.2",
-    "textual>=8.2.4",
+    "typer==0.25.1",
+    "sentry-sdk==2.60.0",
+    "google-cloud-storage==3.10.1",
+    "pydantic==2.13.4",
+    "deepdiff==9.0.0",
+    "textual==8.2.6",
 ]
 name = "symx"
 version = "0.2.0"
@@ -28,8 +26,8 @@ symx = "symx.__main__:main"
 
 [dependency-groups]
 dev = [
-    "pyright==1.1.408",
-    "ruff==0.15.7",
+    "pyright==1.1.409",
+    "ruff==0.15.12",
     "pytest==9.0.3",
     "pytest-cov==7.1.0",
 ]
