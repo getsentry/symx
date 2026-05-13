@@ -5,7 +5,7 @@ inputs:
   version:
     description: ipsw release version to install, without the leading v.
     required: false
-    default: "3.1.676"
+    default: "3.1.680"
   platform:
     description: Release archive platform to install. Supported values are macos and linux.
     required: true
