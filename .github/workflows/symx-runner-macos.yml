@@ -64,13 +64,6 @@ jobs:
             export PATH="/Users/runner/.local/bin:$PATH"
             uv --version
             uv sync
-            IPSW_VERSION="3.1.676"
-            curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors \
-              "https://github.com/blacktop/ipsw/releases/download/v${IPSW_VERSION}/ipsw_${IPSW_VERSION}_macOS_universal.tar.gz" \
-              -o /tmp/ipsw.tar.gz
-            sudo tar -xzf /tmp/ipsw.tar.gz -C /usr/local/bin ipsw
-            rm /tmp/ipsw.tar.gz
-            ipsw version
             brew install tree
             curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors https://github.com/getsentry/symbolicator/releases/latest/download/symsorter-Darwin-universal > symsorter
             chmod +x symsorter
@@ -80,9 +73,17 @@ jobs:
             ls -la
           } 2>&1 | tee .github/logs/install-dependencies.log
 
+      - name: Install ipsw
+        id: install_ipsw
+        if: ${{ steps.auth.outcome == 'success' && steps.setup_gcloud.outcome == 'success' && steps.install_dependencies.outcome == 'success' }}
+        continue-on-error: true
+        uses: ./.github/actions/install-ipsw
+        with:
+          platform: macos
+
       - name: ${{ inputs.symx_step }}
         id: symx
-        if: ${{ steps.auth.outcome == 'success' && steps.setup_gcloud.outcome == 'success' && steps.install_dependencies.outcome == 'success' }}
+        if: ${{ steps.auth.outcome == 'success' && steps.setup_gcloud.outcome == 'success' && steps.install_dependencies.outcome == 'success' && steps.install_ipsw.outcome == 'success' }}
         continue-on-error: true
         run: |
           mkdir -p .github/logs
@@ -110,10 +111,11 @@ jobs:
             [
               {"name":"Auth","outcome":${{ toJSON(steps.auth.outcome) }},"fallback_snippet":"uses google-github-actions/auth@v2"},
               {"name":"Set up Cloud SDK","outcome":${{ toJSON(steps.setup_gcloud.outcome) }},"fallback_snippet":"uses google-github-actions/setup-gcloud@v2"},
-              {"name":"Install dependencies","outcome":${{ toJSON(steps.install_dependencies.outcome) }},"log_path":"install-dependencies.log","fallback_snippet":"Install uv dependencies, ipsw, and symsorter."},
+              {"name":"Install dependencies","outcome":${{ toJSON(steps.install_dependencies.outcome) }},"log_path":"install-dependencies.log","fallback_snippet":"Install uv dependencies and symsorter."},
+              {"name":"Install ipsw","outcome":${{ toJSON(steps.install_ipsw.outcome) }},"log_path":"install-ipsw.log","fallback_snippet":"Install ipsw release tarball."},
               {"name":${{ toJSON(inputs.symx_step) }},"outcome":${{ toJSON(steps.symx.outcome) }},"log_path":"symx.log","fallback_snippet":${{ toJSON(inputs.symx_run) }}}
             ]
 
       - name: Fail workflow after notification
-        if: ${{ always() && (steps.auth.outcome == 'failure' || steps.setup_gcloud.outcome == 'failure' || steps.install_dependencies.outcome == 'failure' || steps.symx.outcome == 'failure') }}
+        if: ${{ always() && (steps.auth.outcome == 'failure' || steps.setup_gcloud.outcome == 'failure' || steps.install_dependencies.outcome == 'failure' || steps.install_ipsw.outcome == 'failure' || steps.symx.outcome == 'failure') }}
         run: exit 1
