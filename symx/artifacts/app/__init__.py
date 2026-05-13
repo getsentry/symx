@@ -11,6 +11,7 @@ from symx.artifacts.report import (
     report_to_json,
     write_parity_report_json,
 )
+from symx.artifacts.sqlite_store import SqliteMetadataBuildResult, build_sqlite_metadata_from_gcs
 from symx.artifacts.storage import (
     ArtifactGcsPrefixStore,
     ArtifactStorageError,
@@ -21,7 +22,28 @@ from symx.artifacts.storage import (
 
 artifacts_app = typer.Typer(help="Artifact metadata migration and validation helpers")
 v2_app = typer.Typer(help="metadata-v2 shadow-model helpers")
+sqlite_app = typer.Typer(help="SQLite metadata-store experiments")
 artifacts_app.add_typer(v2_app, name="v2")
+artifacts_app.add_typer(sqlite_app, name="sqlite")
+
+
+@sqlite_app.command("build")
+def sqlite_build_command(
+    storage: str = typer.Option(..., "--storage", "-s", help="URI to the GCS bucket containing legacy metadata"),
+    output_dir: Path = typer.Option(..., "--output-dir", "-o", help="Local directory for SQLite outputs"),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite existing local SQLite outputs"),
+) -> None:
+    """Build combined and per-domain compressed SQLite metadata DBs from legacy metadata."""
+
+    try:
+        result = build_sqlite_metadata_from_gcs(storage, output_dir, overwrite=overwrite)
+    except ArtifactStorageError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(_sqlite_build_summary_json(result).rstrip())
+    if not result.parity_ok:
+        raise typer.Exit(code=2)
 
 
 @v2_app.command("bootstrap")
@@ -122,6 +144,11 @@ def report_command(
 
     if not report.ok:
         raise typer.Exit(code=2)
+
+
+def _sqlite_build_summary_json(result: SqliteMetadataBuildResult) -> str:
+    payload = result.model_dump()
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
 def _local_v2_snapshot_summary_json(result: LocalV2SnapshotResult) -> str:
