@@ -42,6 +42,8 @@ This is a trade-off, not an obvious replacement. The current JSON model is awkwa
 
 A new first-class alternative is to store the authoritative metadata as one or more compressed SQLite database objects in GCS. This keeps the current whole-object optimistic concurrency model but gives Symx a SQL data model, indexes, and a much easier future path to a real SQL server without paying the object-per-artifact listing/object-count cost. See [`017-sqlite-blob-as-core-store.md`](017-sqlite-blob-as-core-store.md).
 
+A fuller hybrid candidate is also possible: object-per-artifact/detail metadata as authoritative live state, plus a queued lagging SQLite projection for admin/stats. This gives per-object live mutations and SQL reads, but introduces queue/projection/reconciliation complexity. See [`021-object-store-with-queued-sqlite-projection.md`](021-object-store-with-queued-sqlite-projection.md).
+
 The useful migration shape is not a delayed, offline-only model replacement. It is:
 
 1. Keep v1 production-authoritative initially.

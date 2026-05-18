@@ -5,13 +5,27 @@ from pathlib import Path
 
 import typer
 
+from symx.artifacts.json_store import (
+    JsonMetadataKind,
+    JsonMetadataUploadResult,
+    JsonUpdateSimulationResult,
+    simulate_json_state_update,
+    upload_legacy_json_copies,
+)
 from symx.artifacts.report import (
     ArtifactReportError,
     build_parity_report_from_files,
     report_to_json,
     write_parity_report_json,
 )
-from symx.artifacts.sqlite_store import SqliteMetadataBuildResult, build_sqlite_metadata_from_gcs
+from symx.artifacts.sqlite_store import (
+    SqliteMetadataBuildResult,
+    SqliteMetadataUploadResult,
+    SqliteUpdateSimulationResult,
+    build_sqlite_metadata_from_gcs,
+    simulate_sqlite_state_update,
+    upload_sqlite_metadata_files,
+)
 from symx.artifacts.storage import (
     ArtifactGcsPrefixStore,
     ArtifactStorageError,
@@ -23,8 +37,95 @@ from symx.artifacts.storage import (
 artifacts_app = typer.Typer(help="Artifact metadata migration and validation helpers")
 v2_app = typer.Typer(help="metadata-v2 shadow-model helpers")
 sqlite_app = typer.Typer(help="SQLite metadata-store experiments")
+json_app = typer.Typer(help="Legacy JSON metadata-store experiments")
 artifacts_app.add_typer(v2_app, name="v2")
 artifacts_app.add_typer(sqlite_app, name="sqlite")
+artifacts_app.add_typer(json_app, name="json")
+
+
+@json_app.command("upload-copies")
+def json_upload_copies_command(
+    storage: str = typer.Option(..., "--storage", "-s", help="URI to the GCS bucket containing legacy metadata"),
+    prefix: str = typer.Option(..., "--prefix", help="Experiment prefix for JSON metadata copies"),
+    allow_non_experiment_prefix: bool = typer.Option(
+        False,
+        "--allow-non-experiment-prefix",
+        help="Allow prefixes outside experiments/ for explicit cutover testing",
+    ),
+) -> None:
+    """Copy legacy JSON metadata objects under an experiment prefix using create-only writes."""
+
+    if not allow_non_experiment_prefix and not prefix.strip("/").startswith("experiments/"):
+        typer.echo("Refusing to write outside experiments/ without --allow-non-experiment-prefix", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        result = upload_legacy_json_copies(storage, prefix)
+    except ArtifactStorageError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(_json_upload_summary_json(result).rstrip())
+
+
+@json_app.command("simulate-update")
+def json_simulate_update_command(
+    storage: str = typer.Option(..., "--storage", "-s", help="URI to the GCS bucket containing JSON metadata"),
+    object_name: str = typer.Option(..., "--object-name", help="GCS object name of the JSON metadata object"),
+    kind: JsonMetadataKind = typer.Option(..., "--kind", help="Metadata kind: ipsw or ota"),
+) -> None:
+    """Simulate one generation-matched legacy JSON metadata state update."""
+
+    try:
+        result = simulate_json_state_update(storage, object_name, kind)
+    except ArtifactStorageError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(_json_update_summary_json(result).rstrip())
+
+
+@sqlite_app.command("upload")
+def sqlite_upload_command(
+    storage: str = typer.Option(..., "--storage", "-s", help="URI to the GCS bucket to write SQLite metadata to"),
+    prefix: str = typer.Option(..., "--prefix", help="Experiment prefix for SQLite metadata objects"),
+    input_dir: Path = typer.Option(..., "--input-dir", "-i", help="Directory containing *.sqlite.gz files"),
+    allow_non_experiment_prefix: bool = typer.Option(
+        False,
+        "--allow-non-experiment-prefix",
+        help="Allow prefixes outside experiments/ for explicit cutover testing",
+    ),
+) -> None:
+    """Upload compressed SQLite metadata DBs with create-only writes."""
+
+    if not allow_non_experiment_prefix and not prefix.strip("/").startswith("experiments/"):
+        typer.echo("Refusing to write outside experiments/ without --allow-non-experiment-prefix", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        result = upload_sqlite_metadata_files(storage, prefix, input_dir)
+    except ArtifactStorageError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(_sqlite_upload_summary_json(result).rstrip())
+
+
+@sqlite_app.command("simulate-update")
+def sqlite_simulate_update_command(
+    storage: str = typer.Option(..., "--storage", "-s", help="URI to the GCS bucket containing SQLite metadata"),
+    object_name: str = typer.Option(..., "--object-name", help="GCS object name of the sqlite.gz metadata DB"),
+    artifact_uid: str | None = typer.Option(None, "--artifact-uid", help="Artifact UID to update (default: first row)"),
+) -> None:
+    """Simulate one generation-matched SQLite metadata state update."""
+
+    try:
+        result = simulate_sqlite_state_update(storage, object_name, artifact_uid=artifact_uid)
+    except ArtifactStorageError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(_sqlite_update_summary_json(result).rstrip())
 
 
 @sqlite_app.command("build")
@@ -144,6 +245,22 @@ def report_command(
 
     if not report.ok:
         raise typer.Exit(code=2)
+
+
+def _json_upload_summary_json(result: JsonMetadataUploadResult) -> str:
+    return json.dumps(result.model_dump(), indent=2, sort_keys=True) + "\n"
+
+
+def _json_update_summary_json(result: JsonUpdateSimulationResult) -> str:
+    return json.dumps(result.model_dump(), indent=2, sort_keys=True) + "\n"
+
+
+def _sqlite_upload_summary_json(result: SqliteMetadataUploadResult) -> str:
+    return json.dumps(result.model_dump(), indent=2, sort_keys=True) + "\n"
+
+
+def _sqlite_update_summary_json(result: SqliteUpdateSimulationResult) -> str:
+    return json.dumps(result.model_dump(), indent=2, sort_keys=True) + "\n"
 
 
 def _sqlite_build_summary_json(result: SqliteMetadataBuildResult) -> str:

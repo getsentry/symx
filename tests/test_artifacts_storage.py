@@ -17,7 +17,7 @@ from symx.ota.model import OtaArtifact
 
 @dataclass
 class FakeObject:
-    payload: str
+    payload: str | bytes
     generation: int
     content_type: str | None = None
 
@@ -37,11 +37,13 @@ class FakeBlob:
         self._hydrate_metadata()
 
     def download_to_filename(self, filename: str) -> None:
-        with open(filename, "w") as f:
-            f.write(self._bucket.objects[self.name].payload)
+        payload = self._bucket.objects[self.name].payload
+        with open(filename, "wb") as f:
+            f.write(payload if isinstance(payload, bytes) else payload.encode("utf-8"))
 
     def download_as_bytes(self) -> bytes:
-        return self._bucket.objects[self.name].payload.encode("utf-8")
+        payload = self._bucket.objects[self.name].payload
+        return payload if isinstance(payload, bytes) else payload.encode("utf-8")
 
     def upload_from_string(
         self,
@@ -54,11 +56,11 @@ class FakeBlob:
 
     def upload_from_filename(self, filename: str, if_generation_match: int | None = None) -> None:
         with open(filename, "rb") as f:
-            self._upload_payload(f.read().decode("latin1"), None, if_generation_match)
+            self._upload_payload(f.read(), None, if_generation_match)
 
     def _upload_payload(
         self,
-        data: str,
+        data: str | bytes,
         content_type: str | None = None,
         if_generation_match: int | None = None,
     ) -> None:
@@ -76,11 +78,11 @@ class FakeBlob:
             self.size = None
         else:
             self.generation = obj.generation
-            self.size = len(obj.payload.encode())
+            self.size = len(obj.payload if isinstance(obj.payload, bytes) else obj.payload.encode())
 
 
 class FakeBucket:
-    def __init__(self, objects: dict[str, str]) -> None:
+    def __init__(self, objects: dict[str, str | bytes]) -> None:
         self.generation = 100
         self.write_order: list[str] = []
         self.objects = {

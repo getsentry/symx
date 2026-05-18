@@ -7,9 +7,41 @@ from datetime import date
 from pydantic import HttpUrl
 
 from symx.artifacts.convert import convert_ipsw_db, convert_ota_meta
-from symx.artifacts.sqlite_store import build_sqlite_metadata_files
+from symx.artifacts.sqlite_store import build_sqlite_metadata_files, simulate_sqlite_state_update
 from symx.ipsw.model import IpswArtifact, IpswArtifactDb, IpswPlatform, IpswReleaseStatus, IpswSource
 from symx.ota.model import OtaArtifact
+from tests.test_artifacts_storage import FakeBucket
+
+
+def test_simulate_sqlite_state_update_round_trips_compressed_db(tmp_path, monkeypatch) -> None:
+    bundles = [*convert_ipsw_db(_ipsw_db()), *convert_ota_meta(_ota_meta())]
+    result = build_sqlite_metadata_files(
+        storage="test-storage",
+        output_dir=tmp_path,
+        bundles=bundles,
+        report=None,
+    )
+    compressed_payload = open(result.dbs[0].compressed_path, "rb").read()
+    fake_bucket = FakeBucket({"experiments/sqlite/metadata.sqlite.gz": compressed_payload})
+
+    class FakeClient:
+        def __init__(self, project=None) -> None:
+            pass
+
+        def bucket(self, bucket_name: str):
+            return fake_bucket
+
+    monkeypatch.setattr("symx.artifacts.sqlite_store.Client", FakeClient)
+
+    update_result = simulate_sqlite_state_update(
+        "gs://apple_symbols/",
+        "experiments/sqlite/metadata.sqlite.gz",
+    )
+
+    assert update_result.previous_state == "indexed"
+    assert update_result.new_state == "ignored"
+    assert update_result.integrity_check == "ok"
+    assert update_result.generation_after > update_result.generation_before
 
 
 def test_build_sqlite_metadata_files_writes_combined_and_domain_dbs(tmp_path) -> None:
