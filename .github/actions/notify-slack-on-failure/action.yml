@@ -55,7 +55,7 @@ runs:
 
     - name: Send Slack failure notification
       if: ${{ steps.failure_context.outputs.failed == 'true' && inputs.slack_webhook_url != '' }}
-      uses: slackapi/slack-github-action@v2
+      uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
       with:
         webhook: ${{ inputs.slack_webhook_url }}
         webhook-type: incoming-webhook

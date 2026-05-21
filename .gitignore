@@ -6,6 +6,7 @@ __pycache__
 .mypy_cache
 .idea
 venv_homebrew
+.coverage
 
 # transient app output
 tmp
