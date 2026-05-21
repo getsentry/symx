@@ -42,32 +42,25 @@ A key nuance: **IPSW processing state is tracked per source file**, while **OTA 
 ## High-level architecture
 
 ```mermaid
-flowchart LR
+flowchart TD
     AppleDB[AppleDB] --> IPSWMeta[IPSW meta-sync workflow]
-    AppleOTA[Apple OTA endpoints via `ipsw`] --> OTAMirror[OTA mirror workflow]
+    AppleOTA[Apple OTA endpoints] --> OTAMirror[OTA mirror workflow]
 
-    IPSWMeta --> IPSWMetaJson[(GCS: ipsw_meta.json)]
-    OTAMirror --> OTAMetaJson[(GCS: ota_image_meta.json)]
+    IPSWMeta --> IPSWMetaJson[(GCS: IPSW meta store)]
+    OTAMirror --> OTAMetaJson[(GCS: OTA meta store)]
 
     IPSWMetaJson --> IPSWMirror[IPSW mirror workflow]
-    IPSWMirror --> IPSWMirrorStore[(GCS: mirror/ipsw/...)]
+    IPSWMirror --> IPSWMirrorStore[(GCS: IPSW mirror store)]
     IPSWMetaJson --> IPSWExtract[IPSW extract workflow]
     IPSWMirrorStore --> IPSWExtract
 
     OTAMetaJson --> OTAExtract[OTA extract workflow]
-    OTAMirror --> OTAMirrorStore[(GCS: mirror/ota/...)]
+    OTAMirror --> OTAMirrorStore[(GCS: OTA mirror store)]
     OTAMirrorStore --> OTAExtract
 
-    IPSWExtract --> Symbols[(GCS: symbols/...)]
+    IPSWExtract --> Symbols[(GCS: symbol store)]
     OTAExtract --> Symbols
     Sim[Simulator extract workflow] --> Symbols
-
-    IPSWMeta --> Sentry[(Sentry)]
-    IPSWMirror --> Sentry
-    IPSWExtract --> Sentry
-    OTAMirror --> Sentry
-    OTAExtract --> Sentry
-    Sim --> Sentry
 ```
 
 More detail, including the "who processes what when" walkthrough and the state diagrams, lives in [docs/architecture.md](docs/architecture.md).
