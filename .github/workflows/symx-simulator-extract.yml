@@ -27,12 +27,12 @@ jobs:
 
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Auth
         id: auth
         continue-on-error: true
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: projects/868781662168/locations/global/workloadIdentityPools/prod-github/providers/github-oidc-pool
           service_account: symx-downloader@sac-prod-sa.iam.gserviceaccount.com
@@ -41,7 +41,7 @@ jobs:
         id: setup_gcloud
         if: ${{ steps.auth.outcome == 'success' }}
         continue-on-error: true
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
         with:
           version: ">= 363.0.0"
 
@@ -102,8 +102,8 @@ jobs:
           job_name: Extract simulator symbols (${{ matrix.runs-on }})
           steps_json: >-
             [
-              {"name":"Auth","outcome":${{ toJSON(steps.auth.outcome) }},"fallback_snippet":"uses google-github-actions/auth@v2"},
-              {"name":"Set up Cloud SDK","outcome":${{ toJSON(steps.setup_gcloud.outcome) }},"fallback_snippet":"uses google-github-actions/setup-gcloud@v2"},
+              {"name":"Auth","outcome":${{ toJSON(steps.auth.outcome) }},"fallback_snippet":"uses google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0"},
+              {"name":"Set up Cloud SDK","outcome":${{ toJSON(steps.setup_gcloud.outcome) }},"fallback_snippet":"uses google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1"},
               {"name":"Install dependencies","outcome":${{ toJSON(steps.install_dependencies.outcome) }},"log_path":"install-dependencies.log","fallback_snippet":"Install uv dependencies and symsorter."},
               {"name":"Install ipsw","outcome":${{ toJSON(steps.install_ipsw.outcome) }},"log_path":"install-ipsw.log","fallback_snippet":"Install ipsw release tarball."},
               {"name":${{ toJSON(format('Extract Simulator from {0}', matrix.runs-on)) }},"outcome":${{ toJSON(steps.extract_simulator.outcome) }},"log_path":"extract-simulator.log","fallback_snippet":${{ toJSON(format('sim extract -s {0}', vars.SYMX_STORE)) }}}
