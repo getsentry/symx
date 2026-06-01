@@ -1,0 +1,23 @@
+name: Test Bitrise Runner
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      symx_run:
+        description: "symx command to run (e.g. 'ipsw extract -t 315 -s gcs://...')"
+        required: false
+        default: "ipsw extract -t 60 -s ${{ vars.SYMX_STORE }}"
+
+jobs:
+  call-reusable-workflow:
+    uses: ./.github/workflows/symx-runner-macos.yml
+    with:
+      job_name: Test Bitrise Runner
+      symx_step: Test Bitrise
+      symx_run: ${{ inputs.symx_run }}
+    secrets:
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
