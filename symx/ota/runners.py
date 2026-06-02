@@ -155,10 +155,12 @@ class OtaExtract:
         self,
         storage: OtaStorage,
         extractor: OtaSymbolExtractor | None = None,
+        dry_run: bool = False,
     ) -> None:
         self.storage = storage
         self.meta: OtaMetaData = {}
         self._extractor = extractor if extractor is not None else _RealOtaSymbolExtractor()
+        self._dry_run = dry_run
 
     def extract(self, timer: Timeout) -> None:
         self._extractor.validate_deps()
@@ -202,14 +204,17 @@ class OtaExtract:
                         ):
                             symbol_dirs = self._extractor.extract(local_ota_path, key, ota, work_dir_path)
                         bundle_id = f"ota_{key}"
-                        for symbol_dir in symbol_dirs:
-                            with sentry_sdk.start_span(
-                                op="gcs.upload_symbols", name=f"Upload OTA symbols {ota.platform} {ota.version}"
-                            ):
-                                self.storage.upload_symbols(symbol_dir, key, ota, bundle_id)
-                        ota.processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
-                        ota.update_last_run()
-                        self.storage.update_meta_item(key, ota)
+                        if self._dry_run:
+                            logger.info("Dry run: skipping upload for OTA %s %s %s", ota.platform, ota.version, ota.build)
+                        else:
+                            for symbol_dir in symbol_dirs:
+                                with sentry_sdk.start_span(
+                                    op="gcs.upload_symbols", name=f"Upload OTA symbols {ota.platform} {ota.version}"
+                                ):
+                                    self.storage.upload_symbols(symbol_dir, key, ota, bundle_id)
+                            ota.processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
+                            ota.update_last_run()
+                            self.storage.update_meta_item(key, ota)
                         artifacts_extracted += 1
                         sentry_sdk.metrics.count("ota.extract.succeeded", 1, attributes={"platform": ota.platform})
                     except DeltaOtaError:

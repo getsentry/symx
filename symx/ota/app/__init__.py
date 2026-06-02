@@ -44,6 +44,7 @@ def extract(
         "-t",
         help="timeout in minutes triggering an ordered shutdown after it elapsed",
     ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Run extraction without uploading symbols or updating metadata"),
 ) -> None:
     """
     Extract dyld_shared_cache and symbols from OTA images to storage
@@ -52,7 +53,7 @@ def extract(
     if storage_backend:
         from symx.model import Timeout
 
-        ota = OtaExtract(storage=storage_backend)
+        ota = OtaExtract(storage=storage_backend, dry_run=dry_run)
         ota.extract(Timeout(datetime.timedelta(minutes=timeout)))
 
 

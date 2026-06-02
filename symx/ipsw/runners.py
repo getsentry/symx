@@ -183,6 +183,7 @@ def extract(
     ipsw_storage: IpswStorage,
     timer: Timeout,
     extractor: SymbolExtractor | None = None,
+    dry_run: bool = False,
 ) -> None:
     if extractor is None:
         extractor = _RealSymbolExtractor()
@@ -251,19 +252,23 @@ def extract(
                                 artifact.platform, source.file_name, ipsw_storage.local_dir, local_path
                             )
 
-                        with sentry_sdk.start_span(
-                            op="gcs.upload_symbols", name=f"Upload symbols for {source.file_name}"
-                        ):
-                            ipsw_storage.upload_symbols(
-                                result.prefix,
-                                result.bundle_id,
-                                artifact,
-                                source_idx,
-                                result.symbols_dir,
-                            )
+                        if dry_run:
+                            logger.info("Dry run: skipping upload for %s", source.file_name)
+                        else:
+                            with sentry_sdk.start_span(
+                                op="gcs.upload_symbols", name=f"Upload symbols for {source.file_name}"
+                            ):
+                                ipsw_storage.upload_symbols(
+                                    result.prefix,
+                                    result.bundle_id,
+                                    artifact,
+                                    source_idx,
+                                    result.symbols_dir,
+                                )
 
                         shutil.rmtree(result.symbols_dir)
-                        artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
+                        if not dry_run:
+                            artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
                         artifacts_extracted += 1
                         sentry_sdk.metrics.count(
                             "ipsw.extract.succeeded", 1, attributes={"platform": str(artifact.platform)}
@@ -283,8 +288,9 @@ def extract(
                             "ipsw.extract.failed", 1, attributes={"platform": str(artifact.platform)}
                         )
                     finally:
-                        artifact.sources[source_idx].update_last_run()
-                        ipsw_storage.update_meta_item(artifact)
+                        if not dry_run:
+                            artifact.sources[source_idx].update_last_run()
+                            ipsw_storage.update_meta_item(artifact)
                         ipsw_storage.clean_local_dir()
 
     sentry_sdk.metrics.distribution("ipsw.extract.artifacts_extracted", artifacts_extracted)
