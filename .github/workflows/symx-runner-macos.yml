@@ -15,10 +15,6 @@ on:
       symx_run:
         required: true
         type: string
-      runner_provider:
-        required: false
-        type: string
-        default: cirrus
     secrets:
       SENTRY_DSN:
         required: true
@@ -27,8 +23,11 @@ on:
 
 jobs:
   symx-macos-job:
-    name: ${{ inputs.job_name }}
-    runs-on: ${{ inputs.runner_provider == 'bitrise' && fromJSON('["bitrise_pool_name:tahoe"]') || fromJSON('["ghcr.io/cirruslabs/macos-runner:sequoia,runner_concurrency_group=10"]') }}
+    name: ${{ inputs.job_name }} (${{ matrix.runner_provider }})
+    runs-on: ${{ matrix.runner_provider == 'bitrise' && fromJSON('["bitrise_pool_name:tahoe"]') || fromJSON('["ghcr.io/cirruslabs/macos-runner:sequoia,runner_group_id=10"]') }}
+    strategy:
+      matrix:
+        runner_provider: [cirrus, bitrise]
     permissions:
       actions: "read"
       contents: "read"
@@ -99,7 +98,7 @@ jobs:
         env:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SYMX_RUN: ${{ inputs.symx_run }}
+          SYMX_RUN: ${{ matrix.runner_provider == 'bitrise' && format('{0} --dry-run', inputs.symx_run) || inputs.symx_run }}
 
       - name: Notify on failure
         id: notify_failure
