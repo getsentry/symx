@@ -442,7 +442,7 @@ class AdminTui(App[None]):
         self._all_ota_rows_by_key = {_ota_row_key(row): row for row in all_ota_rows}
         visible_ota_rows = [row for row in all_ota_rows if row.processing_state in self.failure_states]
         self._populate_ota_table(visible_ota_rows)
-        self._start_run_lookup_thread(all_ota_rows)
+        self._start_run_lookup_thread(visible_ota_rows)
         self.sub_title = self._subtitle()
         self._refresh_details()
         self._refresh_pending_batch()

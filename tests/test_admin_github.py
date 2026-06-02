@@ -67,6 +67,18 @@ def test_fetch_github_run_info_uses_gh_cli() -> None:
     )
 
 
+def test_ensure_github_run_infos_refetches_cached_runs_without_timestamps(tmp_path: Path) -> None:
+    stale = GithubRunInfo(run_id=123)
+    refreshed = GithubRunInfo(run_id=123, updated_at="2024-09-04T12:34:56Z")
+    write_github_run_cache(tmp_path, {123: stale})
+
+    with patch("symx.admin.github.fetch_github_run_info", return_value=refreshed) as fetch_run_info:
+        result = ensure_github_run_infos(tmp_path, [123])
+
+    fetch_run_info.assert_called_once_with(123)
+    assert result[123] == refreshed
+
+
 def test_ensure_github_run_infos_uses_cache_for_existing_runs(tmp_path: Path) -> None:
     cached = GithubRunInfo(run_id=123, updated_at="2024-09-03T12:34:56Z")
     fetched = GithubRunInfo(run_id=456, updated_at="2024-09-04T12:34:56Z")
