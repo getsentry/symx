@@ -10,6 +10,13 @@ on:
       symx_run:
         description: "symx command to run (e.g. 'ipsw extract -t 60 -s gcs://bucket')"
         required: true
+      runner_provider:
+        description: "Runner provider"
+        required: true
+        type: choice
+        options:
+          - bitrise
+          - cirrus
 
 jobs:
   call-reusable-workflow:
@@ -18,5 +25,6 @@ jobs:
       job_name: Test Bitrise Runner
       symx_step: Test Bitrise
       symx_run: ${{ inputs.symx_run }}
+      runner_provider: ${{ inputs.runner_provider }}
     secrets:
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
