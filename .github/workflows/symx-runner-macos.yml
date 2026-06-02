@@ -24,7 +24,7 @@ on:
 jobs:
   symx-macos-job:
     name: ${{ inputs.job_name }}
-    runs-on: ${{ matrix.runner_provider == 'bitrise' && fromJSON('["bitrise_pool_name:tahoe"]') || fromJSON('["ghcr.io/cirruslabs/macos-runner:sequoia,runner_concurrency_group=10"]') }}
+    runs-on: ${{ matrix.runner_provider == 'bitrise' && fromJSON('["bitrise_pool_name:tahoe"]') || fromJSON('["ghcr.io/cirruslabs/macos-runner:sequoia,runner_group_id:10"]') }}
     strategy:
       matrix:
         runner_provider: [cirrus, bitrise]
