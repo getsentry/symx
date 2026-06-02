@@ -8,9 +8,8 @@ on:
   workflow_dispatch:
     inputs:
       symx_run:
-        description: "symx command to run (e.g. 'ipsw extract -t 315 -s gcs://...')"
-        required: false
-        default: "ipsw extract -t 60 -s ${{ vars.SYMX_STORE }}"
+        description: "symx command to run (e.g. 'ipsw extract -t 60 -s gcs://bucket')"
+        required: true
 
 jobs:
   call-reusable-workflow:
