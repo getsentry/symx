@@ -210,7 +210,9 @@ class OtaExtract:
                             symbol_dirs = self._extractor.extract(local_ota_path, key, ota, work_dir_path)
                         bundle_id = f"ota_{key}"
                         if self._dry_run:
-                            logger.info("Dry run: skipping upload for OTA %s %s %s", ota.platform, ota.version, ota.build)
+                            logger.info(
+                                "Dry run: skipping upload for OTA %s %s %s", ota.platform, ota.version, ota.build
+                            )
                         else:
                             for symbol_dir in symbol_dirs:
                                 with sentry_sdk.start_span(

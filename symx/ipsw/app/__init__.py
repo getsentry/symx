@@ -69,7 +69,9 @@ def extract(
         "-t",
         help="timeout in minutes triggering an ordered shutdown after it elapsed",
     ),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Run extraction without uploading symbols or updating metadata"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Run extraction without uploading symbols or updating metadata"
+    ),
 ) -> None:
     """
     Extract all mirrored artifacts and upload their binaries to the symbol store.
