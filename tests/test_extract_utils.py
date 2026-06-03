@@ -7,6 +7,7 @@ the OTA and IPSW extraction workflows.
 
 import json
 import plistlib
+import signal
 import subprocess
 import tempfile
 import zipfile
@@ -21,6 +22,9 @@ from symx.ipsw.extract import (
     IpswExtractError,
     IpswExtractTimeoutError,
     IpswExtractor,
+    _directory_tree_delta,
+    _directory_tree_stats,
+    _parse_symsorter_summary,
     find_extraction_dir,
     generate_bundle_id,
     inspect_ipsw_dmg_paths,
@@ -150,6 +154,44 @@ def _make_ipsw_extractor(tmp_path: Path) -> IpswExtractor:
     return IpswExtractor(IpswPlatform.IPADOS, "iPad15,7_26.4.2_23E261_Restore.ipsw", processing_dir, ipsw_path)
 
 
+def test_directory_tree_stats_counts_unique_files_without_following_links(tmp_path: Path) -> None:
+    file_path = tmp_path / "file"
+    file_path.write_bytes(b"abc")
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / "other").write_bytes(b"data")
+    (tmp_path / "hardlink").hardlink_to(file_path)
+    (tmp_path / "symlink").symlink_to(file_path)
+
+    stats = _directory_tree_stats(tmp_path)
+
+    assert stats.file_count == 2
+    assert stats.total_file_size_bytes == 7
+    assert stats.directory_count == 1
+    assert stats.symlink_count == 1
+
+
+def test_directory_tree_delta_uses_zero_for_missing_before_counts(tmp_path: Path) -> None:
+    before = _directory_tree_stats(tmp_path / "missing")
+    (tmp_path / "created").write_bytes(b"abc")
+    after = _directory_tree_stats(tmp_path)
+
+    delta = _directory_tree_delta(before, after)
+    assert delta.file_count_delta == 1
+    assert delta.total_file_size_bytes_delta == 3
+
+
+def test_parse_symsorter_summary_extracts_counts() -> None:
+    assert _parse_symsorter_summary(
+        b"Done.\nSorted 42 debug files\nCreated 2 source bundles\n",
+        b"WARNING: File foo already exists, you seem to have duplicate debug files\n",
+    ) == {
+        "sorted_debug_files": 42,
+        "created_source_bundles": 2,
+        "duplicate_debug_file_warnings": 1,
+    }
+
+
 def test_ipsw_extract_dsc_timeout_preserves_timeout_contract_and_diagnostics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -272,6 +314,7 @@ def test_ipsw_symsort_sys_image_passes_vendored_pem_db_when_available(
     mount_point = extractor._sys_mount_point()
     mount_point.mkdir()
     commands: list[list[str]] = []
+    communicate_timeouts: list[int | None] = []
     symsort_calls: list[tuple[Path, bool]] = []
 
     class FakeStdout:
@@ -300,8 +343,13 @@ def test_ipsw_symsort_sys_image_passes_vendored_pem_db_when_available(
         def send_signal(self, sig: int) -> None:
             return None
 
+        def communicate(self, timeout: int | None = None) -> tuple[str, str]:
+            communicate_timeouts.append(timeout)
+            self.returncode = 0
+            return "", ""
+
         def wait(self, timeout: int | None = None) -> int:
-            return 0
+            raise AssertionError("mount cleanup should drain with communicate(), not wait()")
 
         def kill(self) -> None:
             return None
@@ -311,7 +359,9 @@ def test_ipsw_symsort_sys_image_passes_vendored_pem_db_when_available(
     monkeypatch.setattr(
         IpswExtractor,
         "_symsort",
-        lambda self, split_dir, ignore_errors=False: symsort_calls.append((split_dir, ignore_errors)),
+        lambda self, split_dir, ignore_errors=False, record_input_tree=True: symsort_calls.append(
+            (split_dir, ignore_errors)
+        ),
     )
 
     extractor._symsort_sys_image()
@@ -329,7 +379,71 @@ def test_ipsw_symsort_sys_image_passes_vendored_pem_db_when_available(
             str(pem_db),
         ]
     ]
+    assert communicate_timeouts == [60]
     assert symsort_calls == [(mount_point, True)]
+
+
+def test_ipsw_symsort_sys_image_kills_mount_process_after_cleanup_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    extractor = _make_ipsw_extractor(tmp_path)
+    mount_point = extractor._sys_mount_point()
+    mount_point.mkdir()
+    communicate_timeouts: list[int | None] = []
+    sent_signals: list[int] = []
+    killed = False
+
+    class FakeStdout:
+        def __init__(self, lines: list[str]) -> None:
+            self._lines = iter(lines)
+
+        def readline(self) -> str:
+            return next(self._lines, "")
+
+    class FakePopen:
+        def __init__(
+            self,
+            command: list[str],
+            stdout: object = None,
+            stderr: object = None,
+            bufsize: int | None = None,
+            text: bool | None = None,
+        ) -> None:
+            self.command = command
+            self.stdout = FakeStdout([f"Press Ctrl+C to unmount '{mount_point}'\n", ""])
+            self.returncode: int | None = None
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def send_signal(self, sig: int) -> None:
+            sent_signals.append(sig)
+
+        def communicate(self, timeout: int | None = None) -> tuple[str, str]:
+            communicate_timeouts.append(timeout)
+            if timeout is not None:
+                raise subprocess.TimeoutExpired(self.command, timeout, output="partial unmount output")
+            self.returncode = -9
+            return "post-kill unmount output", ""
+
+        def wait(self, timeout: int | None = None) -> int:
+            raise AssertionError("mount cleanup should drain with communicate(), not wait()")
+
+        def kill(self) -> None:
+            nonlocal killed
+            killed = True
+            self.returncode = -9
+
+    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
+    monkeypatch.setattr(
+        IpswExtractor, "_symsort", lambda self, split_dir, ignore_errors=False, record_input_tree=True: None
+    )
+
+    extractor._symsort_sys_image()
+
+    assert sent_signals == [signal.SIGINT]
+    assert communicate_timeouts == [60, None]
+    assert killed
 
 
 def test_ipsw_symsort_sys_image_cleans_extracted_aea_on_failure(
@@ -373,13 +487,19 @@ def test_ipsw_symsort_sys_image_cleans_extracted_aea_on_failure(
         def send_signal(self, sig: int) -> None:
             return None
 
+        def communicate(self, timeout: int | None = None) -> tuple[str, str]:
+            self.returncode = 0
+            return "", ""
+
         def wait(self, timeout: int | None = None) -> int:
-            return 0
+            raise AssertionError("mount cleanup should drain with communicate(), not wait()")
 
         def kill(self) -> None:
             return None
 
-    def fake_symsort(self: IpswExtractor, split_dir: Path, ignore_errors: bool = False) -> None:
+    def fake_symsort(
+        self: IpswExtractor, split_dir: Path, ignore_errors: bool = False, record_input_tree: bool = True
+    ) -> None:
         raise IpswExtractError("boom")
 
     monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
@@ -439,7 +559,7 @@ def test_ipsw_symsort_sys_image_raises_on_mount_failure_and_cleans_mount_artifac
             return None
 
         def wait(self, timeout: int | None = None) -> int:
-            return self.returncode
+            raise AssertionError("mount cleanup should drain with communicate(), not wait()")
 
         def kill(self) -> None:
             return None
