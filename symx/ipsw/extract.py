@@ -4,9 +4,13 @@ import plistlib
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import zipfile
+from collections.abc import Generator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
@@ -27,11 +31,89 @@ from symx.ipsw.model import IpswPlatform
 
 logger = logging.getLogger(__name__)
 
-mount_point_re = re.compile(r".*Press Ctrl\+C to unmount '(.*)'")
-extracted_mount_artifact_re = re.compile(r"^Extracted (.+?)(?: from .*)?$")
+_MOUNT_POINT_RE = re.compile(r".*Press Ctrl\+C to unmount '(.*)'")
+_EXTRACTED_MOUNT_ARTIFACT_RE = re.compile(r"^Extracted (.+?)(?: from .*)?$")
+_SYMSORTER_SORTED_DEBUG_FILES_RE = re.compile(r"^Sorted (\d+) debug files$")
+_SYMSORTER_CREATED_SOURCE_BUNDLES_RE = re.compile(r"^Created (\d+) source bundles$")
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+_LEADING_IPSW_GLYPH_RE = re.compile(r"^\s*[•⨯]\s*")
 
-
+_SYS_MOUNT_CLEANUP_TIMEOUT_SECONDS = 60
+_RESERVED_PROCESSING_DIR_NAMES = frozenset({"split_out", "symbols", "sys_mount"})
+_ERROR_SUMMARY_MARKERS = (
+    "error",
+    "failed",
+    "invalid",
+    "not found",
+    "unable",
+    "unknown flag",
+    "must specify",
+)
+_IGNORED_IPSW_HELP_PREFIXES = ("Usage:", "Aliases:", "Examples:", "Flags:", "Global Flags:")
+_FCS_KEY_URL_LABEL = "[com.apple.wkms.fcs-key-url]:"
 _VENDORED_PEM_DB = Path(__file__).resolve().parent / "data" / "fcs-keys.json"
+
+
+@dataclass(frozen=True)
+class DirectoryTreeStats:
+    path: str
+    exists: bool
+    is_dir: bool
+    file_count: int = 0
+    total_file_size_bytes: int = 0
+    directory_count: int = 0
+    symlink_count: int = 0
+    other_entry_count: int = 0
+    error_count: int = 0
+
+    def to_span_data(self) -> dict[str, object]:
+        data: dict[str, object] = {
+            "path": self.path,
+            "exists": self.exists,
+            "is_dir": self.is_dir,
+        }
+        if not self.is_dir:
+            return data
+
+        data.update(
+            {
+                "file_count": self.file_count,
+                "total_file_size_bytes": self.total_file_size_bytes,
+                "directory_count": self.directory_count,
+                "symlink_count": self.symlink_count,
+                "other_entry_count": self.other_entry_count,
+            }
+        )
+        if self.error_count:
+            data["error_count"] = self.error_count
+        return data
+
+
+@dataclass(frozen=True)
+class DirectoryTreeStatsDelta:
+    file_count_delta: int
+    total_file_size_bytes_delta: int
+    directory_count_delta: int
+    symlink_count_delta: int
+    other_entry_count_delta: int
+
+    def to_span_data(self) -> dict[str, int]:
+        return {
+            "file_count_delta": self.file_count_delta,
+            "total_file_size_bytes_delta": self.total_file_size_bytes_delta,
+            "directory_count_delta": self.directory_count_delta,
+            "symlink_count_delta": self.symlink_count_delta,
+            "other_entry_count_delta": self.other_entry_count_delta,
+        }
+
+
+@dataclass(frozen=True)
+class SysImageMount:
+    process: subprocess.Popen[str]
+    requested_mount_point: Path
+    active_mount_point: Path | None
+    extracted_artifact_paths: list[Path]
+    error: str | None = None
 
 
 def vendored_ipsw_pem_db_path() -> Path | None:
@@ -54,6 +136,190 @@ def _ipsw_command_data(
         "stderr_summary": _summarize_ipsw_stderr(stderr),
         "directories": [directory_data(directory) for directory in directories],
     }
+
+
+def _output_line_count(output: str | bytes | None) -> int:
+    text = decode_subprocess_output(output)
+    if not text:
+        return 0
+    return len(text.splitlines())
+
+
+def _directory_tree_stats(directory: Path) -> DirectoryTreeStats:
+    exists = directory.exists()
+    is_dir = directory.is_dir()
+    if not is_dir:
+        return DirectoryTreeStats(path=str(directory), exists=exists, is_dir=is_dir)
+
+    file_count = 0
+    total_file_size_bytes = 0
+    directory_count = 0
+    symlink_count = 0
+    other_entry_count = 0
+    error_count = 0
+    seen_files: set[tuple[int, int]] = set()
+    stack = [directory]
+
+    while stack:
+        current = stack.pop()
+        try:
+            entries = list(current.iterdir())
+        except OSError:
+            error_count += 1
+            continue
+
+        for entry in entries:
+            try:
+                entry_stat = entry.lstat()
+            except OSError:
+                error_count += 1
+                continue
+
+            mode = entry_stat.st_mode
+            if stat.S_ISDIR(mode):
+                directory_count += 1
+                stack.append(entry)
+            elif stat.S_ISREG(mode):
+                file_key = (entry_stat.st_dev, entry_stat.st_ino)
+                if file_key in seen_files:
+                    continue
+                seen_files.add(file_key)
+                file_count += 1
+                total_file_size_bytes += entry_stat.st_size
+            elif stat.S_ISLNK(mode):
+                symlink_count += 1
+            else:
+                other_entry_count += 1
+
+    return DirectoryTreeStats(
+        path=str(directory),
+        exists=exists,
+        is_dir=is_dir,
+        file_count=file_count,
+        total_file_size_bytes=total_file_size_bytes,
+        directory_count=directory_count,
+        symlink_count=symlink_count,
+        other_entry_count=other_entry_count,
+        error_count=error_count,
+    )
+
+
+def _directory_tree_delta(before: DirectoryTreeStats, after: DirectoryTreeStats) -> DirectoryTreeStatsDelta:
+    return DirectoryTreeStatsDelta(
+        file_count_delta=after.file_count - before.file_count,
+        total_file_size_bytes_delta=after.total_file_size_bytes - before.total_file_size_bytes,
+        directory_count_delta=after.directory_count - before.directory_count,
+        symlink_count_delta=after.symlink_count - before.symlink_count,
+        other_entry_count_delta=after.other_entry_count - before.other_entry_count,
+    )
+
+
+def _parse_symsorter_summary(stdout: str | bytes | None, stderr: str | bytes | None) -> dict[str, int]:
+    summary: dict[str, int] = {}
+    for line in decode_subprocess_output(stdout).splitlines():
+        if match := _SYMSORTER_SORTED_DEBUG_FILES_RE.match(line):
+            summary["sorted_debug_files"] = int(match.group(1))
+        elif match := _SYMSORTER_CREATED_SOURCE_BUNDLES_RE.match(line):
+            summary["created_source_bundles"] = int(match.group(1))
+
+    stderr_text = decode_subprocess_output(stderr)
+    duplicate_warning_count = stderr_text.count("already exists")
+    if duplicate_warning_count:
+        summary["duplicate_debug_file_warnings"] = duplicate_warning_count
+
+    return summary
+
+
+def _record_mount_process_output(
+    span: Any,
+    stdout_key: str,
+    stderr_key: str,
+    stdout: str | bytes | None,
+    stderr: str | bytes | None,
+) -> None:
+    span.set_data(stdout_key, truncate_text(stdout))
+    span.set_data(stderr_key, truncate_text(stderr))
+    span.set_data(f"{stdout_key}_line_count", _output_line_count(stdout))
+    span.set_data(f"{stderr_key}_line_count", _output_line_count(stderr))
+
+
+def _terminate_sys_mount_process(mount_proc: subprocess.Popen[str], span: Any) -> None:
+    returncode_before_cleanup = mount_proc.poll()
+    span.set_data("returncode_before_cleanup", returncode_before_cleanup)
+
+    if returncode_before_cleanup is not None:
+        span.set_data("already_exited", True)
+        return
+
+    span.set_data("sent_signal", "SIGINT")
+    mount_proc.send_signal(signal.SIGINT)
+    try:
+        # Drain remaining output while waiting, so a full stdout pipe cannot block unmount teardown.
+        remaining_stdout, remaining_stderr = mount_proc.communicate(timeout=_SYS_MOUNT_CLEANUP_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as error:
+        span.set_status("internal_error")
+        span.set_data("sigint_timeout_seconds", _SYS_MOUNT_CLEANUP_TIMEOUT_SECONDS)
+        span.set_data("timed_out_after_sigint", True)
+        _record_mount_process_output(
+            span,
+            "partial_stdout_after_sigint",
+            "partial_stderr_after_sigint",
+            error.output,
+            error.stderr,
+        )
+        logger.warning("Mount process did not terminate after SIGINT, killing it")
+        mount_proc.kill()
+        span.set_data("killed", True)
+        remaining_stdout, remaining_stderr = mount_proc.communicate()
+        span.set_data("returncode_after_kill", mount_proc.returncode)
+        _record_mount_process_output(
+            span,
+            "remaining_stdout_after_kill",
+            "remaining_stderr_after_kill",
+            remaining_stdout,
+            remaining_stderr,
+        )
+        return
+
+    span.set_data("timed_out_after_sigint", False)
+    span.set_data("returncode_after_sigint", mount_proc.returncode)
+    _record_mount_process_output(
+        span,
+        "remaining_stdout_after_sigint",
+        "remaining_stderr_after_sigint",
+        remaining_stdout,
+        remaining_stderr,
+    )
+
+
+def _cleanup_sys_mount_directory(mount_point: Path, span: Any) -> None:
+    span.set_data("mount_point_exists_before_directory_cleanup", mount_point.exists())
+    if mount_point.exists():
+        logger.warning("Mount point still exists after unmount, attempting cleanup", extra={"mount_point": mount_point})
+        try:
+            shutil.rmtree(mount_point)
+        except Exception as e:
+            span.set_status("internal_error")
+            logger.error("Failed to clean up mount point", extra={"mount_point": mount_point, "exception": e})
+    span.set_data("mount_point_exists_after_directory_cleanup", mount_point.exists())
+
+
+def _cleanup_sys_image_mount(mount: SysImageMount) -> None:
+    with sentry_sdk.start_span(op="subprocess.ipsw_mount_cleanup", name="Unmount sys image") as span:
+        span.set_data("requested_mount_point", str(mount.requested_mount_point))
+        if mount.active_mount_point is not None:
+            span.set_data("active_mount_point", str(mount.active_mount_point))
+
+        _terminate_sys_mount_process(mount.process, span)
+        _cleanup_sys_mount_directory(mount.requested_mount_point, span)
+
+    for extracted_mount_artifact_path in mount.extracted_artifact_paths:
+        _cleanup_mount_artifact(extracted_mount_artifact_path)
+        if extracted_mount_artifact_path.suffix == ".aea":
+            _cleanup_mount_artifact(
+                extracted_mount_artifact_path.with_suffix(""),
+                description="decrypted DMG artifact left by ipsw mount",
+            )
 
 
 def _manifest_component_path(component: object) -> str | None:
@@ -386,6 +652,7 @@ class IpswExtractor:
                 )
 
             span.set_data("extract_dir", directory_data(extract_dir))
+            span.set_data("extract_output_tree", _directory_tree_stats(extract_dir).to_span_data())
             return extract_dir
 
     def run(self) -> Path:
@@ -453,7 +720,23 @@ class IpswExtractor:
         return self.processing_dir / "sys_mount"
 
     def _symsort_sys_image(self) -> None:
-        # mount the sys image (the process waits for sigint)
+        with self._mounted_sys_image() as active_mount_point:
+            self._symsort(active_mount_point, ignore_errors=True, record_input_tree=False)
+
+    @contextmanager
+    def _mounted_sys_image(self) -> Generator[Path, None, None]:
+        mount = self._prepare_sys_image_mount()
+        try:
+            if mount.error is not None:
+                raise IpswExtractError(mount.error)
+            if mount.active_mount_point is None:
+                raise IpswExtractError(f"Could not determine sys image mount point for {self.ipsw_path}")
+
+            yield mount.active_mount_point
+        finally:
+            _cleanup_sys_image_mount(mount)
+
+    def _prepare_sys_image_mount(self) -> SysImageMount:
         mount_point = self._sys_mount_point()
         if mount_point.exists():
             logger.warning("Removing stale sys image mount point before mount", extra={"mount_point": mount_point})
@@ -466,6 +749,7 @@ class IpswExtractor:
         extracted_mount_artifact_paths: list[Path] = []
         active_mount_point: Path | None = None
         mount_error: str | None = None
+
         with sentry_sdk.start_span(op="subprocess.ipsw_mount", name="Mount sys image") as mount_span:
             mount_span.set_data("requested_mount_point", str(mount_point))
             mount_command = [
@@ -489,7 +773,7 @@ class IpswExtractor:
                 text=True,
             )
 
-            # read mount-output until we get the mount-point
+            # Read only until ipsw reports the mount point. Cleanup drains the remaining output later.
             while mount_proc.stdout:
                 line = mount_proc.stdout.readline()
                 if not line:
@@ -503,19 +787,22 @@ class IpswExtractor:
                 ):
                     extracted_mount_artifact_paths.append(extracted_mount_artifact_path)
 
-                mount_point_match = mount_point_re.match(line)
+                mount_point_match = _MOUNT_POINT_RE.match(line)
                 if not mount_point_match:
                     continue
 
                 active_mount_point = Path(mount_point_match.group(1))
                 break
 
+            mount_span.set_data("mount_output_line_count", len(mount_output_lines))
+            if mount_output_lines:
+                mount_span.set_data("mount_output_preview", mount_output_lines[:20])
+
             if active_mount_point:
                 mount_span.set_data("mount_point", str(active_mount_point))
             else:
                 mount_output = "\n".join(mount_output_lines)
                 mount_summary = _summarize_ipsw_stderr(mount_output)
-                mount_span.set_data("mount_output_preview", mount_output_lines[:20])
                 mount_span.set_data("mount_output_summary", mount_summary)
                 mount_span.set_status("internal_error")
                 if mount_summary:
@@ -523,44 +810,13 @@ class IpswExtractor:
                 else:
                     mount_error = f"Could not determine sys image mount point for {self.ipsw_path}"
 
-        try:
-            if mount_error is not None:
-                raise IpswExtractError(mount_error)
-
-            if active_mount_point is None:
-                raise IpswExtractError(f"Could not determine sys image mount point for {self.ipsw_path}")
-
-            # symsort the entire sys mount-point
-            self._symsort(active_mount_point, ignore_errors=True)
-        finally:
-            # SIGINT the mount process and wait for it to unmount
-            if mount_proc.poll() is None:
-                mount_proc.send_signal(signal.SIGINT)
-                try:
-                    # Wait for process to cleanly unmount (timeout after 60 seconds)
-                    mount_proc.wait(timeout=60)
-                except subprocess.TimeoutExpired:
-                    logger.warning("Mount process did not terminate after SIGINT, killing it")
-                    mount_proc.kill()
-                    mount_proc.wait()
-
-            # Clean up mount point directory if it still exists (in case unmount failed)
-            if mount_point.exists():
-                logger.warning(
-                    "Mount point still exists after unmount, attempting cleanup", extra={"mount_point": mount_point}
-                )
-                try:
-                    shutil.rmtree(mount_point)
-                except Exception as e:
-                    logger.error("Failed to clean up mount point", extra={"mount_point": mount_point, "exception": e})
-
-            for extracted_mount_artifact_path in extracted_mount_artifact_paths:
-                _cleanup_mount_artifact(extracted_mount_artifact_path)
-                if extracted_mount_artifact_path.suffix == ".aea":
-                    _cleanup_mount_artifact(
-                        extracted_mount_artifact_path.with_suffix(""),
-                        description="decrypted DMG artifact left by ipsw mount",
-                    )
+        return SysImageMount(
+            process=mount_proc,
+            requested_mount_point=mount_point,
+            active_mount_point=active_mount_point,
+            extracted_artifact_paths=extracted_mount_artifact_paths,
+            error=mount_error,
+        )
 
     def _ipsw_split(self, extract_dir: Path, arch: Arch | None = None) -> Path:
         arch_label = str(arch) if arch is not None else "default"
@@ -587,6 +843,7 @@ class IpswExtractor:
             result = dyld_split(dsc_root_file, split_dir_arch)
             span.set_data("dyld_split", subprocess_result_data(result))
             span.set_data("split_dir", directory_data(split_dir_arch))
+            span.set_data("split_output_tree", _directory_tree_stats(split_dir_arch).to_span_data())
 
             if result.returncode != 0:
                 span.set_status("internal_error")
@@ -597,17 +854,28 @@ class IpswExtractor:
 
             return split_dir
 
-    def _symsort(self, split_dir: Path, ignore_errors: bool = False) -> None:
+    def _symsort(self, split_dir: Path, ignore_errors: bool = False, record_input_tree: bool = True) -> None:
         output_dir = self.symbols_dir()
         logger.info("Symsorting %s -> %s", split_dir, output_dir)
 
         with sentry_sdk.start_span(op="ipsw.symsort", name=f"Symsort IPSW {self.bundle_id}") as span:
             span.set_data("bundle_id", self.bundle_id)
             span.set_data("split_dir", directory_data(split_dir))
+            if record_input_tree:
+                span.set_data("input_tree", _directory_tree_stats(split_dir).to_span_data())
+
+            output_tree_before = _directory_tree_stats(output_dir)
             span.set_data("output_dir", directory_data(output_dir))
 
             result = symsort(output_dir, self.prefix, self.bundle_id, split_dir, ignore_errors)
             span.set_data("symsort", subprocess_result_data(result))
+            span.set_data("symsorter_summary", _parse_symsorter_summary(result.stdout, result.stderr))
+
+            output_tree_after = _directory_tree_stats(output_dir)
+            span.set_data(
+                "output_tree_delta", _directory_tree_delta(output_tree_before, output_tree_after).to_span_data()
+            )
+            span.set_data("output_tree_total_after", output_tree_after.to_span_data())
 
             if result.returncode != 0:
                 span.set_status("internal_error")
@@ -620,9 +888,6 @@ class IpswExtractError(Exception):
 
 class IpswExtractTimeoutError(IpswExtractError, TimeoutError):
     pass
-
-
-_RESERVED_PROCESSING_DIR_NAMES = frozenset({"split_out", "symbols", "sys_mount"})
 
 
 def find_extraction_dir(processing_dir: Path) -> Path | None:
@@ -643,21 +908,6 @@ def find_extraction_dir(processing_dir: Path) -> Path | None:
     return None
 
 
-_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
-_LEADING_IPSW_GLYPH_RE = re.compile(r"^\s*[•⨯]\s*")
-_ERROR_SUMMARY_MARKERS = (
-    "error",
-    "failed",
-    "invalid",
-    "not found",
-    "unable",
-    "unknown flag",
-    "must specify",
-)
-_IGNORED_IPSW_HELP_PREFIXES = ("Usage:", "Aliases:", "Examples:", "Flags:", "Global Flags:")
-_FCS_KEY_URL_LABEL = "[com.apple.wkms.fcs-key-url]:"
-
-
 def _strip_ansi(text: str) -> str:
     return _ANSI_ESCAPE_RE.sub("", text)
 
@@ -668,7 +918,7 @@ def _normalize_ipsw_output_line(line: str) -> str:
 
 def _parse_extracted_mount_artifact_path(line: str) -> Path | None:
     normalized_line = _normalize_ipsw_output_line(_strip_ansi(line))
-    match = extracted_mount_artifact_re.match(normalized_line)
+    match = _EXTRACTED_MOUNT_ARTIFACT_RE.match(normalized_line)
     if not match:
         return None
     return Path(match.group(1))
