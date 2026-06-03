@@ -239,3 +239,19 @@ def test_no_artifacts_is_noop() -> None:
 
     assert extractor.validate_called
     assert len(extractor.extractions) == 0
+
+
+def test_dry_run_skips_upload_and_metadata(tmp_path: Path) -> None:
+    """Dry run extracts symbols but skips upload and metadata update."""
+    storage = MockStorage({"key1": make_ota_artifact(id="key1")})
+    ota_file = tmp_path / "test.zip"
+    ota_file.touch()
+    storage.load_ota_returns = ota_file
+
+    extractor = FakeOtaExtractor()
+
+    OtaExtract(storage, extractor=extractor, dry_run=True).extract(FakeTimeout(timedelta(minutes=5)))
+
+    assert len(extractor.extractions) == 1
+    assert len(storage.uploaded_symbols) == 0
+    assert storage.artifacts["key1"].processing_state == ArtifactProcessingState.MIRRORED

@@ -191,8 +191,13 @@ def extract(
     extractor.validate_deps()
     artifacts_extracted = 0
     artifacts_failed = 0
+    dry_run_seen: set[str] = set()
 
     for artifact in ipsw_storage.artifact_iter(extract_filter):
+        if dry_run and artifact.key in dry_run_seen:
+            break
+        dry_run_seen.add(artifact.key)
+
         with sentry_sdk.start_transaction(
             op="ipsw.extract",
             name=f"IPSW extract {artifact.platform} {artifact.version} {artifact.build}",

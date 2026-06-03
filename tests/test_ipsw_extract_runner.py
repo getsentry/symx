@@ -240,3 +240,20 @@ class TestExtractRunner:
         assert extractor.validate_called
         assert len(extractor.extractions) == 0
         assert len(storage.uploaded_symbols) == 0
+
+    def test_dry_run_skips_upload_and_metadata(self, tmp_path: Path) -> None:
+        storage = InMemoryIpswStorage(tmp_path)
+        artifact = _make_mirrored_artifact(storage)
+
+        extractor = FakeExtractor()
+
+        extract(storage, FakeTimeout(timedelta(minutes=60)), extractor=extractor, dry_run=True)
+
+        assert len(extractor.extractions) == 1
+        assert len(storage.uploaded_symbols) == 0
+
+        updated = storage.get_artifact(artifact.key)
+        assert updated is not None
+        assert updated.sources[0].processing_state == ArtifactProcessingState.MIRRORED
+
+        assert storage.clean_local_dir_count == 1

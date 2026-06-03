@@ -169,6 +169,7 @@ class OtaExtract:
         artifacts_extracted = 0
         artifacts_failed = 0
         artifacts_skipped = 0
+        dry_run_seen: set[str] = set()
 
         key: str
         ota: OtaArtifact
@@ -176,6 +177,10 @@ class OtaExtract:
             if timer.exceeded():
                 logger.warning("Exiting OTA extract due to elapsed timeout after %ds", timer.elapsed_seconds)
                 break
+
+            if self._dry_run and key in dry_run_seen:
+                break
+            dry_run_seen.add(key)
 
             with sentry_sdk.start_transaction(
                 op="ota.extract",
