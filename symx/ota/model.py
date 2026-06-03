@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from subprocess import CompletedProcess
 from typing import Protocol
@@ -11,6 +12,7 @@ from pydantic import BaseModel
 from symx.model import (
     Arch,
     ArtifactProcessingState,
+    current_run_timestamp,
     github_run_id,
 )
 
@@ -47,10 +49,8 @@ class OtaArtifact(BaseModel):
     hash: str
     hash_algorithm: str
 
-    # currently the run_id of the GHA Workflow so we can look it up
-    # TODO: add a `last_modified` field like IPSW has and migrate old meta-data offline by
-    #  hydrating it from the existing JSON plus `last_run`/fetch context where available.
     last_run: int = github_run_id()
+    last_modified: datetime | None = None
     processing_state: ArtifactProcessingState = ArtifactProcessingState.INDEXED
 
     def is_indexed(self) -> bool:
@@ -61,6 +61,7 @@ class OtaArtifact(BaseModel):
 
     def update_last_run(self) -> None:
         self.last_run = github_run_id()
+        self.last_modified = current_run_timestamp()
 
 
 OtaMetaData = dict[str, OtaArtifact]

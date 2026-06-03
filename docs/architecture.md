@@ -199,6 +199,7 @@ Current important objects and prefixes:
 
 - IPSW uses an `IpswArtifactDb` JSON object with a top-level `artifacts` map.
 - OTA uses a JSON object mapping OTA keys directly to `OtaArtifact` payloads.
+- In both lanes, `last_run` is the GitHub Actions run id that last changed a row's processing metadata, and `last_modified` is the timestamp of that same metadata update.
 
 ### Symbol uploads
 
@@ -461,6 +462,6 @@ Current capabilities include:
 
 - sync remote metadata into a local SQLite snapshot,
 - inspect IPSW/OTA failure rows,
-- resolve OTA `last_run` IDs into GitHub run metadata,
+- show OTA `last_modified` timestamps stored in meta-data,
 - download a selected artifact for local reproduction,
 - build and apply curated rerun batches that queue eligible rows back to `indexed` or `mirrored`.

@@ -18,10 +18,8 @@ from symx.admin.tui import (
     should_auto_sync_on_start,
     summarize_task_detail,
 )
-from symx.admin.db import IpswFailureRow, OtaFailureRow, SnapshotInfo, build_snapshot_db, snapshot_paths
-from symx.ipsw.model import IpswArtifactDb
+from symx.admin.db import IpswFailureRow, OtaFailureRow, SnapshotInfo
 from symx.model import ArtifactProcessingState
-from symx.ota.model import OtaArtifact
 
 
 def test_format_ipsw_detail_contains_key_fields() -> None:
@@ -69,66 +67,6 @@ def test_should_auto_sync_on_start_for_missing_stale_and_fresh_snapshots() -> No
     assert should_auto_sync_on_start(None, now=now) is True
     assert should_auto_sync_on_start(stale_snapshot, now=now) is True
     assert should_auto_sync_on_start(fresh_snapshot, now=now) is False
-
-
-def test_load_current_snapshot_resolves_run_infos_for_visible_ota_rows_only(tmp_path: Path, monkeypatch) -> None:
-    snapshot_id = "ipsw-101__ota-202"
-    paths = snapshot_paths(tmp_path, snapshot_id)
-    ota_meta = {
-        "visible": OtaArtifact(
-            build="22A100",
-            description=["full"],
-            version="18.0",
-            platform="ios",
-            id="visible-ota",
-            url="https://updates.cdn-apple.com/visible.zip",
-            download_path=None,
-            devices=["iPhone17,1"],
-            hash="visible-hash",
-            hash_algorithm="SHA-1",
-            last_run=222,
-            processing_state=ArtifactProcessingState.INDEXED_INVALID,
-        ),
-        "hidden": OtaArtifact(
-            build="22A100",
-            description=["full"],
-            version="18.0",
-            platform="ios",
-            id="hidden-ota",
-            url="https://updates.cdn-apple.com/hidden.zip",
-            download_path="mirror/hidden.zip",
-            devices=["iPhone17,1"],
-            hash="hidden-hash",
-            hash_algorithm="SHA-1",
-            last_run=333,
-            processing_state=ArtifactProcessingState.MIRRORED,
-        ),
-    }
-    build_snapshot_db(
-        paths.db_path,
-        snapshot_id,
-        IpswArtifactDb(artifacts={}),
-        ipsw_generation=101,
-        ota_meta=ota_meta,
-        ota_generation=202,
-        workflow_run_id=999,
-        workflow_run_url="https://example.invalid/run/999",
-    )
-    app = AdminTui(cache_dir=tmp_path, failure_states=(ArtifactProcessingState.INDEXED_INVALID,))
-    app.current_snapshot_id = snapshot_id
-    visible_ota_batches: list[list[OtaFailureRow]] = []
-    lookup_batches: list[list[OtaFailureRow]] = []
-
-    monkeypatch.setattr(app, "_populate_ipsw_table", lambda rows: None)
-    monkeypatch.setattr(app, "_populate_ota_table", lambda rows: visible_ota_batches.append(rows))
-    monkeypatch.setattr(app, "_start_run_lookup_thread", lambda rows: lookup_batches.append(rows))
-    monkeypatch.setattr(app, "_refresh_details", lambda: None)
-    monkeypatch.setattr(app, "_refresh_pending_batch", lambda: None)
-
-    app._load_current_snapshot(initial=False)
-
-    assert [[row.ota_key for row in rows] for rows in visible_ota_batches] == [["visible"]]
-    assert [[row.last_run for row in rows] for rows in lookup_batches] == [[222]]
 
 
 def test_task_formatting_shows_short_row_text_and_full_details() -> None:
@@ -188,9 +126,10 @@ def test_download_worker_idle_check_avoids_clearing_active_queue(tmp_path: Path)
     app._download_queue.task_done()
 
 
-def test_format_ota_detail_includes_resolved_run_time() -> None:
+def test_format_ota_detail_includes_stored_timestamp_and_cached_run_metadata() -> None:
     row = OtaFailureRow(
         last_run=456,
+        last_modified="2024-09-05T12:34:56+00:00",
         processing_state=ArtifactProcessingState.INDEXED_INVALID,
         platform="ios",
         version="18.0",
@@ -214,8 +153,30 @@ def test_format_ota_detail_includes_resolved_run_time() -> None:
 
     assert "type: OTA artifact" in detail
     assert "last_run: #456" in detail
-    assert "last_run_at: 2024-09-03 12:34Z" in detail
+    assert "last_modified: 2024-09-05 12:34Z" in detail
+    assert "run_updated_at: 2024-09-03 12:34Z" in detail
     assert "run_title: Extract OTA symbols" in detail
+
+
+def test_format_ota_detail_prefers_stored_last_modified() -> None:
+    row = OtaFailureRow(
+        last_run=456,
+        last_modified="2024-09-05T12:34:56+00:00",
+        processing_state=ArtifactProcessingState.INDEXED_INVALID,
+        platform="ios",
+        version="18.0",
+        build="22A100",
+        ota_key="ota-key",
+        artifact_id="ota-id",
+        url="https://updates.cdn-apple.com/test.zip",
+        hash="def456",
+        hash_algorithm="SHA-1",
+        download_path=None,
+    )
+
+    detail = format_ota_detail(row, None)
+
+    assert "last_modified: 2024-09-05 12:34Z" in detail
 
 
 def test_queue_selected_rejects_extract_batch_item_without_snapshot_download_path(tmp_path: Path, monkeypatch) -> None:

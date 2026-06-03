@@ -7,7 +7,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field, computed_field
 from pydantic import HttpUrl
 
-from symx.model import ArtifactProcessingState, github_run_id
+from symx.model import ArtifactProcessingState, current_run_timestamp, github_run_id
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ class IpswSource(BaseModel):
     processing_state: ArtifactProcessingState = ArtifactProcessingState.INDEXED
     mirror_path: str | None = None
     last_run: int = github_run_id()
-    last_modified: datetime.datetime | None = datetime.datetime.today()
+    last_modified: datetime.datetime | None = Field(default_factory=current_run_timestamp)
 
     @computed_field  # type: ignore[misc]
     @property
@@ -58,7 +58,7 @@ class IpswSource(BaseModel):
 
     def update_last_run(self) -> None:
         self.last_run = github_run_id()
-        self.last_modified = datetime.datetime.today()
+        self.last_modified = current_run_timestamp()
 
 
 class IpswArtifact(BaseModel):

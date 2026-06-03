@@ -45,6 +45,7 @@ def test_parse_download_meta_output_success() -> None:
     assert artifact.platform == "ios"
     assert artifact.devices == ["iPhone14,7"]
     assert artifact.description == ["iOS 17.0"]
+    assert artifact.last_modified is not None
     assert artifact.processing_state == ArtifactProcessingState.INDEXED
 
 

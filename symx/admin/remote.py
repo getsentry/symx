@@ -59,7 +59,7 @@ def execute_apply_request(
         else:
             ota_meta = _load_ota_meta(blob)
             applied_count = apply_request_to_ota_meta(ota_meta, request)
-            serialized_payload = json.dumps({key: value.model_dump() for key, value in ota_meta.items()})
+            serialized_payload = json.dumps({key: value.model_dump(mode="json") for key, value in ota_meta.items()})
     except AdminApplyValidationError as exc:
         return _result(
             request,

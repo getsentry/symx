@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 import sentry_sdk
 import sentry_sdk.metrics
 
-from symx.model import ArtifactProcessingState
+from symx.model import ArtifactProcessingState, current_run_timestamp
 from symx.ota.model import (
     PLATFORMS,
     OtaArtifact,
@@ -65,6 +65,7 @@ def parse_download_meta_output(
                 download_path=None,
                 hash=meta_item["hash"],
                 hash_algorithm=meta_item["hash_algorithm"],
+                last_modified=current_run_timestamp(),
             )
 
 

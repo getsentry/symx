@@ -3,7 +3,7 @@
 import logging
 import os
 import time as time_module
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 logger = logging.getLogger(__name__)
@@ -95,3 +95,7 @@ class ArtifactProcessingState(StrEnum):
 
 def github_run_id() -> int:
     return int(os.getenv("GITHUB_RUN_ID", 0))
+
+
+def current_run_timestamp() -> datetime:
+    return datetime.now(UTC)

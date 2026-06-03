@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from pydantic import HttpUrl
@@ -112,6 +112,7 @@ def test_build_snapshot_db_and_query_failures(tmp_path: Path) -> None:
         "ota-older": _ota_artifact("ota-older", ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED, last_run=300),
         "ota-ok": _ota_artifact("ota-ok", ArtifactProcessingState.MIRRORED, last_run=100),
     }
+    ota_meta["ota-newest"].last_modified = datetime(2024, 9, 4, 12, 0, 0, tzinfo=UTC)
 
     build_snapshot_db(
         paths.db_path,
@@ -145,6 +146,7 @@ def test_build_snapshot_db_and_query_failures(tmp_path: Path) -> None:
     ota_failures = load_ota_failures(paths.db_path)
     assert [row.ota_key for row in ota_failures] == ["ota-newest", "ota-older"]
     assert [row.last_run for row in ota_failures] == [400, 300]
+    assert ota_failures[0].last_modified == "2024-09-04T12:00:00+00:00"
 
 
 def test_build_snapshot_db_allows_missing_source_last_modified(tmp_path: Path) -> None:

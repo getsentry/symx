@@ -66,8 +66,8 @@ class OtaGcsStorage(OtaStorage):
 
             merge_meta_data(ours, theirs)
             try:
-                # Convert Pydantic models to dict for JSON serialization
-                serializable_data = {k: v.model_dump() for k, v in ours.items()}
+                # Convert Pydantic models to JSON-compatible dicts for serialization.
+                serializable_data = {k: v.model_dump(mode="json") for k, v in ours.items()}
                 blob.upload_from_string(
                     json.dumps(serializable_data),
                     if_generation_match=generation_match_precondition,
@@ -163,8 +163,8 @@ class OtaGcsStorage(OtaStorage):
 
             ours[ota_meta_key] = ota_meta
             try:
-                # Convert Pydantic models to dict for JSON serialization
-                serializable_data = {k: v.model_dump() for k, v in ours.items()}
+                # Convert Pydantic models to JSON-compatible dicts for serialization.
+                serializable_data = {k: v.model_dump(mode="json") for k, v in ours.items()}
                 blob.upload_from_string(
                     json.dumps(serializable_data),
                     if_generation_match=generation_match_precondition,
@@ -194,7 +194,7 @@ class OtaGcsStorage(OtaStorage):
 
             ours.update(updates)
             try:
-                serializable_data = {k: v.model_dump() for k, v in ours.items()}
+                serializable_data = {k: v.model_dump(mode="json") for k, v in ours.items()}
                 blob.upload_from_string(
                     json.dumps(serializable_data),
                     if_generation_match=generation_match_precondition,

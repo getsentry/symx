@@ -95,7 +95,7 @@ def _write_admin_meta_artifact(
     if ota_changed:
         assert ota_meta is not None
         (download_dir / "ota_image_meta.json").write_text(
-            json.dumps({key: value.model_dump() for key, value in ota_meta.items()})
+            json.dumps({key: value.model_dump(mode="json") for key, value in ota_meta.items()})
         )
 
 

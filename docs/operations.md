@@ -194,7 +194,7 @@ Current TUI capabilities:
 - auto-sync on startup if no cached snapshot exists or the cached snapshot is older than 24h,
 - separate IPSW and OTA failure tables,
 - filter by processing state,
-- show OTA GitHub run metadata when available,
+- show OTA `last_modified` timestamps from meta-data,
 - queue artifact downloads into `~/.cache/symx/admin/downloads/`,
 - build curated rerun batches for eligible rows and apply them through GitHub Actions.
 
@@ -411,7 +411,7 @@ The shared vocabulary still includes the manual/operator-only `ignored` state, b
 - snapshot manifest: `~/.cache/symx/admin/manifest.json`
 - active snapshots: `~/.cache/symx/admin/snapshots/`
 - downloaded artifacts: `~/.cache/symx/admin/downloads/`
-- GitHub run cache used by the TUI: `~/.cache/symx/admin/github_runs.json`
+- optional cached GitHub run metadata used for OTA detail fields such as run title and URL: `~/.cache/symx/admin/github_runs.json`
 
 <a id="sentry"></a>
 

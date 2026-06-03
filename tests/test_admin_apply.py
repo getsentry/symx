@@ -100,6 +100,7 @@ def test_apply_request_to_ota_meta_updates_processing_state_and_last_run(monkeyp
     assert applied_count == 1
     assert artifact.processing_state == ArtifactProcessingState.INDEXED
     assert artifact.last_run == 444
+    assert artifact.last_modified is not None
 
 
 def test_apply_request_validation_is_strict_for_missing_path_and_excluded_states() -> None:

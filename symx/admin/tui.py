@@ -46,7 +46,7 @@ from symx.admin.db import (
 )
 from symx.admin.downloads import ArtifactDownloadResult, download_ipsw_to_cache, download_ota_to_cache
 from symx.admin.executor import AdminApplyError, run_apply
-from symx.admin.github import GithubRunInfo, ensure_github_run_infos, format_github_run_time, format_iso_timestamp
+from symx.admin.github import GithubRunInfo, format_iso_timestamp, read_github_run_cache
 from symx.admin.sync import AdminSyncError, SyncResult, run_sync
 from symx.model import ArtifactProcessingState
 
@@ -279,12 +279,11 @@ class AdminTui(App[None]):
         self._apply_thread: threading.Thread | None = None
         self._download_worker_lock = threading.Lock()
         self._download_worker_thread: threading.Thread | None = None
-        self._run_lookup_thread: threading.Thread | None = None
         self._download_queue: Queue[DownloadQueueItem] = Queue()
         self.current_snapshot_id: str | None = None
         self.pending_snapshot_id: str | None = None
         self._current_snapshot_info: SnapshotInfo | None = None
-        self._run_infos: dict[int, GithubRunInfo] = ensure_github_run_infos(cache_dir, [])
+        self._run_infos: dict[int, GithubRunInfo] = read_github_run_cache(cache_dir)
         self._ipsw_rows: list[IpswSourceRow] = []
         self._ipsw_rows_by_key: dict[str, IpswSourceRow] = {}
         self._all_ipsw_rows_by_key: dict[str, IpswSourceRow] = {}
@@ -408,7 +407,7 @@ class AdminTui(App[None]):
         ipsw_table.add_columns("last_modified", "state", "platform", "version", "build", "file_name", "artifact_key")
 
         ota_table = cast(DataTable[str], self.query_one("#ota-failures", DataTable))
-        ota_table.add_columns("last_run_at", "state", "platform", "version", "build", "artifact_id", "ota_key")
+        ota_table.add_columns("last_modified", "state", "platform", "version", "build", "artifact_id", "ota_key")
 
         tasks_table = cast(DataTable[object], self.query_one("#tasks", DataTable))
         tasks_table.add_columns("type", "status", "item", "detail")
@@ -442,7 +441,6 @@ class AdminTui(App[None]):
         self._all_ota_rows_by_key = {_ota_row_key(row): row for row in all_ota_rows}
         visible_ota_rows = [row for row in all_ota_rows if row.processing_state in self.failure_states]
         self._populate_ota_table(visible_ota_rows)
-        self._start_run_lookup_thread(visible_ota_rows)
         self.sub_title = self._subtitle()
         self._refresh_details()
         self._refresh_pending_batch()
@@ -496,7 +494,7 @@ class AdminTui(App[None]):
             row_key = _ota_row_key(row)
             self._ota_rows_by_key[row_key] = row
             table.add_row(
-                format_github_run_time(row.last_run, self._run_infos.get(row.last_run)),
+                format_ota_last_modified(row),
                 row.processing_state.value,
                 row.platform,
                 row.version,
@@ -907,33 +905,6 @@ class AdminTui(App[None]):
         else:
             self._set_status(f"Download complete for {item.item_label} (unverified).")
 
-    def _start_run_lookup_thread(self, ota_rows: list[OtaArtifactRow]) -> None:
-        missing_run_ids = [row.last_run for row in ota_rows if row.last_run > 0 and row.last_run not in self._run_infos]
-        if not missing_run_ids:
-            return
-        if self._run_lookup_thread is not None and self._run_lookup_thread.is_alive():
-            return
-
-        self._run_lookup_thread = threading.Thread(
-            target=self._resolve_run_infos,
-            args=(tuple(dict.fromkeys(missing_run_ids)),),
-            daemon=True,
-        )
-        self._run_lookup_thread.start()
-
-    def _resolve_run_infos(self, run_ids: tuple[int, ...]) -> None:
-        try:
-            run_infos = ensure_github_run_infos(self.cache_dir, run_ids)
-        except Exception:  # pragma: no cover - best effort UI enhancement
-            return
-        self.call_from_thread(self._merge_run_infos, run_infos)
-
-    def _merge_run_infos(self, run_infos: dict[int, GithubRunInfo]) -> None:
-        self._run_infos.update(run_infos)
-        if self._ota_rows:
-            self._populate_ota_table(self._ota_rows)
-            self._refresh_details()
-
     def _create_task(self, kind: str, status: str, item: str, detail: str) -> str:
         self._task_counter += 1
         task_id = f"task-{self._task_counter}"
@@ -1134,6 +1105,12 @@ def format_task_detail(task: BackgroundTaskEntry) -> str:
     return "\n".join(lines)
 
 
+def format_ota_last_modified(row: OtaArtifactRow) -> str:
+    if row.last_modified is None:
+        return EMPTY
+    return format_iso_timestamp(row.last_modified)
+
+
 def format_ipsw_detail(row: IpswSourceRow) -> str:
     return "\n".join(
         [
@@ -1168,7 +1145,7 @@ def format_ota_detail(row: OtaArtifactRow, run_info: GithubRunInfo | None) -> st
             f"ota_key: {row.ota_key}",
             f"artifact_id: {row.artifact_id}",
             f"last_run: #{row.last_run}",
-            f"last_run_at: {format_github_run_time(row.last_run, run_info)}",
+            f"last_modified: {format_ota_last_modified(row)}",
             f"hash: {row.hash}",
             f"hash_algorithm: {row.hash_algorithm}",
             f"run_title: {run_title}",

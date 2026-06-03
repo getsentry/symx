@@ -90,9 +90,7 @@ def ensure_github_run_infos(
     status_callback: StatusCallback | None = None,
 ) -> dict[int, GithubRunInfo]:
     cache = read_github_run_cache(cache_dir)
-    missing_run_ids = sorted(
-        {run_id for run_id in run_ids if run_id > 0 and (run_id not in cache or cache[run_id].best_timestamp is None)}
-    )
+    missing_run_ids = sorted({run_id for run_id in run_ids if run_id not in cache and run_id > 0})
 
     for run_id in missing_run_ids:
         try:
