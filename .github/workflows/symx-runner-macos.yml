@@ -24,7 +24,7 @@ on:
 jobs:
   symx-macos-job:
     name: ${{ inputs.job_name }}
-    runs-on: ["ghcr.io/cirruslabs/macos-runner:sequoia", "runner_group_id:10"]
+    runs-on: ["bitrise_pool_name:tahoe"]
     permissions:
       actions: "read"
       contents: "read"
