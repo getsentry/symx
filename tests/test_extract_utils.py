@@ -17,6 +17,7 @@ from typing import BinaryIO, cast
 import pytest
 
 from symx.model import Arch
+from symx.ipsw import extract as ipsw_extract
 from symx.ipsw.model import IpswPlatform
 from symx.ipsw.extract import (
     IpswExtractError,
@@ -69,6 +70,27 @@ def test_generate_bundle_id_standard() -> None:
 
 def test_generate_bundle_id_no_commas() -> None:
     assert generate_bundle_id("UniversalMac_15.0_24A5279h_Restore.ipsw") == "ipsw_UniversalMac_15.0_24A5279h_Restore"
+
+
+# --- macOS DSC architecture policy tests ---
+
+
+def test_macos_dsc_architectures_omit_x86_64_for_macos_27_ipsw() -> None:
+    assert ipsw_extract._macos_dsc_architectures("UniversalMac_27.0_26A5353q_Restore.ipsw") == [Arch.ARM64E]
+
+
+def test_macos_dsc_architectures_keep_x86_64_before_macos_27() -> None:
+    assert ipsw_extract._macos_dsc_architectures("UniversalMac_26.5.1_25F79_Restore.ipsw") == [
+        Arch.ARM64E,
+        Arch.X86_64,
+    ]
+
+
+def test_macos_dsc_architectures_default_to_legacy_arches_for_unrecognized_file_names() -> None:
+    assert ipsw_extract._macos_dsc_architectures("iPhone16,2_27.0_26A5353q_Restore.ipsw") == [
+        Arch.ARM64E,
+        Arch.X86_64,
+    ]
 
 
 # --- find_extraction_dir tests ---
