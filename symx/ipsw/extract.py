@@ -52,6 +52,8 @@ _ERROR_SUMMARY_MARKERS = (
 _IGNORED_IPSW_HELP_PREFIXES = ("Usage:", "Aliases:", "Examples:", "Flags:", "Global Flags:")
 _FCS_KEY_URL_LABEL = "[com.apple.wkms.fcs-key-url]:"
 _VENDORED_PEM_DB = Path(__file__).resolve().parent / "data" / "fcs-keys.json"
+_MACOS_VERSION_RE = re.compile(r"^UniversalMac_(\d+)(?:[._]|$)")
+_MACOS_ARM64E_ONLY_DSC_MIN_MAJOR_VERSION = 27
 
 
 @dataclass(frozen=True)
@@ -486,6 +488,7 @@ class IpswExtractor:
         processing_dir: Path,
         ipsw_path: Path,
     ):
+        self.file_name = file_name
         self.bundle_id = generate_bundle_id(file_name)
         self.prefix = map_platform_to_prefix(platform)
         self.platform = platform
@@ -668,10 +671,9 @@ class IpswExtractor:
     def _symsort_dsc(self) -> None:
         split_dir = self.processing_dir / "split_out"
         if self.platform == IpswPlatform.MACOS:
-            # all macOS IPSWs have dyld_shared_caches for both architectures
-            compressed_archives: list[tuple[Path, str]] = []
+            compressed_archives: list[tuple[Path, Arch]] = []
 
-            for arch in [Arch.ARM64E, Arch.X86_64]:
+            for arch in _macos_dsc_architectures(self.file_name):
                 logger.info("Extracting and processing DSC for %s", arch)
                 with sentry_sdk.start_span(op="ipsw.extract.dsc_arch", name=f"Extract+split DSC {arch}") as arch_span:
                     arch_span.set_data("arch", str(arch))
@@ -976,6 +978,13 @@ def _summarize_ipsw_stderr(stderr: str | bytes | None) -> str | None:
             return line
 
     return None
+
+
+def _macos_dsc_architectures(file_name: str) -> list[Arch]:
+    version_match = _MACOS_VERSION_RE.match(file_name)
+    if version_match is not None and int(version_match.group(1)) >= _MACOS_ARM64E_ONLY_DSC_MIN_MAJOR_VERSION:
+        return [Arch.ARM64E]
+    return [Arch.ARM64E, Arch.X86_64]
 
 
 def generate_bundle_id(file_name: str) -> str:
