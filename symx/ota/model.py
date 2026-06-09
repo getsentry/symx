@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from subprocess import CompletedProcess
 from typing import Protocol
@@ -66,6 +67,34 @@ class OtaArtifact(BaseModel):
 OtaMetaData = dict[str, OtaArtifact]
 
 
+@dataclass(frozen=True)
+class OtaExtractionRequest:
+    local_ota: Path
+    work_dir: Path
+    platform: str
+    version: str
+    build: str
+    bundle_id: str
+
+    @classmethod
+    def from_artifact(
+        cls,
+        *,
+        local_ota: Path,
+        work_dir: Path,
+        meta_key: str,
+        artifact: OtaArtifact,
+    ) -> "OtaExtractionRequest":
+        return cls(
+            local_ota=local_ota,
+            work_dir=work_dir,
+            platform=artifact.platform,
+            version=artifact.version,
+            build=artifact.build,
+            bundle_id=f"ota_{meta_key}",
+        )
+
+
 class DSCSearchResult(BaseModel):
     model_config = {"frozen": True}
 
@@ -116,7 +145,7 @@ class OtaDownloader(Protocol):
 class OtaSymbolExtractor(Protocol):
     def validate_deps(self) -> None: ...
 
-    def extract(self, local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path) -> list[Path]:
+    def extract(self, request: OtaExtractionRequest) -> list[Path]:
         """Run the full extract pipeline, return list of symbol directories."""
         ...
 
@@ -160,7 +189,7 @@ class UnsupportedOtaPayloadError(Exception):
 
 def parse_version_tuple(version: str) -> tuple[int, ...]:
     """Parse a version string like '26.4' or '18.2.1' into a comparable tuple."""
-    try:
-        return tuple(int(x) for x in version.split("."))
-    except (ValueError, AttributeError):
-        return (0,)
+    parts = version.split(".")
+    if not parts or any(not part.isdigit() for part in parts):
+        raise ValueError(f"Unexpected OTA version format: {version!r}")
+    return tuple(int(part) for part in parts)

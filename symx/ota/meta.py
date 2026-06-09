@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import sentry_sdk
 import sentry_sdk.metrics
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from symx.model import ArtifactProcessingState
 from symx.ota.model import (
@@ -16,6 +17,21 @@ from symx.ota.model import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class AppleOtaMetaItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    url: str
+    build: str
+    version: str
+    hash: str
+    hash_algorithm: str
+    devices: list[str] = Field(default_factory=list)
+    description: str | None = None
+
+
+_APPLE_OTA_META_ITEMS = TypeAdapter(list[AppleOtaMetaItem])
 
 
 def parse_download_meta_output(
@@ -31,9 +47,10 @@ def parse_download_meta_output(
         if "api returned status: 403 Forbidden" not in ipsw_stderr:
             logger.error("Download OTA meta failed for %s%s", platform, " (beta)" if beta else "")
     else:
-        platform_meta = json.loads(result.stdout)
+        raw_platform_meta: object = json.loads(result.stdout)
+        platform_meta = _APPLE_OTA_META_ITEMS.validate_python(raw_platform_meta)
         for meta_item in platform_meta:
-            url = meta_item["url"]
+            url = meta_item.url
             sentry_sdk.set_tag("artifact.url", url)
             zip_id_start_idx = url.rfind("/") + 1
             zip_id = url[zip_id_start_idx:-4]
@@ -41,10 +58,7 @@ def parse_download_meta_output(
             if len(zip_id) not in (40, 64):
                 logger.error("Parsing download meta: unexpected url-format")
 
-            if "description" in meta_item:
-                desc = [meta_item["description"]]
-            else:
-                desc = []
+            desc = [meta_item.description] if meta_item.description is not None else []
 
             if beta:
                 # betas can have the same zip-id as later releases, often with the same contents
@@ -56,15 +70,15 @@ def parse_download_meta_output(
 
             meta_data[key] = OtaArtifact(
                 id=zip_id,
-                build=meta_item["build"],
+                build=meta_item.build,
                 description=desc,
-                version=meta_item["version"],
+                version=meta_item.version,
                 platform=platform,
                 url=url,
-                devices=meta_item.get("devices", []),
+                devices=meta_item.devices,
                 download_path=None,
-                hash=meta_item["hash"],
-                hash_algorithm=meta_item["hash_algorithm"],
+                hash=meta_item.hash,
+                hash_algorithm=meta_item.hash_algorithm,
             )
 
 

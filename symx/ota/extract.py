@@ -30,6 +30,7 @@ from symx.ota.model import (
     DscSplitter,
     MountInfo,
     OtaExtractError,
+    OtaExtractionRequest,
     RecoveryOtaError,
     UnsupportedOtaPayloadError,
 )
@@ -439,78 +440,63 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
     return extract_dirs[0]
 
 
-def extract_symbols(
-    local_ota: Path,
-    platform: str,
-    version: str,
-    build: str,
-    bundle_id: str,
-    work_dir: Path,
-) -> list[Path]:
+def extract_symbols(request: OtaExtractionRequest) -> list[Path]:
     """
     Extract symbols from a local OTA file. No storage interaction.
 
     Returns a list of directories containing symsorter output.
     """
-    symbol_dirs = _try_processing_ota_as_cryptex(local_ota, platform, version, build, bundle_id, work_dir)
+    symbol_dirs = _try_processing_ota_as_cryptex(request)
     if not symbol_dirs:
         logger.info("Not a cryptex, extracting OTA DSC directly")
-        symbol_dirs = _process_ota_directly(local_ota, platform, version, build, bundle_id, work_dir)
+        symbol_dirs = _process_ota_directly(request)
     return symbol_dirs
 
 
-def _try_processing_ota_as_cryptex(
-    local_ota: Path, platform: str, version: str, build: str, bundle_id: str, work_dir: Path
-) -> list[Path]:
+def _try_processing_ota_as_cryptex(request: OtaExtractionRequest) -> list[Path]:
     with sentry_sdk.start_span(op="ota.extract.try_cryptex", name="Try cryptex patch"):
         with tempfile.TemporaryDirectory(suffix="_cryptex_dmg") as cryptex_patch_dir:
-            logger.info("Trying cryptex patch for %s", local_ota.name)
-            extracted_dmgs = patch_cryptex_dmg(local_ota, Path(cryptex_patch_dir))
+            logger.info("Trying cryptex patch for %s", request.local_ota.name)
+            extracted_dmgs = patch_cryptex_dmg(request.local_ota, Path(cryptex_patch_dir))
             if extracted_dmgs:
-                logger.info("Cryptex patch successful, mounting and processing DSC for %s", local_ota.name)
-                return _process_cryptex_dmg(extracted_dmgs, platform, version, build, bundle_id, work_dir)
+                logger.info("Cryptex patch successful, mounting and processing DSC for %s", request.local_ota.name)
+                return _process_cryptex_dmg(extracted_dmgs, request)
 
     return []
 
 
-def _process_ota_directly(
-    local_ota: Path, platform: str, version: str, build: str, bundle_id: str, work_dir: Path
-) -> list[Path]:
+def _process_ota_directly(request: OtaExtractionRequest) -> list[Path]:
     try:
         with tempfile.TemporaryDirectory(suffix="_dsc_extract") as extract_dsc_tmp_dir:
-            extracted_dsc_dir = extract_ota(local_ota, Path(extract_dsc_tmp_dir))
-            logger.info("Splitting & symsorting DSC for %s", local_ota.name)
+            extracted_dsc_dir = extract_ota(request.local_ota, Path(extract_dsc_tmp_dir))
+            logger.info("Splitting & symsorting DSC for %s", request.local_ota.name)
 
             if extracted_dsc_dir:
-                return _split_and_symsort_dsc(extracted_dsc_dir, platform, version, build, bundle_id, work_dir)
+                return _split_and_symsort_dsc(extracted_dsc_dir, request)
     except OtaExtractError as e:
-        error_cls = _classify_ota_failure(local_ota)
+        error_cls = _classify_ota_failure(request.local_ota)
         if error_cls is not None:
-            raise error_cls(f"{error_cls.__name__}: {local_ota}") from e
-        if _should_probe_unsupported_payload(e) and _probe_unsupported_payload_format(local_ota):
-            raise UnsupportedOtaPayloadError(f"Unsupported OTA payload format: {local_ota}") from e
+            raise error_cls(f"{error_cls.__name__}: {request.local_ota}") from e
+        if _should_probe_unsupported_payload(e) and _probe_unsupported_payload_format(request.local_ota):
+            raise UnsupportedOtaPayloadError(f"Unsupported OTA payload format: {request.local_ota}") from e
         raise
 
     return []
 
 
-def _split_and_symsort_dsc(
-    input_dir: Path, platform: str, version: str, build: str, bundle_id: str, output_dir: Path
-) -> list[Path]:
-    split_dirs = split_dsc(find_dsc(input_dir, version, build, output_dir))
-    return _symsort_split_results(split_dirs, platform, bundle_id, output_dir)
+def _split_and_symsort_dsc(input_dir: Path, request: OtaExtractionRequest) -> list[Path]:
+    split_dirs = split_dsc(find_dsc(input_dir, request.version, request.build, request.work_dir))
+    return _symsort_split_results(split_dirs, request.platform, request.bundle_id, request.work_dir)
 
 
-def _process_cryptex_dmg(
-    extracted_dmgs: dict[str, Path], platform: str, version: str, build: str, bundle_id: str, output_dir: Path
-) -> list[Path]:
+def _process_cryptex_dmg(extracted_dmgs: dict[str, Path], request: OtaExtractionRequest) -> list[Path]:
     mount = mount_dmg(extracted_dmgs["cryptex-system-arm64e"])
 
-    split_dirs = split_dsc(find_dsc(mount.point, version, build, output_dir))
+    split_dirs = split_dsc(find_dsc(mount.point, request.version, request.build, request.work_dir))
 
     detach_dev(mount.dev)
 
-    return _symsort_split_results(split_dirs, platform, bundle_id, output_dir)
+    return _symsort_split_results(split_dirs, request.platform, request.bundle_id, request.work_dir)
 
 
 def _symsort_split_results(split_dirs: list[Path], platform: str, bundle_id: str, output_dir: Path) -> list[Path]:

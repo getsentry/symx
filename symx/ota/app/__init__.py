@@ -8,6 +8,7 @@ import typer
 from symx.tools import validate_shell_deps
 from symx.ota.storage.gcs import init_storage
 from symx.ota.extract import extract_symbols
+from symx.ota.model import OtaExtractionRequest
 from symx.ota.runners import OtaExtract, OtaMirror
 from symx.ota.storage.maintenance import migrate
 
@@ -80,14 +81,15 @@ def extract_file(
             output_dir = Path(tempfile.mkdtemp(prefix="symx_ota_"))
             typer.echo(f"Output directory: {output_dir}")
 
-        symbol_dirs = extract_symbols(
+        request = OtaExtractionRequest(
             local_ota=ota_file,
+            work_dir=output_dir,
             platform=platform,
             version=version,
             build=build,
             bundle_id=bundle_id,
-            work_dir=output_dir,
         )
+        symbol_dirs = extract_symbols(request)
 
         if symbol_dirs:
             typer.echo("Extracted symbols to:")

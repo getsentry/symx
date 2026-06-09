@@ -13,6 +13,7 @@ If something is unclear, ask questions early instead of inferring intent after a
 - Prefer a short set of concrete clarification questions over a speculative plan.
 - Do this especially when requirements are ambiguous, there are multiple reasonable implementation paths, or a wording/detail could materially change the result.
 - Do not disappear into a long investigation and only then present a guessed interpretation.
+- Treat design questions as questions. If the user asks why something is shaped a certain way, whether an approach is weird, or what the right shape should be, answer/propose before editing files.
 
 ## Sources of Truth
 
@@ -23,6 +24,8 @@ For describing **current behavior**, prefer implementation and workflow files ov
 - **Admin behavior implemented today:** `symx/admin/*`
 - **Shared processing-state vocabulary:** `symx/model.py`
 - **Production deployment, schedules, runner types, and workflow entrypoints:** `.github/workflows/*.yml`
+
+Production metadata is authoritative. If a workflow layer already has `IpswArtifact` / `IpswSource` facts such as platform, version, build, devices, or source identity, pass that metadata explicitly into lower layers instead of rediscovering it from filenames or local artifact contents.
 
 Untracked files are not automatically irrelevant. They may be part of the work in progress. The important distinction is:
 
@@ -57,6 +60,20 @@ Keep these distinctions straight:
 - The admin surface implemented today is the code in `symx/admin/*`; do not infer extra capabilities from design ideas or scratch notes.
 - The application should be able to run locally if a local GCS store is provided
 - Target platforms are Linux and macOS but some features (extraction) can only run on macOS.
+
+## Architecture & Data Flow
+
+- Model cross-layer operations with explicit request/context objects that carry the complete unit-of-work state.
+- Do not split one operation across constructor state, method arguments, and inferred values without a clear reason.
+- When logic depends on trusted metadata, require it. Missing or unparseable metadata should fail early with a clear error unless an explicit fallback preserves the relevant invariants.
+
+## Typed Data Boundaries
+
+When parsing structured external data (for example Apple plist/JSON metadata), keep the untyped boundary narrow.
+
+- Prefer typed subset models or dataclasses for the parts the code consumes.
+- Avoid spreading `dict[str, Any]`, `list[object]`, and broad `cast(...)`-based traversal through business logic just to satisfy the type checker.
+- Convert typed objects to plain dictionaries only at serialization/diagnostics boundaries when needed.
 
 ## Processing-State Guidance
 

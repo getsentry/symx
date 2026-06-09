@@ -7,6 +7,7 @@ import sentry_sdk
 import sentry_sdk.metrics
 from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Client, Bucket
+from pydantic import TypeAdapter
 
 from symx.model import ArtifactProcessingState
 from symx.gcs import (
@@ -26,23 +27,22 @@ from symx.ota.mirror import check_ota_hash
 
 logger = logging.getLogger(__name__)
 
+_OTA_META_DATA = TypeAdapter(dict[str, OtaArtifact])
 
-def convert_image_name_to_path(old_name: str) -> str:
-    [platform, version, build, file] = old_name.split("_")
-    return f"mirror/ota/{platform}/{version}/{build}/{file}"
+
+def ota_mirror_path(ota_meta: OtaArtifact, ota_file: Path) -> str:
+    return f"mirror/ota/{ota_meta.platform}/{ota_meta.version}/{ota_meta.build}/{ota_file.name}"
 
 
 def download_and_hydrate_meta(blob: Blob) -> tuple[OtaMetaData, int]:
-    result: OtaMetaData = {}
     with tempfile.NamedTemporaryFile() as f:
         blob.download_to_filename(f.name)
         generation = blob.generation
-        for k, v in json.load(f.file).items():
-            result[k] = OtaArtifact(**v)
+        raw_meta: object = json.load(f.file)
 
     if generation is None:
         generation = 0
-    return result, generation
+    return _OTA_META_DATA.validate_python(raw_meta), generation
 
 
 class OtaGcsStorage(OtaStorage):
@@ -98,7 +98,7 @@ class OtaGcsStorage(OtaStorage):
             span.set_data("file_size_bytes", file_size)
 
             logger.info("Uploading OTA %s (%dMiB) to %s", ota_file.name, file_size // (1024 * 1024), self.bucket.name)
-            mirror_filename = convert_image_name_to_path(ota_file.name)
+            mirror_filename = ota_mirror_path(ota_meta, ota_file)
             blob = self.bucket.blob(mirror_filename)
             if blob.exists():
                 # if the existing remote file has the same MD5 hash as the file we are about to upload, we can go on without
