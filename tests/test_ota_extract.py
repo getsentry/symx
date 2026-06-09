@@ -13,11 +13,14 @@ from symx.ota.model import (
     DeltaOtaError,
     OtaArtifact,
     OtaExtractError,
+    OtaExtractionRequest,
     OtaMetaData,
     RecoveryOtaError,
     UnsupportedOtaPayloadError,
+    parse_version_tuple,
 )
 from symx.ota.runners import OtaExtract
+from symx.ota.storage.gcs import ota_mirror_path
 from tests.fakes import FakeTimeout
 
 
@@ -81,23 +84,39 @@ class FakeOtaExtractor:
 
     def __init__(self, error: Exception | None = None) -> None:
         self._error = error
-        self.extractions: list[tuple[str, str]] = []  # (key, platform)
+        self.extractions: list[OtaExtractionRequest] = []
         self.validate_called = False
 
     def validate_deps(self) -> None:
         self.validate_called = True
 
-    def extract(self, local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path) -> list[Path]:
-        self.extractions.append((ota_meta_key, ota_meta.platform))
+    def extract(self, request: OtaExtractionRequest) -> list[Path]:
+        self.extractions.append(request)
         if self._error is not None:
             raise self._error
-        symbols_dir = work_dir / "symbols" / f"ota_{ota_meta_key}"
+        symbols_dir = request.work_dir / "symbols" / request.bundle_id
         symbols_dir.mkdir(parents=True, exist_ok=True)
         (symbols_dir / "fake.sym").write_bytes(b"symbols")
         return [symbols_dir]
 
 
 # -- Tests --
+
+
+def test_parse_version_tuple_raises_for_unparseable_version() -> None:
+    try:
+        parse_version_tuple("17.0_beta")
+    except ValueError as error:
+        assert str(error) == "Unexpected OTA version format: '17.0_beta'"
+    else:
+        raise AssertionError("parse_version_tuple should reject unparseable versions")
+
+
+def test_ota_mirror_path_uses_artifact_metadata_instead_of_parsing_file_name() -> None:
+    ota = make_ota_artifact(platform="ios", version="17.0", build="21A100")
+    ota_file = Path("wrong_99.0_BAD_payload.zip")
+
+    assert ota_mirror_path(ota, ota_file) == "mirror/ota/ios/17.0/21A100/wrong_99.0_BAD_payload.zip"
 
 
 def test_extract_resets_missing_ota_to_indexed() -> None:
@@ -154,6 +173,12 @@ def test_successful_extraction(tmp_path: Path) -> None:
     OtaExtract(storage, extractor=extractor).extract(FakeTimeout(timedelta(minutes=5)))
 
     assert len(extractor.extractions) == 1
+    request = extractor.extractions[0]
+    assert request.local_ota == ota_file
+    assert request.platform == "ios"
+    assert request.version == "17.0"
+    assert request.build == "21A100"
+    assert request.bundle_id == "ota_key1"
     assert len(storage.uploaded_symbols) == 1
     assert storage.uploaded_symbols[0] == ("key1", "ota_key1")
 
@@ -217,8 +242,8 @@ def test_timeout_stops_processing(tmp_path: Path) -> None:
 
     original_extract = extractor.extract
 
-    def extract_then_advance(local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path) -> list[Path]:
-        result = original_extract(local_ota, ota_meta_key, ota_meta, work_dir)
+    def extract_then_advance(request: OtaExtractionRequest) -> list[Path]:
+        result = original_extract(request)
         timer.advance(11)
         return result
 

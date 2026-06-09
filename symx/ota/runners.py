@@ -18,6 +18,7 @@ from symx.ota.model import (
     OtaArtifact,
     OtaDownloader,
     OtaExtractError,
+    OtaExtractionRequest,
     OtaMetaData,
     OtaMetaRetriever,
     OtaStorage,
@@ -200,8 +201,14 @@ class OtaExtract:
                             op="ota.extract.run",
                             name=f"Extract+split+symsort OTA {ota.platform} {ota.version}",
                         ):
-                            symbol_dirs = self._extractor.extract(local_ota_path, key, ota, work_dir_path)
-                        bundle_id = f"ota_{key}"
+                            request = OtaExtractionRequest.from_artifact(
+                                local_ota=local_ota_path,
+                                work_dir=work_dir_path,
+                                meta_key=key,
+                                artifact=ota,
+                            )
+                            symbol_dirs = self._extractor.extract(request)
+                        bundle_id = request.bundle_id
                         for symbol_dir in symbol_dirs:
                             with sentry_sdk.start_span(
                                 op="gcs.upload_symbols", name=f"Upload OTA symbols {ota.platform} {ota.version}"
@@ -281,12 +288,5 @@ class _RealOtaSymbolExtractor(OtaSymbolExtractor):
     def validate_deps(self) -> None:
         validate_shell_deps()
 
-    def extract(self, local_ota: Path, ota_meta_key: str, ota_meta: OtaArtifact, work_dir: Path) -> list[Path]:
-        return extract_symbols(
-            local_ota=local_ota,
-            platform=ota_meta.platform,
-            version=ota_meta.version,
-            build=ota_meta.build,
-            bundle_id=f"ota_{ota_meta_key}",
-            work_dir=work_dir,
-        )
+    def extract(self, request: OtaExtractionRequest) -> list[Path]:
+        return extract_symbols(request)
