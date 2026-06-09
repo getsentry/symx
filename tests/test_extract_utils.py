@@ -20,15 +20,17 @@ from symx.model import Arch
 from symx.ipsw import extract as ipsw_extract
 from symx.ipsw.model import IpswPlatform
 from symx.ipsw.extract import (
+    IpswExtractionRequest,
     IpswExtractError,
     IpswExtractTimeoutError,
-    IpswExtractor,
+    _IpswExtractionRun,
     _directory_tree_delta,
     _directory_tree_stats,
     _parse_symsorter_summary,
     find_extraction_dir,
     generate_bundle_id,
     inspect_ipsw_dmg_paths,
+    inspect_ipsw_product_metadata,
     map_platform_to_prefix,
 )
 from subprocess import CompletedProcess
@@ -75,19 +77,19 @@ def test_generate_bundle_id_no_commas() -> None:
 # --- macOS DSC architecture policy tests ---
 
 
-def test_macos_dsc_architectures_omit_x86_64_for_macos_27_ipsw() -> None:
-    assert ipsw_extract._macos_dsc_architectures("UniversalMac_27.0_26A5353q_Restore.ipsw") == [Arch.ARM64E]
+def test_macos_dsc_architectures_omit_x86_64_for_macos_27_metadata() -> None:
+    assert ipsw_extract._macos_dsc_architectures("27.0") == [Arch.ARM64E]
 
 
-def test_macos_dsc_architectures_keep_x86_64_before_macos_27() -> None:
-    assert ipsw_extract._macos_dsc_architectures("UniversalMac_26.5.1_25F79_Restore.ipsw") == [
+def test_macos_dsc_architectures_keep_x86_64_before_macos_27_metadata() -> None:
+    assert ipsw_extract._macos_dsc_architectures("26.5.1") == [
         Arch.ARM64E,
         Arch.X86_64,
     ]
 
 
-def test_macos_dsc_architectures_default_to_legacy_arches_for_unrecognized_file_names() -> None:
-    assert ipsw_extract._macos_dsc_architectures("iPhone16,2_27.0_26A5353q_Restore.ipsw") == [
+def test_macos_dsc_architectures_default_to_legacy_arches_for_unknown_version() -> None:
+    assert ipsw_extract._macos_dsc_architectures(None) == [
         Arch.ARM64E,
         Arch.X86_64,
     ]
@@ -138,6 +140,38 @@ def test_find_extraction_dir_returns_first_match() -> None:
 # --- IPSW diagnostics tests ---
 
 
+def test_inspect_ipsw_product_metadata_reads_build_manifest(tmp_path: Path) -> None:
+    ipsw_path = tmp_path / "test.ipsw"
+    build_manifest = {
+        "ProductVersion": "27.0",
+        "ProductBuildVersion": "26A5353q",
+        "SupportedProductTypes": ["Mac17,1", "Mac17,2"],
+        "BuildIdentities": [],
+    }
+
+    with zipfile.ZipFile(ipsw_path, "w") as archive:
+        archive.writestr("BuildManifest.plist", plistlib.dumps(build_manifest))
+
+    expected_metadata = ipsw_extract.IpswProductMetadata(
+        version="27.0",
+        build="26A5353q",
+        devices=("Mac17,1", "Mac17,2"),
+    )
+    assert inspect_ipsw_product_metadata(ipsw_path) == expected_metadata
+    processing_dir = tmp_path / "processing"
+    processing_dir.mkdir()
+    assert IpswExtractionRequest.from_local_ipsw(
+        IpswPlatform.MACOS, ipsw_path, processing_dir
+    ) == IpswExtractionRequest(
+        platform=IpswPlatform.MACOS,
+        ipsw_path=ipsw_path,
+        processing_dir=processing_dir,
+        version=expected_metadata.version,
+        build=expected_metadata.build,
+        devices=expected_metadata.devices,
+    )
+
+
 def test_inspect_ipsw_dmg_paths_prefers_systemos_and_skips_recovery_filesystem(tmp_path: Path) -> None:
     ipsw_path = tmp_path / "test.ipsw"
     build_manifest = {
@@ -161,19 +195,20 @@ def test_inspect_ipsw_dmg_paths_prefers_systemos_and_skips_recovery_filesystem(t
     with zipfile.ZipFile(ipsw_path, "w") as archive:
         archive.writestr("BuildManifest.plist", plistlib.dumps(build_manifest))
 
-    assert inspect_ipsw_dmg_paths(ipsw_path) == {
-        "system": "system.dmg.aea",
-        "filesystem": "filesystem.dmg.aea",
-        "selected": "system.dmg.aea",
-    }
+    assert inspect_ipsw_dmg_paths(ipsw_path) == ipsw_extract.IpswDmgPaths(
+        system="system.dmg.aea",
+        filesystem="filesystem.dmg.aea",
+        selected="system.dmg.aea",
+    )
 
 
-def _make_ipsw_extractor(tmp_path: Path) -> IpswExtractor:
+def _make_ipsw_extractor(tmp_path: Path) -> _IpswExtractionRun:
     processing_dir = tmp_path / "processing"
     processing_dir.mkdir()
-    ipsw_path = tmp_path / "test.ipsw"
+    ipsw_path = tmp_path / "iPad15,7_26.4.2_23E261_Restore.ipsw"
     ipsw_path.touch()
-    return IpswExtractor(IpswPlatform.IPADOS, "iPad15,7_26.4.2_23E261_Restore.ipsw", processing_dir, ipsw_path)
+    request = IpswExtractionRequest(IpswPlatform.IPADOS, ipsw_path, processing_dir)
+    return _IpswExtractionRun(request)
 
 
 def test_directory_tree_stats_counts_unique_files_without_following_links(tmp_path: Path) -> None:
@@ -379,7 +414,7 @@ def test_ipsw_symsort_sys_image_passes_vendored_pem_db_when_available(
     monkeypatch.setattr("symx.ipsw.extract.vendored_ipsw_pem_db_path", lambda: pem_db)
     monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
     monkeypatch.setattr(
-        IpswExtractor,
+        _IpswExtractionRun,
         "_symsort",
         lambda self, split_dir, ignore_errors=False, record_input_tree=True: symsort_calls.append(
             (split_dir, ignore_errors)
@@ -458,7 +493,7 @@ def test_ipsw_symsort_sys_image_kills_mount_process_after_cleanup_timeout(
 
     monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
     monkeypatch.setattr(
-        IpswExtractor, "_symsort", lambda self, split_dir, ignore_errors=False, record_input_tree=True: None
+        _IpswExtractionRun, "_symsort", lambda self, split_dir, ignore_errors=False, record_input_tree=True: None
     )
 
     extractor._symsort_sys_image()
@@ -520,12 +555,12 @@ def test_ipsw_symsort_sys_image_cleans_extracted_aea_on_failure(
             return None
 
     def fake_symsort(
-        self: IpswExtractor, split_dir: Path, ignore_errors: bool = False, record_input_tree: bool = True
+        self: _IpswExtractionRun, split_dir: Path, ignore_errors: bool = False, record_input_tree: bool = True
     ) -> None:
         raise IpswExtractError("boom")
 
     monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
-    monkeypatch.setattr(IpswExtractor, "_symsort", fake_symsort)
+    monkeypatch.setattr(_IpswExtractionRun, "_symsort", fake_symsort)
 
     with pytest.raises(IpswExtractError, match="boom"):
         extractor._symsort_sys_image()
@@ -616,7 +651,8 @@ def test_ipsw_aea_preflight_classifies_missing_key_failures(tmp_path: Path, monk
         archive.writestr("BuildManifest.plist", plistlib.dumps(build_manifest))
         archive.writestr("system.dmg.aea", b"dummy")
 
-    extractor = IpswExtractor(IpswPlatform.IPADOS, "iPad15,7_26.4.2_23E261_Restore.ipsw", processing_dir, ipsw_path)
+    request = IpswExtractionRequest(IpswPlatform.IPADOS, ipsw_path, processing_dir)
+    extractor = _IpswExtractionRun(request)
     pem_db = tmp_path / "fcs-keys.json"
     pem_db.write_text(json.dumps({"known-key": "known-value"}))
 

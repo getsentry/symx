@@ -8,15 +8,16 @@ import stat
 import subprocess
 import tempfile
 import zipfile
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeGuard
 from urllib.parse import urlparse
 
 import sentry_sdk
+from pydantic import BaseModel, ConfigDict, Field
 
 from symx.diagnostics import (
     decode_subprocess_output,
@@ -52,7 +53,7 @@ _ERROR_SUMMARY_MARKERS = (
 _IGNORED_IPSW_HELP_PREFIXES = ("Usage:", "Aliases:", "Examples:", "Flags:", "Global Flags:")
 _FCS_KEY_URL_LABEL = "[com.apple.wkms.fcs-key-url]:"
 _VENDORED_PEM_DB = Path(__file__).resolve().parent / "data" / "fcs-keys.json"
-_MACOS_VERSION_RE = re.compile(r"^UniversalMac_(\d+)(?:[._]|$)")
+_VERSION_MAJOR_RE = re.compile(r"^(\d+)")
 _MACOS_ARM64E_ONLY_DSC_MIN_MAJOR_VERSION = 27
 
 
@@ -116,6 +117,92 @@ class SysImageMount:
     active_mount_point: Path | None
     extracted_artifact_paths: list[Path]
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class IpswProductMetadata:
+    version: str | None = None
+    build: str | None = None
+    devices: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class IpswDmgPaths:
+    system: str | None
+    filesystem: str | None
+    selected: str | None
+
+    def to_span_data(self) -> dict[str, str | None]:
+        return {
+            "system": self.system,
+            "filesystem": self.filesystem,
+            "selected": self.selected,
+        }
+
+
+class _IpswBuildManifestModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+
+class IpswManifestComponentInfo(_IpswBuildManifestModel):
+    path: str | None = Field(None, alias="Path")
+
+
+class IpswManifestComponent(_IpswBuildManifestModel):
+    info: IpswManifestComponentInfo | None = Field(None, alias="Info")
+
+
+class IpswBuildIdentityManifest(_IpswBuildManifestModel):
+    cryptex_system_os: IpswManifestComponent | None = Field(None, alias="Cryptex1,SystemOS")
+    os: IpswManifestComponent | None = Field(None, alias="OS")
+
+
+class IpswBuildIdentityInfo(_IpswBuildManifestModel):
+    variant: str | None = Field(None, alias="Variant")
+
+
+class IpswBuildIdentity(_IpswBuildManifestModel):
+    manifest: IpswBuildIdentityManifest | None = Field(None, alias="Manifest")
+    info: IpswBuildIdentityInfo | None = Field(None, alias="Info")
+
+
+class IpswBuildManifest(_IpswBuildManifestModel):
+    product_version: str | None = Field(None, alias="ProductVersion")
+    product_build_version: str | None = Field(None, alias="ProductBuildVersion")
+    supported_product_types: tuple[str, ...] = Field(default_factory=tuple, alias="SupportedProductTypes")
+    build_identities: tuple[IpswBuildIdentity, ...] | None = Field(None, alias="BuildIdentities")
+
+
+@dataclass(frozen=True)
+class IpswExtractionRequest:
+    platform: IpswPlatform
+    ipsw_path: Path
+    processing_dir: Path
+    version: str | None = None
+    build: str | None = None
+    devices: tuple[str, ...] = ()
+
+    @classmethod
+    def from_local_ipsw(
+        cls,
+        platform: IpswPlatform,
+        ipsw_path: Path,
+        processing_dir: Path,
+    ) -> "IpswExtractionRequest":
+        try:
+            metadata = inspect_ipsw_product_metadata(ipsw_path)
+        except Exception as error:
+            logger.warning("Failed to inspect IPSW product metadata for %s: %s", ipsw_path.name, error)
+            metadata = IpswProductMetadata()
+
+        return cls(
+            platform=platform,
+            ipsw_path=ipsw_path,
+            processing_dir=processing_dir,
+            version=metadata.version,
+            build=metadata.build,
+            devices=metadata.devices,
+        )
 
 
 def vendored_ipsw_pem_db_path() -> Path | None:
@@ -324,62 +411,53 @@ def _cleanup_sys_image_mount(mount: SysImageMount) -> None:
             )
 
 
-def _manifest_component_path(component: object) -> str | None:
-    if not isinstance(component, dict):
+def _is_object_mapping(value: object) -> TypeGuard[Mapping[object, object]]:
+    return isinstance(value, dict)
+
+
+def _manifest_component_path(component: IpswManifestComponent | None) -> str | None:
+    if component is None or component.info is None:
         return None
-
-    component_dict = cast(dict[str, Any], component)
-    info = component_dict.get("Info")
-    if not isinstance(info, dict):
-        return None
-
-    info_dict = cast(dict[str, Any], info)
-    path = info_dict.get("Path")
-    if isinstance(path, str) and path:
-        return path
-    return None
+    return component.info.path or None
 
 
-def inspect_ipsw_dmg_paths(ipsw_path: Path) -> dict[str, str | None]:
+def _read_ipsw_build_manifest(ipsw_path: Path) -> IpswBuildManifest:
     with zipfile.ZipFile(ipsw_path) as archive:
-        build_manifest_obj = plistlib.loads(archive.read("BuildManifest.plist"))
+        build_manifest_obj: object = plistlib.loads(archive.read("BuildManifest.plist"))
 
-    if not isinstance(build_manifest_obj, dict):
-        raise ValueError(f"Unexpected BuildManifest.plist structure in {ipsw_path}")
+    return IpswBuildManifest.model_validate(build_manifest_obj)
 
-    build_manifest = cast(dict[str, Any], build_manifest_obj)
-    build_identities_obj = build_manifest.get("BuildIdentities")
-    if not isinstance(build_identities_obj, list):
+
+def inspect_ipsw_product_metadata(ipsw_path: Path) -> IpswProductMetadata:
+    build_manifest = _read_ipsw_build_manifest(ipsw_path)
+    return IpswProductMetadata(
+        version=build_manifest.product_version,
+        build=build_manifest.product_build_version,
+        devices=build_manifest.supported_product_types,
+    )
+
+
+def inspect_ipsw_dmg_paths(ipsw_path: Path) -> IpswDmgPaths:
+    build_manifest = _read_ipsw_build_manifest(ipsw_path)
+    if build_manifest.build_identities is None:
         raise ValueError(f"BuildManifest.plist has no BuildIdentities list in {ipsw_path}")
 
-    build_identities = cast(list[object], build_identities_obj)
     system_dmg: str | None = None
     filesystem_dmgs: list[str] = []
 
-    for build_identity_obj in build_identities:
-        if not isinstance(build_identity_obj, dict):
+    for build_identity in build_manifest.build_identities:
+        manifest = build_identity.manifest
+        if manifest is None:
             continue
 
-        build_identity = cast(dict[str, Any], build_identity_obj)
-        manifest_obj = build_identity.get("Manifest")
-        if not isinstance(manifest_obj, dict):
-            continue
-
-        manifest = cast(dict[str, Any], manifest_obj)
         if system_dmg is None:
-            system_dmg = _manifest_component_path(manifest.get("Cryptex1,SystemOS"))
+            system_dmg = _manifest_component_path(manifest.cryptex_system_os)
 
-        filesystem_dmg = _manifest_component_path(manifest.get("OS"))
+        filesystem_dmg = _manifest_component_path(manifest.os)
         if filesystem_dmg is None:
             continue
 
-        info_obj = build_identity.get("Info")
-        variant = None
-        if isinstance(info_obj, dict):
-            info = cast(dict[str, Any], info_obj)
-            variant_obj = info.get("Variant")
-            if isinstance(variant_obj, str):
-                variant = variant_obj
+        variant = build_identity.info.variant if build_identity.info is not None else None
         if variant is not None and "Recovery" in variant:
             continue
 
@@ -389,11 +467,7 @@ def inspect_ipsw_dmg_paths(ipsw_path: Path) -> dict[str, str | None]:
     filesystem_dmg = filesystem_dmgs[0] if len(filesystem_dmgs) == 1 else None
     selected_dmg = system_dmg if system_dmg is not None else filesystem_dmg
 
-    return {
-        "system": system_dmg,
-        "filesystem": filesystem_dmg,
-        "selected": selected_dmg,
-    }
+    return IpswDmgPaths(system=system_dmg, filesystem=filesystem_dmg, selected=selected_dmg)
 
 
 def _extract_ipsw_member(ipsw_path: Path, member_name: str, output_path: Path) -> Path:
@@ -478,29 +552,25 @@ def _decompress_archive(archive_path: Path, target_dir: Path) -> None:
         raise IpswExtractError(f"zstd decompression failed with return code {zstd_proc.returncode}")
 
 
-# TODO: there is good chance that we should split the extractor into separate classes based on at least platform
-#   and provide a factory function that instantiates the right extractor class using artifact and maybe source.
-class IpswExtractor:
-    def __init__(
-        self,
-        platform: IpswPlatform,
-        file_name: str,
-        processing_dir: Path,
-        ipsw_path: Path,
-    ):
-        self.file_name = file_name
-        self.bundle_id = generate_bundle_id(file_name)
-        self.prefix = map_platform_to_prefix(platform)
-        self.platform = platform
-        if not processing_dir.is_dir():
-            raise ValueError(f"IPSW path is expected to be a directory: {processing_dir}")
-        self.processing_dir = processing_dir
+def extract_ipsw(request: IpswExtractionRequest) -> Path:
+    return _IpswExtractionRun(request).run()
+
+
+class _IpswExtractionRun:
+    def __init__(self, request: IpswExtractionRequest):
+        self.request = request
+        self.bundle_id = generate_bundle_id(request.ipsw_path.name)
+        self.prefix = map_platform_to_prefix(request.platform)
+        self.platform = request.platform
+        if not request.processing_dir.is_dir():
+            raise ValueError(f"IPSW processing path is expected to be a directory: {request.processing_dir}")
+        self.processing_dir = request.processing_dir
         _log_directory_contents(self.processing_dir)
 
-        if not ipsw_path.is_file():
-            raise ValueError(f"IPSW path is expected to be a file: {ipsw_path}")
+        if not request.ipsw_path.is_file():
+            raise ValueError(f"IPSW path is expected to be a file: {request.ipsw_path}")
 
-        self.ipsw_path = ipsw_path
+        self.ipsw_path = request.ipsw_path
         self._aea_preflight_complete = False
 
     def _ipsw_aea_preflight(self) -> None:
@@ -518,16 +588,16 @@ class IpswExtractor:
                 self._aea_preflight_complete = True
                 return
 
-            span.set_data("ipsw_dmg_paths", dmg_paths)
-            selected_dmg = dmg_paths.get("selected")
-            if not isinstance(selected_dmg, str) or not selected_dmg.endswith(".aea"):
+            span.set_data("ipsw_dmg_paths", dmg_paths.to_span_data())
+            selected_dmg = dmg_paths.selected
+            if selected_dmg is None or not selected_dmg.endswith(".aea"):
                 self._aea_preflight_complete = True
                 return
 
             probe_data: dict[str, object] = {
                 "selected_dmg": selected_dmg,
-                "system_dmg": dmg_paths.get("system"),
-                "filesystem_dmg": dmg_paths.get("filesystem"),
+                "system_dmg": dmg_paths.system,
+                "filesystem_dmg": dmg_paths.filesystem,
             }
             pem_db_path = vendored_ipsw_pem_db_path()
             if pem_db_path is not None:
@@ -585,8 +655,8 @@ class IpswExtractor:
                     summary = _summarize_ipsw_stderr(key_result.stderr) or "ipsw fw aea --key failed"
                     raise IpswExtractError(
                         f"IPSW AEA preflight failed for {self.ipsw_path}: "
-                        f"selected_dmg={selected_dmg}; system_dmg={dmg_paths.get('system')}; "
-                        f"filesystem_dmg={dmg_paths.get('filesystem')}; fcs_key={fcs_key_id or '<unknown>'}; "
+                        f"selected_dmg={selected_dmg}; system_dmg={dmg_paths.system}; "
+                        f"filesystem_dmg={dmg_paths.filesystem}; fcs_key={fcs_key_id or '<unknown>'}; "
                         f"vendored_db_hit={vendored_db_hit}; {summary}"
                     )
 
@@ -673,10 +743,12 @@ class IpswExtractor:
         if self.platform == IpswPlatform.MACOS:
             compressed_archives: list[tuple[Path, Arch]] = []
 
-            for arch in _macos_dsc_architectures(self.file_name):
+            for arch in _macos_dsc_architectures(self.request.version):
                 logger.info("Extracting and processing DSC for %s", arch)
                 with sentry_sdk.start_span(op="ipsw.extract.dsc_arch", name=f"Extract+split DSC {arch}") as arch_span:
                     arch_span.set_data("arch", str(arch))
+                    arch_span.set_data("version", self.request.version)
+                    arch_span.set_data("build", self.request.build)
 
                     extract_dir = self._ipsw_extract_dsc(arch)
                     _log_directory_contents(extract_dir)
@@ -691,7 +763,7 @@ class IpswExtractor:
                         compressed_archives.append((archive_path, arch))
                         logger.info("Finished compressing %s split to %s", arch, archive_path)
 
-            # Delete IPSW file now that both architectures are extracted and compressed
+            # Delete IPSW file now that all required DSC architectures are extracted and compressed
             if self.ipsw_path.exists():
                 logger.info("Deleting IPSW file to save space: %s", self.ipsw_path)
                 self.ipsw_path.unlink()
@@ -951,13 +1023,12 @@ def _vendored_ipsw_pem_db_keys() -> frozenset[str]:
         return frozenset()
 
     with pem_db_path.open() as handle:
-        raw_data_obj = json.load(handle)
+        raw_data_obj: object = json.load(handle)
 
-    if not isinstance(raw_data_obj, dict):
+    if not _is_object_mapping(raw_data_obj):
         raise ValueError(f"Vendored IPSW PEM DB must be a JSON object: {pem_db_path}")
 
-    raw_data = cast(dict[object, object], raw_data_obj)
-    return frozenset(str(key) for key in raw_data)
+    return frozenset(str(key) for key in raw_data_obj)
 
 
 def _summarize_ipsw_stderr(stderr: str | bytes | None) -> str | None:
@@ -980,9 +1051,19 @@ def _summarize_ipsw_stderr(stderr: str | bytes | None) -> str | None:
     return None
 
 
-def _macos_dsc_architectures(file_name: str) -> list[Arch]:
-    version_match = _MACOS_VERSION_RE.match(file_name)
-    if version_match is not None and int(version_match.group(1)) >= _MACOS_ARM64E_ONLY_DSC_MIN_MAJOR_VERSION:
+def _version_major(version: str | None) -> int | None:
+    if version is None:
+        return None
+
+    version_match = _VERSION_MAJOR_RE.match(version)
+    if version_match is None:
+        return None
+    return int(version_match.group(1))
+
+
+def _macos_dsc_architectures(version: str | None) -> list[Arch]:
+    major_version = _version_major(version)
+    if major_version is not None and major_version >= _MACOS_ARM64E_ONLY_DSC_MIN_MAJOR_VERSION:
         return [Arch.ARM64E]
     return [Arch.ARM64E, Arch.X86_64]
 

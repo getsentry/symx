@@ -6,7 +6,7 @@ from pydantic import HttpUrl
 
 from symx.fs import check_sha1
 from symx.ipsw.model import IpswSource, IpswPlatform, IpswArtifactHashes
-from symx.ipsw.extract import IpswExtractor
+from symx.ipsw.extract import IpswExtractionRequest, extract_ipsw
 
 
 def require_sha1(hashes: IpswArtifactHashes | None) -> str:
@@ -30,8 +30,8 @@ def test_ipsw_extract_run_watchos():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         processing_dir = Path(tmpdir)
-        extractor = IpswExtractor(IpswPlatform.WATCHOS, source.file_name, processing_dir, ipsw_path)
-        extractor.run()
+        request = IpswExtractionRequest(IpswPlatform.WATCHOS, ipsw_path, processing_dir)
+        extract_ipsw(request)
 
 
 def test_ipsw_extract_run_ios():
@@ -49,8 +49,8 @@ def test_ipsw_extract_run_ios():
 
     processing_dir = Path("/Users/mischan/devel/tmp/test_out")
     ipsw_path = Path("/Users/mischan/devel/tmp/iPhone14,7_18.2_22C152_Restore.ipsw")
-    extractor = IpswExtractor(IpswPlatform.WATCHOS, source.file_name, processing_dir, ipsw_path)
-    extractor.run()
+    request = IpswExtractionRequest(IpswPlatform.WATCHOS, ipsw_path, processing_dir)
+    extract_ipsw(request)
 
 
 def test_ipsw_extract_run_macos():
@@ -109,5 +109,5 @@ def test_ipsw_extract_run_macos():
         processing_dir = Path(tmpdir)
         assert ipsw_path.stat().st_size == source.size
         assert check_sha1(require_sha1(source.hashes), ipsw_path)
-        extractor = IpswExtractor(IpswPlatform.MACOS, source.file_name, processing_dir, ipsw_path)
-        extractor.run()
+        request = IpswExtractionRequest(IpswPlatform.MACOS, ipsw_path, processing_dir, version="15.0", build="24A5279h")
+        extract_ipsw(request)
