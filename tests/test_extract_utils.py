@@ -88,11 +88,25 @@ def test_macos_dsc_architectures_keep_x86_64_before_macos_27_metadata() -> None:
     ]
 
 
-def test_macos_dsc_architectures_default_to_legacy_arches_for_unknown_version() -> None:
-    assert ipsw_extract._macos_dsc_architectures(None) == [
-        Arch.ARM64E,
-        Arch.X86_64,
-    ]
+def test_macos_dsc_architectures_raise_for_missing_version() -> None:
+    with pytest.raises(IpswExtractError, match="missing or unparseable macOS version <missing>"):
+        ipsw_extract._macos_dsc_architectures(None)
+
+
+def test_macos_dsc_architectures_raise_for_unparseable_version() -> None:
+    with pytest.raises(IpswExtractError, match="missing or unparseable macOS version 'Sequoia'"):
+        ipsw_extract._macos_dsc_architectures("Sequoia")
+
+
+def test_macos_extraction_requires_version_before_running_side_effects(tmp_path: Path) -> None:
+    processing_dir = tmp_path / "processing"
+    processing_dir.mkdir()
+    ipsw_path = tmp_path / "UniversalMac_27.0_26A5353q_Restore.ipsw"
+    ipsw_path.touch()
+    request = IpswExtractionRequest(IpswPlatform.MACOS, ipsw_path, processing_dir)
+
+    with pytest.raises(IpswExtractError, match="missing or unparseable macOS version <missing>"):
+        _IpswExtractionRun(request)
 
 
 # --- find_extraction_dir tests ---

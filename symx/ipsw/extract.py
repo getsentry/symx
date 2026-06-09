@@ -562,6 +562,9 @@ class _IpswExtractionRun:
         self.bundle_id = generate_bundle_id(request.ipsw_path.name)
         self.prefix = map_platform_to_prefix(request.platform)
         self.platform = request.platform
+        self.macos_dsc_architectures = (
+            _macos_dsc_architectures(request.version) if request.platform == IpswPlatform.MACOS else ()
+        )
         if not request.processing_dir.is_dir():
             raise ValueError(f"IPSW processing path is expected to be a directory: {request.processing_dir}")
         self.processing_dir = request.processing_dir
@@ -743,7 +746,7 @@ class _IpswExtractionRun:
         if self.platform == IpswPlatform.MACOS:
             compressed_archives: list[tuple[Path, Arch]] = []
 
-            for arch in _macos_dsc_architectures(self.request.version):
+            for arch in self.macos_dsc_architectures:
                 logger.info("Extracting and processing DSC for %s", arch)
                 with sentry_sdk.start_span(op="ipsw.extract.dsc_arch", name=f"Extract+split DSC {arch}") as arch_span:
                     arch_span.set_data("arch", str(arch))
@@ -1063,7 +1066,13 @@ def _version_major(version: str | None) -> int | None:
 
 def _macos_dsc_architectures(version: str | None) -> list[Arch]:
     major_version = _version_major(version)
-    if major_version is not None and major_version >= _MACOS_ARM64E_ONLY_DSC_MIN_MAJOR_VERSION:
+    if major_version is None:
+        version_label = "<missing>" if version is None else repr(version)
+        raise IpswExtractError(
+            f"Cannot determine required macOS DSC architectures: missing or unparseable macOS version {version_label}"
+        )
+
+    if major_version >= _MACOS_ARM64E_ONLY_DSC_MIN_MAJOR_VERSION:
         return [Arch.ARM64E]
     return [Arch.ARM64E, Arch.X86_64]
 
