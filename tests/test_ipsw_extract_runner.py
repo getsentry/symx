@@ -12,6 +12,7 @@ from symx.ipsw.model import (
     IpswReleaseStatus,
     IpswSource,
 )
+from symx.ipsw.extract import IpswExtractionRequest
 from symx.ipsw.runners import ExtractionResult, extract
 from tests.fakes import FakeTimeout
 from tests.ipsw_storage_mock import InMemoryIpswStorage
@@ -22,29 +23,27 @@ class FakeExtractor:
 
     def __init__(self, should_fail: bool = False) -> None:
         self._should_fail = should_fail
-        self.extractions: list[tuple[IpswPlatform, str]] = []
+        self.extractions: list[IpswExtractionRequest] = []
         self.validate_called = False
 
     def validate_deps(self) -> None:
         self.validate_called = True
 
-    def extract(
-        self, platform: IpswPlatform, file_name: str, processing_dir: Path, ipsw_path: Path
-    ) -> ExtractionResult:
-        self.extractions.append((platform, file_name))
+    def extract(self, request: IpswExtractionRequest) -> ExtractionResult:
+        self.extractions.append(request)
 
         if self._should_fail:
             raise RuntimeError("extraction failed")
 
-        symbols_dir = processing_dir / "symbols"
+        symbols_dir = request.processing_dir / "symbols"
         symbols_dir.mkdir(parents=True, exist_ok=True)
         # Write a fake symbol binary
         (symbols_dir / "fake.sym").write_bytes(b"symbols")
 
-        bundle_id = f"ipsw_{file_name[:-5]}"
+        bundle_id = f"ipsw_{request.ipsw_path.name[:-5]}"
         return ExtractionResult(
             symbols_dir=symbols_dir,
-            prefix=str(platform).lower(),
+            prefix=str(request.platform).lower(),
             bundle_id=bundle_id,
         )
 
@@ -99,7 +98,14 @@ class TestExtractRunner:
 
         assert extractor.validate_called
         assert len(extractor.extractions) == 1
-        assert extractor.extractions[0] == (IpswPlatform.IOS, "iPhone_18.0_22A100_Restore.ipsw")
+        assert extractor.extractions[0] == IpswExtractionRequest(
+            platform=IpswPlatform.IOS,
+            ipsw_path=storage.local_dir / "iPhone_18.0_22A100_Restore.ipsw",
+            processing_dir=storage.local_dir,
+            version="18.0",
+            build="22A100",
+            devices=("iPhone15,2",),
+        )
 
         # Symbols were uploaded
         assert len(storage.uploaded_symbols) == 1
@@ -205,10 +211,8 @@ class TestExtractRunner:
 
         original_extract = extractor.extract
 
-        def extract_then_advance(
-            platform: IpswPlatform, file_name: str, processing_dir: Path, ipsw_path: Path
-        ) -> ExtractionResult:
-            result = original_extract(platform, file_name, processing_dir, ipsw_path)
+        def extract_then_advance(request: IpswExtractionRequest) -> ExtractionResult:
+            result = original_extract(request)
             timer.advance(11)
             return result
 

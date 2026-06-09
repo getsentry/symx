@@ -8,7 +8,7 @@ import typer
 from symx.gcs import parse_gcs_url
 from symx.tools import validate_shell_deps
 from symx.ipsw.model import IpswPlatform
-from symx.ipsw.extract import IpswExtractor
+from symx.ipsw.extract import IpswExtractionRequest, extract_ipsw
 from symx.ipsw.runners import (
     import_meta_from_appledb,
     mirror as mirror_runner,
@@ -99,8 +99,8 @@ def extract_file(
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        extractor = IpswExtractor(platform, ipsw_file.name, output_dir, ipsw_file)
-        symbols_dir = extractor.run()
+        request = IpswExtractionRequest.from_local_ipsw(platform, ipsw_file, output_dir)
+        symbols_dir = extract_ipsw(request)
 
         typer.echo(f"Extracted symbols to: {symbols_dir}")
 

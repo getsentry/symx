@@ -15,8 +15,8 @@ from symx.model import (
 from symx.download import DownloadError, try_download_url_to_file
 from symx.fs import log_disk_usage
 from symx.tools import validate_shell_deps
-from symx.ipsw.model import IpswArtifact, IpswPlatform, IpswSource
-from symx.ipsw.extract import IpswExtractor
+from symx.ipsw.model import IpswArtifact, IpswSource
+from symx.ipsw.extract import IpswExtractionRequest, extract_ipsw, generate_bundle_id, map_platform_to_prefix
 from symx.ipsw.meta_sync.appledb import AppleDbIpswImport
 from symx.ipsw.mirror import verify_download
 from symx.ipsw.storage import IpswStorage
@@ -46,9 +46,7 @@ class ExtractionResult:
 class SymbolExtractor(Protocol):
     def validate_deps(self) -> None: ...
 
-    def extract(
-        self, platform: IpswPlatform, file_name: str, processing_dir: Path, ipsw_path: Path
-    ) -> ExtractionResult:
+    def extract(self, request: IpswExtractionRequest) -> ExtractionResult:
         """Run the full extract pipeline, return symbols dir + metadata."""
         ...
 
@@ -247,9 +245,15 @@ def extract(
                         with sentry_sdk.start_span(
                             op="ipsw.extract.run", name=f"IPSW extract+symsort {source.file_name}"
                         ):
-                            result = extractor.extract(
-                                artifact.platform, source.file_name, ipsw_storage.local_dir, local_path
+                            request = IpswExtractionRequest(
+                                platform=artifact.platform,
+                                ipsw_path=local_path,
+                                processing_dir=ipsw_storage.local_dir,
+                                version=artifact.version,
+                                build=artifact.build,
+                                devices=tuple(source.devices),
                             )
+                            result = extractor.extract(request)
 
                         with sentry_sdk.start_span(
                             op="gcs.upload_symbols", name=f"Upload symbols for {source.file_name}"
@@ -351,9 +355,10 @@ class _RealSymbolExtractor(SymbolExtractor):
     def validate_deps(self) -> None:
         validate_shell_deps()
 
-    def extract(
-        self, platform: IpswPlatform, file_name: str, processing_dir: Path, ipsw_path: Path
-    ) -> ExtractionResult:
-        extractor = IpswExtractor(platform, file_name, processing_dir, ipsw_path)
-        symbols_dir = extractor.run()
-        return ExtractionResult(symbols_dir=symbols_dir, prefix=extractor.prefix, bundle_id=extractor.bundle_id)
+    def extract(self, request: IpswExtractionRequest) -> ExtractionResult:
+        symbols_dir = extract_ipsw(request)
+        return ExtractionResult(
+            symbols_dir=symbols_dir,
+            prefix=map_platform_to_prefix(request.platform),
+            bundle_id=generate_bundle_id(request.ipsw_path.name),
+        )
