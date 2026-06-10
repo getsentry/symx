@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 import subprocess
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final
+from typing import Final, TypeGuard
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 GITHUB_RUN_CACHE_FILE_NAME: Final[str] = "github_runs.json"
 
@@ -41,9 +41,6 @@ class _GithubRunCachePayload(_GithubPayloadModel):
     display_title: str | None = None
 
 
-_GITHUB_RUN_CACHE = TypeAdapter(dict[str, _GithubRunCachePayload])
-
-
 @dataclass(frozen=True)
 class GithubRunInfo:
     run_id: int
@@ -66,30 +63,42 @@ def github_run_cache_path(cache_dir: Path) -> Path:
     return cache_dir / GITHUB_RUN_CACHE_FILE_NAME
 
 
+def _is_object_mapping(value: object) -> TypeGuard[Mapping[object, object]]:
+    return isinstance(value, dict)
+
+
 def read_github_run_cache(cache_dir: Path) -> dict[int, GithubRunInfo]:
     path = github_run_cache_path(cache_dir)
     if not path.exists():
         return {}
 
     try:
-        payload = _GITHUB_RUN_CACHE.validate_json(path.read_text())
-    except ValidationError:
+        raw_payload: object = json.loads(path.read_text())
+    except ValueError:
+        return {}
+    if not _is_object_mapping(raw_payload):
         return {}
 
     result: dict[int, GithubRunInfo] = {}
-    for key, value in payload.items():
+    for key, value in raw_payload.items():
+        if not isinstance(key, str):
+            continue
         try:
             run_id = int(key)
         except ValueError:
             continue
+        try:
+            payload = _GithubRunCachePayload.model_validate(value)
+        except ValidationError:
+            continue
         result[run_id] = GithubRunInfo(
             run_id=run_id,
-            started_at=value.started_at,
-            updated_at=value.updated_at,
-            url=value.url,
-            status=value.status,
-            conclusion=value.conclusion,
-            display_title=value.display_title,
+            started_at=payload.started_at,
+            updated_at=payload.updated_at,
+            url=payload.url,
+            status=payload.status,
+            conclusion=payload.conclusion,
+            display_title=payload.display_title,
         )
     return result
 

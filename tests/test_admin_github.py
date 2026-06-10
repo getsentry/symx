@@ -7,6 +7,7 @@ from symx.admin.github import (
     ensure_github_run_infos,
     fetch_github_run_info,
     format_github_run_time,
+    github_run_cache_path,
     read_github_run_cache,
     write_github_run_cache,
 )
@@ -29,6 +30,30 @@ def test_github_run_cache_round_trip(tmp_path: Path) -> None:
 
     loaded = read_github_run_cache(tmp_path)
     assert loaded == cache
+
+
+def test_github_run_cache_skips_invalid_entries_without_discarding_valid_entries(tmp_path: Path) -> None:
+    payload = {
+        "123": {
+            "run_id": 123,
+            "updated_at": "2024-09-03T12:34:56Z",
+            "url": "https://example.invalid/run/123",
+        },
+        "not-an-int": {
+            "run_id": 456,
+            "updated_at": "2024-09-04T12:34:56Z",
+        },
+        "789": "corrupt-entry",
+    }
+    github_run_cache_path(tmp_path).write_text(json.dumps(payload))
+
+    assert read_github_run_cache(tmp_path) == {
+        123: GithubRunInfo(
+            run_id=123,
+            updated_at="2024-09-03T12:34:56Z",
+            url="https://example.invalid/run/123",
+        )
+    }
 
 
 def test_format_github_run_time_prefers_timestamp() -> None:

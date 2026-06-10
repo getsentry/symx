@@ -9,7 +9,14 @@ from pydantic import HttpUrl
 import pytest
 
 from symx.admin.db import load_snapshot_info, read_manifest, snapshot_paths
-from symx.admin.sync import ADMIN_META_ARTIFACT, ADMIN_META_SUMMARY, AdminSyncError, _coerce_int, _load_summary, run_sync
+from symx.admin.sync import (
+    ADMIN_META_ARTIFACT,
+    ADMIN_META_SUMMARY,
+    AdminSyncError,
+    _coerce_int,
+    _load_summary,
+    run_sync,
+)
 from symx.ipsw.model import (
     IpswArtifact,
     IpswArtifactDb,
