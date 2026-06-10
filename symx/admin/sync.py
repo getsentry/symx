@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import cast
+
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from symx.admin.db import (
     SnapshotManifest,
@@ -41,6 +41,25 @@ class WorkflowArtifactSummary:
     ota_generation: int
     ipsw_changed: bool
     ota_changed: bool
+
+
+class _WorkflowArtifactSummaryPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    ipsw_generation: int
+    ota_generation: int
+    ipsw_changed: bool
+    ota_changed: bool
+
+    @field_validator("ipsw_generation", "ota_generation", mode="before")
+    @classmethod
+    def validate_generation(cls, value: object) -> int:
+        return _coerce_int(value, Path(ADMIN_META_SUMMARY), "generation")
+
+    @field_validator("ipsw_changed", "ota_changed", mode="before")
+    @classmethod
+    def validate_changed(cls, value: object) -> bool:
+        return _coerce_bool(value, Path(ADMIN_META_SUMMARY), "changed")
 
 
 @dataclass(frozen=True)
@@ -235,16 +254,16 @@ def _load_downloaded_bundle(download_dir: Path, latest_paths: SnapshotPaths | No
 
 def _load_summary(download_dir: Path) -> WorkflowArtifactSummary:
     summary_path = _find_single_file(download_dir, ADMIN_META_SUMMARY)
-    raw_payload: object = json.loads(summary_path.read_text())
-    if not isinstance(raw_payload, dict):
-        raise AdminSyncError("Unexpected admin meta summary payload")
+    try:
+        payload = _WorkflowArtifactSummaryPayload.model_validate_json(summary_path.read_text())
+    except ValueError as error:
+        raise AdminSyncError(f"Unexpected admin meta summary payload in {summary_path}") from error
 
-    payload = cast(dict[object, object], raw_payload)
     return WorkflowArtifactSummary(
-        ipsw_generation=_coerce_int(payload.get("ipsw_generation"), summary_path, "ipsw_generation"),
-        ota_generation=_coerce_int(payload.get("ota_generation"), summary_path, "ota_generation"),
-        ipsw_changed=_coerce_bool(payload.get("ipsw_changed"), summary_path, "ipsw_changed"),
-        ota_changed=_coerce_bool(payload.get("ota_changed"), summary_path, "ota_changed"),
+        ipsw_generation=payload.ipsw_generation,
+        ota_generation=payload.ota_generation,
+        ipsw_changed=payload.ipsw_changed,
+        ota_changed=payload.ota_changed,
     )
 
 

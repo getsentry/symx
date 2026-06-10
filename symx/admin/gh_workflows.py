@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import json
 import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import TypedDict
+
+from pydantic import TypeAdapter, ValidationError
 
 
 class WorkflowRun(TypedDict):
@@ -31,6 +32,8 @@ StatusCallback = Callable[[str], None]
 ErrorFactory = Callable[[str], Exception]
 RunGhCommand = Callable[[list[str]], subprocess.CompletedProcess[str]]
 ListWorkflowRuns = Callable[[str, int], list[WorkflowRun]]
+_WORKFLOW_RUNS = TypeAdapter(list[WorkflowRun])
+_WORKFLOW_ARTIFACT_LIST = TypeAdapter(WorkflowArtifactList)
 
 
 def emit_status(status_callback: StatusCallback | None, message: str) -> None:
@@ -111,10 +114,10 @@ def list_workflow_runs(
             "databaseId,status,conclusion,url,startedAt,updatedAt,displayTitle,event",
         ]
     )
-    raw_payload: object = json.loads(result.stdout)
-    if not isinstance(raw_payload, list):
-        raise error_factory(f"Unexpected workflow run payload for {workflow}")
-    return cast(list[WorkflowRun], raw_payload)
+    try:
+        return _WORKFLOW_RUNS.validate_json(result.stdout)
+    except ValidationError as error:
+        raise error_factory(f"Unexpected workflow run payload for {workflow}") from error
 
 
 def max_run_id(runs: list[WorkflowRun]) -> int:
@@ -131,11 +134,11 @@ def run_has_artifact(
 ) -> bool:
     run_command = run_gh_command_func or _run_gh_command_for_error(error_factory)
     result = run_command(["api", f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/artifacts"])
-    raw_payload: object = json.loads(result.stdout)
-    if not isinstance(raw_payload, dict):
-        raise error_factory(f"Unexpected artifact payload for run #{run_id}")
+    try:
+        payload = _WORKFLOW_ARTIFACT_LIST.validate_json(result.stdout)
+    except ValidationError as error:
+        raise error_factory(f"Unexpected artifact payload for run #{run_id}") from error
 
-    payload = cast(WorkflowArtifactList, raw_payload)
     return any(artifact.get("name") == artifact_name for artifact in payload.get("artifacts", []))
 
 

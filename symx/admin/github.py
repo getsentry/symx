@@ -6,7 +6,9 @@ from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final, TypedDict, cast
+from typing import Final
+
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 GITHUB_RUN_CACHE_FILE_NAME: Final[str] = "github_runs.json"
 
@@ -15,14 +17,31 @@ class GithubRunLookupError(RuntimeError):
     pass
 
 
-class GithubRunPayload(TypedDict):
+class _GithubPayloadModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+
+class _GithubRunPayload(_GithubPayloadModel):
     databaseId: int
-    startedAt: str | None
-    updatedAt: str | None
-    url: str | None
-    status: str | None
-    conclusion: str | None
-    displayTitle: str | None
+    startedAt: str | None = None
+    updatedAt: str | None = None
+    url: str | None = None
+    status: str | None = None
+    conclusion: str | None = None
+    displayTitle: str | None = None
+
+
+class _GithubRunCachePayload(_GithubPayloadModel):
+    run_id: int
+    started_at: str | None = None
+    updated_at: str | None = None
+    url: str | None = None
+    status: str | None = None
+    conclusion: str | None = None
+    display_title: str | None = None
+
+
+_GITHUB_RUN_CACHE = TypeAdapter(dict[str, _GithubRunCachePayload])
 
 
 @dataclass(frozen=True)
@@ -52,28 +71,25 @@ def read_github_run_cache(cache_dir: Path) -> dict[int, GithubRunInfo]:
     if not path.exists():
         return {}
 
-    raw_payload: object = json.loads(path.read_text())
-    if not isinstance(raw_payload, dict):
+    try:
+        payload = _GITHUB_RUN_CACHE.validate_json(path.read_text())
+    except ValidationError:
         return {}
 
-    payload = cast(dict[object, object], raw_payload)
     result: dict[int, GithubRunInfo] = {}
     for key, value in payload.items():
-        if not isinstance(key, str) or not isinstance(value, dict):
-            continue
         try:
             run_id = int(key)
         except ValueError:
             continue
-        value_dict = cast(dict[object, object], value)
         result[run_id] = GithubRunInfo(
             run_id=run_id,
-            started_at=_optional_str(value_dict.get("started_at")),
-            updated_at=_optional_str(value_dict.get("updated_at")),
-            url=_optional_str(value_dict.get("url")),
-            status=_optional_str(value_dict.get("status")),
-            conclusion=_optional_str(value_dict.get("conclusion")),
-            display_title=_optional_str(value_dict.get("display_title")),
+            started_at=value.started_at,
+            updated_at=value.updated_at,
+            url=value.url,
+            status=value.status,
+            conclusion=value.conclusion,
+            display_title=value.display_title,
         )
     return result
 
@@ -124,19 +140,19 @@ def fetch_github_run_info(run_id: int) -> GithubRunInfo:
         stderr = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
         raise GithubRunLookupError(stderr)
 
-    raw_payload: object = json.loads(result.stdout)
-    if not isinstance(raw_payload, dict):
-        raise GithubRunLookupError("Unexpected gh run payload")
+    try:
+        payload = _GithubRunPayload.model_validate_json(result.stdout)
+    except ValidationError as error:
+        raise GithubRunLookupError("Unexpected gh run payload") from error
 
-    payload = cast(GithubRunPayload, raw_payload)
     return GithubRunInfo(
-        run_id=int(payload["databaseId"]),
-        started_at=payload["startedAt"],
-        updated_at=payload["updatedAt"],
-        url=payload["url"],
-        status=payload["status"],
-        conclusion=payload["conclusion"],
-        display_title=payload["displayTitle"],
+        run_id=payload.databaseId,
+        started_at=payload.startedAt,
+        updated_at=payload.updatedAt,
+        url=payload.url,
+        status=payload.status,
+        conclusion=payload.conclusion,
+        display_title=payload.displayTitle,
     )
 
 
@@ -149,11 +165,3 @@ def format_github_run_time(run_id: int, run_info: GithubRunInfo | None) -> str:
 def format_iso_timestamp(timestamp: str) -> str:
     dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
     return dt.astimezone(UTC).strftime("%Y-%m-%d %H:%MZ")
-
-
-def _optional_str(value: object) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    return str(value)

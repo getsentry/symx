@@ -902,7 +902,7 @@ class Blob(_PropertyMixin):
         if_metageneration_not_match=...,
         timeout=...,
         retry=...,
-    ):
+    ) -> str:
         """Download the contents of this blob as text (*not* bytes).
 
         If :attr:`user_project` is set on the bucket, bills the API request

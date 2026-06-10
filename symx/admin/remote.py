@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
 
 from google.api_core.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Bucket, Client
+from pydantic import TypeAdapter, ValidationError
 
 from symx.admin.actions import (
     AdminStore,
@@ -25,6 +25,7 @@ from symx.ipsw.model import ARTIFACTS_META_JSON as IPSW_META_JSON, IpswArtifactD
 from symx.ota.model import ARTIFACTS_META_JSON as OTA_META_JSON, OtaArtifact
 
 StatusCallback = Callable[[str], None]
+_WORKFLOW_RUNS = TypeAdapter(list[dict[str, object]])
 
 
 class AdminRemoteApplyError(RuntimeError):
@@ -205,12 +206,12 @@ def _blob_generation(blob: Blob) -> int:
 
 
 def _load_ipsw_db(blob: Blob) -> IpswArtifactDb:
-    payload = str(cast(Any, blob).download_as_text())
+    payload = blob.download_as_text()
     return IpswArtifactDb.model_validate_json(payload)
 
 
 def _load_ota_meta(blob: Blob) -> dict[str, OtaArtifact]:
-    raw_json = str(cast(Any, blob).download_as_text())
+    raw_json = blob.download_as_text()
     return parse_ota_meta_json(raw_json, AdminRemoteApplyError)
 
 
@@ -228,10 +229,10 @@ def _list_workflow_runs(workflow: str, limit: int = 10) -> list[dict[str, object
         ],
         AdminRemoteApplyError,
     )
-    raw_payload: object = json.loads(result.stdout)
-    if not isinstance(raw_payload, list):
-        raise AdminRemoteApplyError(f"Unexpected workflow run payload for {workflow}")
-    return cast(list[dict[str, object]], raw_payload)
+    try:
+        return _WORKFLOW_RUNS.validate_json(result.stdout)
+    except ValidationError as error:
+        raise AdminRemoteApplyError(f"Unexpected workflow run payload for {workflow}") from error
 
 
 def _result(

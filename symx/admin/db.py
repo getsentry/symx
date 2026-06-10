@@ -6,7 +6,9 @@ import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final, cast
+from typing import Final
+
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from symx.ipsw.model import IpswArtifactDb
 from symx.model import ArtifactProcessingState
@@ -27,6 +29,12 @@ SNAPSHOTS_DIR_NAME: Final[str] = "snapshots"
 
 @dataclass(frozen=True)
 class SnapshotManifest:
+    active_snapshot_id: str | None = None
+
+
+class _SnapshotManifestPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     active_snapshot_id: str | None = None
 
 
@@ -119,15 +127,11 @@ def read_manifest(cache_dir: Path) -> SnapshotManifest:
     if not path.exists():
         return SnapshotManifest()
 
-    raw_payload: object = json.loads(path.read_text())
-    if not isinstance(raw_payload, dict):
+    try:
+        payload = _SnapshotManifestPayload.model_validate_json(path.read_text())
+    except ValidationError:
         return SnapshotManifest()
-
-    payload = cast(dict[object, object], raw_payload)
-    active_snapshot_id = payload.get("active_snapshot_id")
-    if active_snapshot_id is None:
-        return SnapshotManifest()
-    return SnapshotManifest(active_snapshot_id=str(active_snapshot_id))
+    return SnapshotManifest(active_snapshot_id=payload.active_snapshot_id)
 
 
 def write_manifest(cache_dir: Path, manifest: SnapshotManifest) -> None:

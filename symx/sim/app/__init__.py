@@ -34,8 +34,34 @@ _dyld_shared_cache_prefix = "dyld_sim_shared_cache_"
 _ignored_dyld_file_suffixes = (".map", ".dylddata", ".atlas")
 
 
+def _dsc_arch_from_file_name(file_name: str) -> str | None:
+    path = Path(file_name)
+    if not path.name.startswith(_dyld_shared_cache_prefix) or path.suffix in _ignored_dyld_file_suffixes:
+        return None
+    arch = path.name.removeprefix(_dyld_shared_cache_prefix)
+    return arch or None
+
+
 def _is_ignored_dsc_file(file: Path) -> bool:
-    return not file.name.startswith(_dyld_shared_cache_prefix) or file.suffix in _ignored_dyld_file_suffixes
+    return _dsc_arch_from_file_name(file.name) is None
+
+
+def _parse_simulator_runtime_name(runtime_name: str) -> tuple[str, str, str] | None:
+    if not runtime_name.startswith(_simulator_runtime_prefix):
+        return None
+
+    parts = runtime_name.split(".")
+    if len(parts) <= 5:
+        return None
+
+    os_info = parts[4].split("-")
+    if len(os_info) < 3:
+        return None
+
+    os_name = os_info[0].lower()
+    os_version = ".".join(os_info[1:3])
+    build_number = parts[5]
+    return os_name, os_version, build_number
 
 
 @sim_app.command()
@@ -62,9 +88,10 @@ def extract(
         for runtime in find_simulator_runtimes(retrieve_caches_path()):
             with tempfile.TemporaryDirectory(prefix="_sentry_dyld_shared_cache_") as output_dir:
                 for dsc_file in runtime.path.iterdir():
-                    if _is_ignored_dsc_file(dsc_file):
+                    arch = _dsc_arch_from_file_name(dsc_file.name)
+                    if arch is None:
                         continue
-                    runtime.arch = dsc_file.name.split(_dyld_shared_cache_prefix)[1]
+                    runtime.arch = arch
                     logger.info("Extracting symbols for macOS", extra={"runtime": runtime})
                     extract_system_symbols(runtime, Path(output_dir))
 
@@ -95,17 +122,14 @@ def find_simulator_runtimes(caches_path: Path) -> list[SimulatorRuntime]:
         if macos_build_path.name == ".DS_Store":
             continue
         for runtime_path in macos_build_path.iterdir():
-            if not runtime_path.name.startswith(_simulator_runtime_prefix):
+            runtime_info = _parse_simulator_runtime_name(runtime_path.name)
+            if runtime_info is None:
                 continue
-            splits = runtime_path.name.split(".")
-            build_number = splits[5]
-            os_info = splits[4].split("-")
-            os_version = ".".join(os_info[1:3])
-            os_name = os_info[0].lower()
+            os_name, os_version, build_number = runtime_info
             for dsc_file in runtime_path.iterdir():
-                if not dsc_file.name.startswith(_dyld_shared_cache_prefix):
+                arch = _dsc_arch_from_file_name(dsc_file.name)
+                if arch is None:
                     continue
-                arch = dsc_file.name.split(_dyld_shared_cache_prefix)[1]
                 runtimes.append(
                     SimulatorRuntime(
                         arch=arch,
