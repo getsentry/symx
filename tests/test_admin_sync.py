@@ -9,7 +9,14 @@ from pydantic import HttpUrl
 import pytest
 
 from symx.admin.db import load_snapshot_info, read_manifest, snapshot_paths
-from symx.admin.sync import ADMIN_META_ARTIFACT, ADMIN_META_SUMMARY, AdminSyncError, _coerce_int, run_sync
+from symx.admin.sync import (
+    ADMIN_META_ARTIFACT,
+    ADMIN_META_SUMMARY,
+    AdminSyncError,
+    _coerce_int,
+    _load_summary,
+    run_sync,
+)
 from symx.ipsw.model import (
     IpswArtifact,
     IpswArtifactDb,
@@ -278,6 +285,20 @@ def test_run_sync_merges_partial_update_with_latest_local_snapshot(tmp_path: Pat
 def test_sync_coerce_int_rejects_boolean_values(tmp_path: Path) -> None:
     with pytest.raises(AdminSyncError, match="Unexpected ipsw_generation type"):
         _coerce_int(True, tmp_path / "summary.json", "ipsw_generation")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "{",
+        json.dumps({"ipsw_generation": 1, "ota_generation": 2, "ipsw_changed": True}),
+    ],
+)
+def test_load_summary_wraps_invalid_pydantic_payloads_as_admin_sync_error(tmp_path: Path, payload: str) -> None:
+    (tmp_path / ADMIN_META_SUMMARY).write_text(payload)
+
+    with pytest.raises(AdminSyncError, match="Unexpected admin meta summary payload"):
+        _load_summary(tmp_path)
 
 
 def test_run_sync_rebuilds_incomplete_snapshot(tmp_path: Path, monkeypatch) -> None:

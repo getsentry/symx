@@ -2,14 +2,41 @@ import json
 import subprocess
 import sys
 from datetime import datetime
-from typing import Any
+from typing import NotRequired, TypedDict
 
 import typer
+from pydantic import TypeAdapter
 from rich.console import Console
 from rich.table import Table
 
 gha_app = typer.Typer(help="Query GitHub Actions workflow runs")
 console = Console()
+
+
+class WorkflowRun(TypedDict):
+    number: int
+    databaseId: int
+    name: str
+    conclusion: str | None
+    status: str
+    startedAt: str | None
+    updatedAt: str | None
+    url: str
+    displayTitle: str
+    headBranch: str
+    event: str
+    duration_minutes: NotRequired[float]
+    matching_lines: NotRequired[list[str]]
+
+
+class WorkflowInfo(TypedDict):
+    name: str
+    state: str
+    id: int
+
+
+_WORKFLOW_RUNS = TypeAdapter(list[WorkflowRun])
+_WORKFLOWS = TypeAdapter(list[WorkflowInfo])
 
 
 def parse_datetime(dt_str: str) -> datetime:
@@ -38,7 +65,7 @@ def get_workflow_runs(
     limit: int = 100,
     branch: str | None = None,
     status: str | None = None,
-) -> list[dict[str, Any]]:
+) -> list[WorkflowRun]:
     cmd = [
         "gh",
         "run",
@@ -61,7 +88,7 @@ def get_workflow_runs(
         console.print(f"[red]Error fetching runs:[/red] {result.stderr}")
         sys.exit(1)
 
-    return json.loads(result.stdout)
+    return _WORKFLOW_RUNS.validate_json(result.stdout)
 
 
 def get_run_log(run_id: int) -> str:
@@ -133,12 +160,14 @@ def list_runs(
     """
     runs = get_workflow_runs(workflow, limit=limit, branch=branch)
 
-    filtered_runs: list[dict[str, Any]] = []
+    filtered_runs: list[WorkflowRun] = []
     for run in runs:
-        if not run.get("startedAt") or not run.get("updatedAt"):
+        started_at = run.get("startedAt")
+        updated_at = run.get("updatedAt")
+        if not started_at or not updated_at:
             continue
 
-        duration = calculate_duration_minutes(run["startedAt"], run["updatedAt"])
+        duration = calculate_duration_minutes(started_at, updated_at)
         run["duration_minutes"] = duration
 
         if min_duration is not None and duration < min_duration:
@@ -153,7 +182,7 @@ def list_runs(
 
     if search_log:
         console.print(f"[yellow]Searching logs for '{search_log}'...[/yellow]")
-        matching_runs: list[dict[str, Any]] = []
+        matching_runs: list[WorkflowRun] = []
         for run in filtered_runs:
             log = get_run_log(run["databaseId"])
             if search_log.lower() in log.lower():
@@ -185,9 +214,12 @@ def list_runs(
             "failure": "red",
             "cancelled": "yellow",
             "skipped": "dim",
-        }.get(run.get("conclusion", ""), "white")
+        }.get(run.get("conclusion") or "", "white")
 
-        started = parse_datetime(run["startedAt"]).strftime("%Y-%m-%d %H:%M")
+        started_at = run.get("startedAt")
+        if not started_at:
+            continue
+        started = parse_datetime(started_at).strftime("%Y-%m-%d %H:%M")
 
         table.add_row(
             str(run["databaseId"]),
@@ -195,7 +227,7 @@ def list_runs(
             run.get("headBranch", "")[:20],
             run.get("status", ""),
             f"[{conclusion_style}]{run.get('conclusion', '-')}[/{conclusion_style}]",
-            format_duration(run["duration_minutes"]),
+            format_duration(run.get("duration_minutes", 0.0)),
             started,
         )
 
@@ -207,7 +239,7 @@ def list_runs(
         for run in filtered_runs[:5]:
             if run.get("matching_lines"):
                 console.print(f"\n[cyan]Run {run['databaseId']}:[/cyan]")
-                for line in run["matching_lines"]:
+                for line in run.get("matching_lines", []):
                     console.print(f"  {line[:120]}")
 
 
@@ -222,7 +254,7 @@ def list_workflows() -> None:
         console.print(f"[red]Error:[/red] {result.stderr}")
         sys.exit(1)
 
-    workflows = json.loads(result.stdout)
+    workflows = _WORKFLOWS.validate_json(result.stdout)
 
     table = Table(title="Available Workflows")
     table.add_column("Name", style="cyan")

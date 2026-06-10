@@ -4,7 +4,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
-from typing import cast
+from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
 
 from symx.admin.db import IpswSourceRow, OtaArtifactRow, SnapshotInfo
 from symx.model import ArtifactProcessingState
@@ -32,6 +32,62 @@ class WorkerDispatchStatus(StrEnum):
     ALREADY_RUNNING = "already_running"
     DISPATCHED = "dispatched"
     DISPATCH_FAILED = "dispatch_failed"
+
+
+class _AdminActionPayloadModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+
+class _IpswTargetPayload(_AdminActionPayloadModel):
+    artifact_key: str
+    link: str
+
+
+class _OtaTargetPayload(_AdminActionPayloadModel):
+    ota_key: str
+
+
+class _WorkerDispatchResultPayload(_AdminActionPayloadModel):
+    workflow: str
+    status: WorkerDispatchStatus
+    detail: str | None = None
+
+
+class _ApplyBatchRequestPayload(_AdminActionPayloadModel):
+    store: AdminStore
+    action: AdminActionKind
+    snapshot_id: str
+    base_generation: int
+    targets: object
+    reason: str
+
+    @field_validator("base_generation", mode="before")
+    @classmethod
+    def validate_base_generation(cls, value: object) -> int:
+        return _coerce_int(value)
+
+
+class _ApplyBatchResultPayload(_AdminActionPayloadModel):
+    status: ApplyBatchStatus
+    store: AdminStore
+    action: AdminActionKind
+    snapshot_id: str
+    base_generation: int
+    remote_generation: int
+    targets: object
+    reason: str
+    applied_count: int
+    message: str
+    worker: _WorkerDispatchResultPayload | None = None
+
+    @field_validator("base_generation", "remote_generation", "applied_count", mode="before")
+    @classmethod
+    def validate_integer(cls, value: object) -> int:
+        return _coerce_int(value)
+
+
+_IPSW_TARGETS = TypeAdapter(list[_IpswTargetPayload])
+_OTA_TARGETS = TypeAdapter(list[_OtaTargetPayload])
 
 
 @dataclass(frozen=True)
@@ -70,23 +126,14 @@ class ApplyBatchRequest:
 
     @classmethod
     def from_json(cls, payload_raw: str) -> ApplyBatchRequest:
-        payload: dict[str, object] = json.loads(payload_raw)
-        store = AdminStore(str(payload["store"]))
-        action = AdminActionKind(str(payload["action"]))
-        snapshot_id = str(payload["snapshot_id"])
-        base_generation = _coerce_int(payload["base_generation"])
-        reason = str(payload["reason"])
-        raw_targets = payload.get("targets")
-        if not isinstance(raw_targets, list):
-            raise ValueError("Unexpected targets payload")
-
+        payload = _ApplyBatchRequestPayload.model_validate_json(payload_raw)
         return cls(
-            store=store,
-            action=action,
-            snapshot_id=snapshot_id,
-            base_generation=base_generation,
-            targets=_parse_targets(store, cast(list[object], raw_targets)),
-            reason=reason,
+            store=payload.store,
+            action=payload.action,
+            snapshot_id=payload.snapshot_id,
+            base_generation=payload.base_generation,
+            targets=_parse_targets(payload.store, payload.targets),
+            reason=payload.reason,
         )
 
 
@@ -116,33 +163,26 @@ class ApplyBatchResult:
 
     @classmethod
     def from_json(cls, payload_raw: str) -> ApplyBatchResult:
-        payload: dict[str, object] = json.loads(payload_raw)
-        store = AdminStore(str(payload["store"]))
-        worker_payload = payload.get("worker")
-        worker: WorkerDispatchResult | None = None
-        if isinstance(worker_payload, dict):
-            worker_dict = cast(dict[str, object], worker_payload)
+        payload = _ApplyBatchResultPayload.model_validate_json(payload_raw)
+        worker = None
+        if payload.worker is not None:
             worker = WorkerDispatchResult(
-                workflow=str(worker_dict["workflow"]),
-                status=WorkerDispatchStatus(str(worker_dict["status"])),
-                detail=_optional_str(worker_dict.get("detail")),
+                workflow=payload.worker.workflow,
+                status=payload.worker.status,
+                detail=payload.worker.detail,
             )
 
-        raw_targets = payload.get("targets")
-        if not isinstance(raw_targets, list):
-            raise ValueError("Unexpected targets payload")
-
         return cls(
-            status=ApplyBatchStatus(str(payload["status"])),
-            store=store,
-            action=AdminActionKind(str(payload["action"])),
-            snapshot_id=str(payload["snapshot_id"]),
-            base_generation=_coerce_int(payload["base_generation"]),
-            remote_generation=_coerce_int(payload["remote_generation"]),
-            targets=_parse_targets(store, cast(list[object], raw_targets)),
-            reason=str(payload["reason"]),
-            applied_count=_coerce_int(payload["applied_count"]),
-            message=str(payload["message"]),
+            status=payload.status,
+            store=payload.store,
+            action=payload.action,
+            snapshot_id=payload.snapshot_id,
+            base_generation=payload.base_generation,
+            remote_generation=payload.remote_generation,
+            targets=_parse_targets(payload.store, payload.targets),
+            reason=payload.reason,
+            applied_count=payload.applied_count,
+            message=payload.message,
             worker=worker,
         )
 
@@ -366,25 +406,13 @@ def _ipsw_target_row_key(target: IpswTarget) -> str:
     return f"{target.artifact_key}::{target.link}"
 
 
-def _parse_targets(store: AdminStore, raw_targets: list[object]) -> tuple[AdminTarget, ...]:
-    targets: list[AdminTarget] = []
-    for raw_target in raw_targets:
-        if not isinstance(raw_target, dict):
-            raise ValueError("Unexpected target payload")
-        payload = cast(dict[str, object], raw_target)
-        if store == AdminStore.IPSW:
-            targets.append(IpswTarget(artifact_key=str(payload["artifact_key"]), link=str(payload["link"])))
-        else:
-            targets.append(OtaTarget(ota_key=str(payload["ota_key"])))
-    return tuple(targets)
-
-
-def _optional_str(value: object) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    return str(value)
+def _parse_targets(store: AdminStore, raw_targets: object) -> tuple[AdminTarget, ...]:
+    if store == AdminStore.IPSW:
+        return tuple(
+            IpswTarget(artifact_key=target.artifact_key, link=target.link)
+            for target in _IPSW_TARGETS.validate_python(raw_targets)
+        )
+    return tuple(OtaTarget(ota_key=target.ota_key) for target in _OTA_TARGETS.validate_python(raw_targets))
 
 
 def _coerce_int(value: object) -> int:
