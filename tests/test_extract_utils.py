@@ -11,6 +11,8 @@ import signal
 import subprocess
 import tempfile
 import zipfile
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO, cast
 
@@ -77,8 +79,11 @@ def test_generate_bundle_id_no_commas() -> None:
 # --- macOS DSC architecture policy tests ---
 
 
-def test_macos_dsc_architectures_omit_x86_64_for_macos_27_metadata() -> None:
-    assert ipsw_extract._macos_dsc_architectures("27.0") == [Arch.ARM64E]
+def test_macos_dsc_architectures_include_x86_64_for_macos_27_metadata() -> None:
+    assert ipsw_extract._macos_dsc_architectures("27.0") == [
+        Arch.ARM64E,
+        Arch.X86_64,
+    ]
 
 
 def test_macos_dsc_architectures_keep_x86_64_before_macos_27_metadata() -> None:
@@ -193,6 +198,7 @@ def test_inspect_ipsw_dmg_paths_prefers_systemos_and_skips_recovery_filesystem(t
             {
                 "Manifest": {
                     "Cryptex1,SystemOS": {"Info": {"Path": "system.dmg.aea"}},
+                    "Cryptex1,RosettaOS": {"Info": {"Path": "rosetta.dmg"}},
                     "OS": {"Info": {"Path": "filesystem.dmg.aea"}},
                 },
                 "Info": {"Variant": "Customer Erase Install (IPSW)"},
@@ -212,8 +218,82 @@ def test_inspect_ipsw_dmg_paths_prefers_systemos_and_skips_recovery_filesystem(t
     assert inspect_ipsw_dmg_paths(ipsw_path) == ipsw_extract.IpswDmgPaths(
         system="system.dmg.aea",
         filesystem="filesystem.dmg.aea",
+        rosetta="rosetta.dmg",
         selected="system.dmg.aea",
     )
+
+
+def test_find_rosetta_dsc_sources_finds_full_and_x86support_caches(tmp_path: Path) -> None:
+    full_dsc = tmp_path / "System/Library/dyld/dyld_shared_cache_x86_64"
+    full_dsc.parent.mkdir(parents=True)
+    full_dsc.touch()
+    x86support_dsc = tmp_path / "System/x86Support/System/Library/dyld/dyld_shared_cache_x86_64"
+    x86support_dsc.parent.mkdir(parents=True)
+    x86support_dsc.touch()
+
+    assert ipsw_extract._find_rosetta_dsc_sources(tmp_path) == [
+        ipsw_extract.DscSplitSource(label="x86_64", artifact=full_dsc),
+        ipsw_extract.DscSplitSource(label="x86_64_x86Support", artifact=x86support_dsc),
+    ]
+
+
+def test_split_rosetta_dscs_splits_full_and_x86support_caches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ipsw_path = tmp_path / "UniversalMac_27.0_26A5353q_Restore.ipsw"
+    build_manifest = {
+        "BuildIdentities": [
+            {
+                "Manifest": {
+                    "Cryptex1,RosettaOS": {"Info": {"Path": "rosetta.dmg"}},
+                },
+                "Info": {"Variant": "Customer Erase Install (IPSW)"},
+            }
+        ]
+    }
+    with zipfile.ZipFile(ipsw_path, "w") as archive:
+        archive.writestr("BuildManifest.plist", plistlib.dumps(build_manifest))
+        archive.writestr("rosetta.dmg", b"fake")
+
+    processing_dir = tmp_path / "processing"
+    processing_dir.mkdir()
+    run = _IpswExtractionRun(
+        IpswExtractionRequest(IpswPlatform.MACOS, ipsw_path, processing_dir, version="27.0", build="26A5353q")
+    )
+
+    mount_root = tmp_path / "mount"
+    full_dsc = mount_root / "System/Library/dyld/dyld_shared_cache_x86_64"
+    full_dsc.parent.mkdir(parents=True)
+    full_dsc.touch()
+    x86support_dsc = mount_root / "System/x86Support/System/Library/dyld/dyld_shared_cache_x86_64"
+    x86support_dsc.parent.mkdir(parents=True)
+    x86support_dsc.touch()
+
+    @contextmanager
+    def fake_mount(self: _IpswExtractionRun, dmg: Path) -> Generator[Path, None, None]:
+        assert self is run
+        assert dmg.name == "rosetta.dmg"
+        yield mount_root
+
+    split_calls: list[tuple[Path, str, str | None, Path | None]] = []
+
+    def fake_split(
+        self: _IpswExtractionRun,
+        dsc_root_file: Path,
+        arch_label: str,
+        split_label: str | None = None,
+        cleanup_dir: Path | None = None,
+    ) -> Path:
+        assert self is run
+        split_calls.append((dsc_root_file, arch_label, split_label, cleanup_dir))
+        return processing_dir / "split_out"
+
+    monkeypatch.setattr(_IpswExtractionRun, "_mounted_readonly_dmg", fake_mount)
+    monkeypatch.setattr(_IpswExtractionRun, "_ipsw_split_dsc_file", fake_split)
+
+    assert run._split_rosetta_dscs() == ["x86_64", "x86_64_x86Support"]
+    assert split_calls == [
+        (full_dsc, "x86_64", "x86_64", None),
+        (x86support_dsc, "x86_64_x86Support", "x86_64_x86Support", None),
+    ]
 
 
 def _make_ipsw_extractor(tmp_path: Path) -> _IpswExtractionRun:
