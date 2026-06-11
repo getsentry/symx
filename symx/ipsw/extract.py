@@ -54,6 +54,7 @@ _IGNORED_IPSW_HELP_PREFIXES = ("Usage:", "Aliases:", "Examples:", "Flags:", "Glo
 _FCS_KEY_URL_LABEL = "[com.apple.wkms.fcs-key-url]:"
 _VENDORED_PEM_DB = Path(__file__).resolve().parent / "data" / "fcs-keys.json"
 _VERSION_MAJOR_RE = re.compile(r"^(\d+)")
+_MACOS_ROSETTA_DSC_MIN_MAJOR_VERSION = 27
 _ROSETTA_DSC_SOURCES = (
     ("x86_64", Path("System/Library/dyld/dyld_shared_cache_x86_64")),
     ("x86_64_x86Support", Path("System/x86Support/System/Library/dyld/dyld_shared_cache_x86_64")),
@@ -768,8 +769,8 @@ class _IpswExtractionRun:
                     arch_span.set_data("version", self.request.version)
                     arch_span.set_data("build", self.request.build)
 
-                    rosetta_dmg_path = self._try_rosetta_dmg_path() if arch == Arch.X86_64 else None
-                    if rosetta_dmg_path is not None and not rosetta_dmg_path.endswith(".aea"):
+                    rosetta_dmg_path = self._rosetta_dmg_path_for_x86_64_dsc() if arch == Arch.X86_64 else None
+                    if rosetta_dmg_path is not None:
                         split_labels = self._split_rosetta_dscs()
                         split_dir = self.processing_dir / "split_out"
                     else:
@@ -920,12 +921,35 @@ class _IpswExtractionRun:
     def _rosetta_dmg_path(self) -> str | None:
         return inspect_ipsw_dmg_paths(self.ipsw_path).rosetta
 
-    def _try_rosetta_dmg_path(self) -> str | None:
+    def _rosetta_dmg_path_for_x86_64_dsc(self) -> str | None:
+        requires_rosetta = _macos_x86_64_dsc_requires_rosetta(self.request.version)
         try:
-            return self._rosetta_dmg_path()
+            rosetta_dmg_path = self._rosetta_dmg_path()
         except Exception as error:
+            if requires_rosetta:
+                raise IpswExtractError(
+                    f"Cannot determine RosettaOS DMG path required for macOS {self.request.version} x86_64 DSC: {error}"
+                ) from error
             logger.warning("Failed to inspect RosettaOS DMG path for %s: %s", self.ipsw_path.name, error)
             return None
+
+        if rosetta_dmg_path is None:
+            if requires_rosetta:
+                raise IpswExtractError(
+                    f"macOS {self.request.version} x86_64 DSC requires Cryptex1,RosettaOS in BuildManifest"
+                )
+            return None
+
+        if rosetta_dmg_path.endswith(".aea"):
+            if requires_rosetta:
+                raise IpswExtractError(
+                    f"macOS {self.request.version} x86_64 DSC requires RosettaOS DMG, "
+                    f"but it is AEA encrypted and cannot be mounted directly: {rosetta_dmg_path}"
+                )
+            logger.warning("RosettaOS DMG is AEA encrypted; falling back to SystemOS DSC extraction")
+            return None
+
+        return rosetta_dmg_path
 
     def _split_rosetta_dscs(self) -> list[str]:
         rosetta_dmg_member = self._rosetta_dmg_path()
@@ -1178,6 +1202,11 @@ def _version_major(version: str | None) -> int | None:
     if version_match is None:
         return None
     return int(version_match.group(1))
+
+
+def _macos_x86_64_dsc_requires_rosetta(version: str | None) -> bool:
+    major_version = _version_major(version)
+    return major_version is not None and major_version >= _MACOS_ROSETTA_DSC_MIN_MAJOR_VERSION
 
 
 def _macos_dsc_architectures(version: str | None) -> list[Arch]:

@@ -223,6 +223,60 @@ def test_inspect_ipsw_dmg_paths_prefers_systemos_and_skips_recovery_filesystem(t
     )
 
 
+def _make_macos_run_with_manifest(tmp_path: Path, version: str, manifest: dict[str, object]) -> _IpswExtractionRun:
+    ipsw_path = tmp_path / f"UniversalMac_{version}_Test_Restore.ipsw"
+    build_manifest = {
+        "ProductVersion": version,
+        "ProductBuildVersion": "TestBuild",
+        "BuildIdentities": [
+            {
+                "Manifest": manifest,
+                "Info": {"Variant": "Customer Erase Install (IPSW)"},
+            }
+        ],
+    }
+    with zipfile.ZipFile(ipsw_path, "w") as archive:
+        archive.writestr("BuildManifest.plist", plistlib.dumps(build_manifest))
+
+    processing_dir = tmp_path / "processing"
+    processing_dir.mkdir()
+    return _IpswExtractionRun(
+        IpswExtractionRequest(IpswPlatform.MACOS, ipsw_path, processing_dir, version=version, build="TestBuild")
+    )
+
+
+def test_rosetta_dmg_path_for_x86_64_dsc_allows_legacy_systemos_fallback_before_macos_27(tmp_path: Path) -> None:
+    run = _make_macos_run_with_manifest(
+        tmp_path,
+        "26.5",
+        {"Cryptex1,SystemOS": {"Info": {"Path": "system.dmg.aea"}}},
+    )
+
+    assert run._rosetta_dmg_path_for_x86_64_dsc() is None
+
+
+def test_rosetta_dmg_path_for_x86_64_dsc_requires_rosetta_for_macos_27(tmp_path: Path) -> None:
+    run = _make_macos_run_with_manifest(
+        tmp_path,
+        "27.0",
+        {"Cryptex1,SystemOS": {"Info": {"Path": "system.dmg.aea"}}},
+    )
+
+    with pytest.raises(IpswExtractError, match="macOS 27.0 x86_64 DSC requires Cryptex1,RosettaOS"):
+        run._rosetta_dmg_path_for_x86_64_dsc()
+
+
+def test_rosetta_dmg_path_for_x86_64_dsc_rejects_encrypted_rosetta_for_macos_27(tmp_path: Path) -> None:
+    run = _make_macos_run_with_manifest(
+        tmp_path,
+        "27.0",
+        {"Cryptex1,RosettaOS": {"Info": {"Path": "rosetta.dmg.aea"}}},
+    )
+
+    with pytest.raises(IpswExtractError, match="RosettaOS DMG, but it is AEA encrypted"):
+        run._rosetta_dmg_path_for_x86_64_dsc()
+
+
 def test_find_rosetta_dsc_sources_finds_full_and_x86support_caches(tmp_path: Path) -> None:
     full_dsc = tmp_path / "System/Library/dyld/dyld_shared_cache_x86_64"
     full_dsc.parent.mkdir(parents=True)
