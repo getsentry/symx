@@ -54,7 +54,11 @@ _IGNORED_IPSW_HELP_PREFIXES = ("Usage:", "Aliases:", "Examples:", "Flags:", "Glo
 _FCS_KEY_URL_LABEL = "[com.apple.wkms.fcs-key-url]:"
 _VENDORED_PEM_DB = Path(__file__).resolve().parent / "data" / "fcs-keys.json"
 _VERSION_MAJOR_RE = re.compile(r"^(\d+)")
-_MACOS_ARM64E_ONLY_DSC_MIN_MAJOR_VERSION = 27
+_MACOS_ROSETTA_DSC_MIN_MAJOR_VERSION = 27
+_ROSETTA_DSC_SOURCES = (
+    ("x86_64", Path("System/Library/dyld/dyld_shared_cache_x86_64")),
+    ("x86_64_x86Support", Path("System/x86Support/System/Library/dyld/dyld_shared_cache_x86_64")),
+)
 
 
 @dataclass(frozen=True)
@@ -130,14 +134,22 @@ class IpswProductMetadata:
 class IpswDmgPaths:
     system: str | None
     filesystem: str | None
+    rosetta: str | None
     selected: str | None
 
     def to_span_data(self) -> dict[str, str | None]:
         return {
             "system": self.system,
             "filesystem": self.filesystem,
+            "rosetta": self.rosetta,
             "selected": self.selected,
         }
+
+
+@dataclass(frozen=True)
+class DscSplitSource:
+    label: str
+    artifact: Path
 
 
 class _IpswBuildManifestModel(BaseModel):
@@ -154,6 +166,7 @@ class IpswManifestComponent(_IpswBuildManifestModel):
 
 class IpswBuildIdentityManifest(_IpswBuildManifestModel):
     cryptex_system_os: IpswManifestComponent | None = Field(None, alias="Cryptex1,SystemOS")
+    cryptex_rosetta_os: IpswManifestComponent | None = Field(None, alias="Cryptex1,RosettaOS")
     os: IpswManifestComponent | None = Field(None, alias="OS")
 
 
@@ -443,6 +456,7 @@ def inspect_ipsw_dmg_paths(ipsw_path: Path) -> IpswDmgPaths:
         raise ValueError(f"BuildManifest.plist has no BuildIdentities list in {ipsw_path}")
 
     system_dmg: str | None = None
+    rosetta_dmg: str | None = None
     filesystem_dmgs: list[str] = []
 
     for build_identity in build_manifest.build_identities:
@@ -452,6 +466,8 @@ def inspect_ipsw_dmg_paths(ipsw_path: Path) -> IpswDmgPaths:
 
         if system_dmg is None:
             system_dmg = _manifest_component_path(manifest.cryptex_system_os)
+        if rosetta_dmg is None:
+            rosetta_dmg = _manifest_component_path(manifest.cryptex_rosetta_os)
 
         filesystem_dmg = _manifest_component_path(manifest.os)
         if filesystem_dmg is None:
@@ -467,7 +483,7 @@ def inspect_ipsw_dmg_paths(ipsw_path: Path) -> IpswDmgPaths:
     filesystem_dmg = filesystem_dmgs[0] if len(filesystem_dmgs) == 1 else None
     selected_dmg = system_dmg if system_dmg is not None else filesystem_dmg
 
-    return IpswDmgPaths(system=system_dmg, filesystem=filesystem_dmg, selected=selected_dmg)
+    return IpswDmgPaths(system=system_dmg, filesystem=filesystem_dmg, rosetta=rosetta_dmg, selected=selected_dmg)
 
 
 def _extract_ipsw_member(ipsw_path: Path, member_name: str, output_path: Path) -> Path:
@@ -744,7 +760,7 @@ class _IpswExtractionRun:
     def _symsort_dsc(self) -> None:
         split_dir = self.processing_dir / "split_out"
         if self.platform == IpswPlatform.MACOS:
-            compressed_archives: list[tuple[Path, Arch]] = []
+            compressed_archives: list[tuple[Path, str]] = []
 
             for arch in self.macos_dsc_architectures:
                 logger.info("Extracting and processing DSC for %s", arch)
@@ -753,18 +769,25 @@ class _IpswExtractionRun:
                     arch_span.set_data("version", self.request.version)
                     arch_span.set_data("build", self.request.build)
 
-                    extract_dir = self._ipsw_extract_dsc(arch)
-                    _log_directory_contents(extract_dir)
+                    rosetta_dmg_path = self._rosetta_dmg_path_for_x86_64_dsc() if arch == Arch.X86_64 else None
+                    if rosetta_dmg_path is not None:
+                        split_labels = self._split_rosetta_dscs()
+                        split_dir = self.processing_dir / "split_out"
+                    else:
+                        extract_dir = self._ipsw_extract_dsc(arch)
+                        _log_directory_contents(extract_dir)
 
-                    split_dir = self._ipsw_split(extract_dir, arch)
-                    _log_directory_contents(split_dir)
+                        split_dir = self._ipsw_split(extract_dir, arch)
+                        _log_directory_contents(split_dir)
+                        split_labels = [str(arch)]
 
-                    arch_split_dir = split_dir / str(arch)
-                    if arch_split_dir.exists():
-                        with sentry_sdk.start_span(op="ipsw.compress", name=f"Compress {arch} split"):
-                            archive_path = _compress_directory(arch_split_dir)
-                        compressed_archives.append((archive_path, arch))
-                        logger.info("Finished compressing %s split to %s", arch, archive_path)
+                    for split_label in split_labels:
+                        arch_split_dir = split_dir / split_label
+                        if arch_split_dir.exists():
+                            with sentry_sdk.start_span(op="ipsw.compress", name=f"Compress {split_label} split"):
+                                archive_path = _compress_directory(arch_split_dir)
+                            compressed_archives.append((archive_path, split_label))
+                            logger.info("Finished compressing %s split to %s", split_label, archive_path)
 
             # Delete IPSW file now that all required DSC architectures are extracted and compressed
             if self.ipsw_path.exists():
@@ -772,9 +795,9 @@ class _IpswExtractionRun:
                 self.ipsw_path.unlink()
 
             # Decompress all archives before final symsort processing
-            for archive_path, arch in compressed_archives:
-                with sentry_sdk.start_span(op="ipsw.decompress", name=f"Decompress {arch} split"):
-                    _decompress_archive(archive_path, split_dir / str(arch))
+            for archive_path, split_label in compressed_archives:
+                with sentry_sdk.start_span(op="ipsw.decompress", name=f"Decompress {split_label} split"):
+                    _decompress_archive(archive_path, split_dir / split_label)
                 archive_path.unlink()  # Remove the compressed archive after extraction
 
             # We accumulate each architecture as a sub-dir in split_dir and let symsorter process them together
@@ -895,27 +918,128 @@ class _IpswExtractionRun:
             error=mount_error,
         )
 
-    def _ipsw_split(self, extract_dir: Path, arch: Arch | None = None) -> Path:
-        arch_label = str(arch) if arch is not None else "default"
-        with sentry_sdk.start_span(op="ipsw.dyld_split", name=f"Split IPSW DSC ({arch_label})") as span:
-            dsc_root_file = None
-            for item in extract_dir.iterdir():
-                if item.is_file() and not item.suffix:  # check if it is a file and has no extension
-                    dsc_root_file = item
-                    break
+    def _rosetta_dmg_path(self) -> str | None:
+        return inspect_ipsw_dmg_paths(self.ipsw_path).rosetta
 
-            span.set_data("extract_dir", directory_data(extract_dir))
-            if dsc_root_file is None:
+    def _rosetta_dmg_path_for_x86_64_dsc(self) -> str | None:
+        if not _macos_x86_64_dsc_requires_rosetta(self.request.version):
+            return None
+
+        try:
+            rosetta_dmg_path = self._rosetta_dmg_path()
+        except Exception as error:
+            raise IpswExtractError(
+                f"Cannot determine RosettaOS DMG path required for macOS {self.request.version} x86_64 DSC: {error}"
+            ) from error
+
+        if rosetta_dmg_path is None:
+            raise IpswExtractError(
+                f"macOS {self.request.version} x86_64 DSC requires Cryptex1,RosettaOS in BuildManifest"
+            )
+
+        if rosetta_dmg_path.endswith(".aea"):
+            raise IpswExtractError(
+                f"macOS {self.request.version} x86_64 DSC requires RosettaOS DMG, "
+                f"but it is AEA encrypted and cannot be mounted directly: {rosetta_dmg_path}"
+            )
+
+        return rosetta_dmg_path
+
+    def _split_rosetta_dscs(self) -> list[str]:
+        rosetta_dmg_member = self._rosetta_dmg_path()
+        if rosetta_dmg_member is None:
+            raise IpswExtractError(f"IPSW BuildManifest has no RosettaOS DMG for {self.ipsw_path}")
+        if rosetta_dmg_member.endswith(".aea"):
+            raise IpswExtractError(
+                f"RosettaOS DMG is AEA encrypted and cannot be mounted directly: {rosetta_dmg_member}"
+            )
+
+        with sentry_sdk.start_span(op="ipsw.extract.rosetta_dsc", name="Extract+split RosettaOS DSC") as span:
+            span.set_data("rosetta_dmg_member", rosetta_dmg_member)
+            with tempfile.TemporaryDirectory(suffix="_ipsw_rosetta_dmg") as tmpdir:
+                temp_dir = Path(tmpdir)
+                rosetta_dmg = temp_dir / Path(rosetta_dmg_member).name
+                _extract_ipsw_member(self.ipsw_path, rosetta_dmg_member, rosetta_dmg)
+                span.set_data("rosetta_dmg", directory_data(rosetta_dmg))
+
+                with self._mounted_readonly_dmg(rosetta_dmg) as mount_point:
+                    sources = _find_rosetta_dsc_sources(mount_point)
+                    span.set_data("rosetta_dsc_sources", {source.label: str(source.artifact) for source in sources})
+                    if not sources:
+                        span.set_status("internal_error")
+                        raise IpswExtractError(
+                            f"RosettaOS DMG contains no supported dyld_shared_cache files: {rosetta_dmg}"
+                        )
+
+                    split_labels: list[str] = []
+                    for source in sources:
+                        self._ipsw_split_dsc_file(source.artifact, source.label, split_label=source.label)
+                        split_labels.append(source.label)
+
+                    return split_labels
+
+    @contextmanager
+    def _mounted_readonly_dmg(self, dmg: Path) -> Generator[Path, None, None]:
+        mount_point = Path(tempfile.mkdtemp(prefix=f"{dmg.stem}_mount_"))
+        with sentry_sdk.start_span(op="subprocess.hdiutil_mount", name=f"Mount DMG {dmg.name}") as span:
+            command = ["hdiutil", "attach", "-readonly", "-nobrowse", "-mountpoint", str(mount_point), str(dmg)]
+            result = subprocess.run(command, capture_output=True)
+            span.set_data("hdiutil_attach", _ipsw_command_data(command, result.stdout, result.stderr, [mount_point]))
+            if result.returncode != 0:
                 span.set_status("internal_error")
-                raise IpswExtractError(f"Failed to find dyld_shared_cache root-file in {extract_dir}")
+                shutil.rmtree(mount_point, ignore_errors=True)
+                raise IpswExtractError(f"hdiutil attach failed for {dmg}")
 
+        try:
+            yield mount_point
+        finally:
+            with sentry_sdk.start_span(op="subprocess.hdiutil_detach", name=f"Unmount DMG {dmg.name}") as span:
+                command = ["hdiutil", "detach", str(mount_point)]
+                result = subprocess.run(command, capture_output=True)
+                span.set_data(
+                    "hdiutil_detach", _ipsw_command_data(command, result.stdout, result.stderr, [mount_point])
+                )
+                if result.returncode != 0:
+                    span.set_status("internal_error")
+                    logger.warning("hdiutil detach failed for %s", mount_point)
+            if mount_point.exists():
+                shutil.rmtree(mount_point, ignore_errors=True)
+
+    def _ipsw_split(self, extract_dir: Path, arch: Arch | None = None) -> Path:
+        dsc_root_file = None
+        for item in extract_dir.iterdir():
+            if item.is_file() and not item.suffix:  # check if it is a file and has no extension
+                dsc_root_file = item
+                break
+
+        if dsc_root_file is None:
+            raise IpswExtractError(f"Failed to find dyld_shared_cache root-file in {extract_dir}")
+
+        arch_label = str(arch) if arch is not None else "default"
+        return self._ipsw_split_dsc_file(
+            dsc_root_file,
+            arch_label,
+            split_label=str(arch) if arch is not None else None,
+            cleanup_dir=extract_dir,
+        )
+
+    def _ipsw_split_dsc_file(
+        self,
+        dsc_root_file: Path,
+        arch_label: str,
+        split_label: str | None = None,
+        cleanup_dir: Path | None = None,
+    ) -> Path:
+        with sentry_sdk.start_span(op="ipsw.dyld_split", name=f"Split IPSW DSC ({arch_label})") as span:
             split_dir = self.processing_dir / "split_out"
-            if arch is not None:
-                # each arch gets its own sub-dir, so that the split-dir can be symsorted in one go
-                split_dir_arch = split_dir / str(arch)
+            if split_label is not None:
+                # each arch/cache gets its own sub-dir, so that the split-dir can be symsorted in one go
+                split_dir_arch = split_dir / split_label
             else:
                 split_dir_arch = split_dir
 
+            if cleanup_dir is not None:
+                span.set_data("extract_dir", directory_data(cleanup_dir))
             span.set_data("dsc_root_file", str(dsc_root_file))
             result = dyld_split(dsc_root_file, split_dir_arch)
             span.set_data("dyld_split", subprocess_result_data(result))
@@ -926,8 +1050,9 @@ class _IpswExtractionRun:
                 span.set_status("internal_error")
                 raise IpswExtractError(f"ipsw dyld split failed for {dsc_root_file}")
 
-            # we have very limited space on the GHA runners, so get rid of processed input data
-            shutil.rmtree(extract_dir)
+            if cleanup_dir is not None:
+                # we have very limited space on the GHA runners, so get rid of processed input data
+                shutil.rmtree(cleanup_dir)
 
             return split_dir
 
@@ -965,6 +1090,15 @@ class IpswExtractError(Exception):
 
 class IpswExtractTimeoutError(IpswExtractError, TimeoutError):
     pass
+
+
+def _find_rosetta_dsc_sources(mount_point: Path) -> list[DscSplitSource]:
+    sources: list[DscSplitSource] = []
+    for label, relative_path in _ROSETTA_DSC_SOURCES:
+        artifact = mount_point / relative_path
+        if artifact.is_file():
+            sources.append(DscSplitSource(label=label, artifact=artifact))
+    return sources
 
 
 def find_extraction_dir(processing_dir: Path) -> Path | None:
@@ -1064,6 +1198,11 @@ def _version_major(version: str | None) -> int | None:
     return int(version_match.group(1))
 
 
+def _macos_x86_64_dsc_requires_rosetta(version: str | None) -> bool:
+    major_version = _version_major(version)
+    return major_version is not None and major_version >= _MACOS_ROSETTA_DSC_MIN_MAJOR_VERSION
+
+
 def _macos_dsc_architectures(version: str | None) -> list[Arch]:
     major_version = _version_major(version)
     if major_version is None:
@@ -1072,8 +1211,6 @@ def _macos_dsc_architectures(version: str | None) -> list[Arch]:
             f"Cannot determine required macOS DSC architectures: missing or unparseable macOS version {version_label}"
         )
 
-    if major_version >= _MACOS_ARM64E_ONLY_DSC_MIN_MAJOR_VERSION:
-        return [Arch.ARM64E]
     return [Arch.ARM64E, Arch.X86_64]
 
 
