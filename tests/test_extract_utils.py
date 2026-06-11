@@ -255,6 +255,19 @@ def test_rosetta_dmg_path_for_x86_64_dsc_allows_legacy_systemos_fallback_before_
     assert run._rosetta_dmg_path_for_x86_64_dsc() is None
 
 
+def test_rosetta_dmg_path_for_x86_64_dsc_ignores_rosetta_before_macos_27(tmp_path: Path) -> None:
+    run = _make_macos_run_with_manifest(
+        tmp_path,
+        "26.5",
+        {
+            "Cryptex1,SystemOS": {"Info": {"Path": "system.dmg.aea"}},
+            "Cryptex1,RosettaOS": {"Info": {"Path": "rosetta.dmg"}},
+        },
+    )
+
+    assert run._rosetta_dmg_path_for_x86_64_dsc() is None
+
+
 def test_rosetta_dmg_path_for_x86_64_dsc_requires_rosetta_for_macos_27(tmp_path: Path) -> None:
     run = _make_macos_run_with_manifest(
         tmp_path,

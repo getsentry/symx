@@ -922,32 +922,26 @@ class _IpswExtractionRun:
         return inspect_ipsw_dmg_paths(self.ipsw_path).rosetta
 
     def _rosetta_dmg_path_for_x86_64_dsc(self) -> str | None:
-        requires_rosetta = _macos_x86_64_dsc_requires_rosetta(self.request.version)
+        if not _macos_x86_64_dsc_requires_rosetta(self.request.version):
+            return None
+
         try:
             rosetta_dmg_path = self._rosetta_dmg_path()
         except Exception as error:
-            if requires_rosetta:
-                raise IpswExtractError(
-                    f"Cannot determine RosettaOS DMG path required for macOS {self.request.version} x86_64 DSC: {error}"
-                ) from error
-            logger.warning("Failed to inspect RosettaOS DMG path for %s: %s", self.ipsw_path.name, error)
-            return None
+            raise IpswExtractError(
+                f"Cannot determine RosettaOS DMG path required for macOS {self.request.version} x86_64 DSC: {error}"
+            ) from error
 
         if rosetta_dmg_path is None:
-            if requires_rosetta:
-                raise IpswExtractError(
-                    f"macOS {self.request.version} x86_64 DSC requires Cryptex1,RosettaOS in BuildManifest"
-                )
-            return None
+            raise IpswExtractError(
+                f"macOS {self.request.version} x86_64 DSC requires Cryptex1,RosettaOS in BuildManifest"
+            )
 
         if rosetta_dmg_path.endswith(".aea"):
-            if requires_rosetta:
-                raise IpswExtractError(
-                    f"macOS {self.request.version} x86_64 DSC requires RosettaOS DMG, "
-                    f"but it is AEA encrypted and cannot be mounted directly: {rosetta_dmg_path}"
-                )
-            logger.warning("RosettaOS DMG is AEA encrypted; falling back to SystemOS DSC extraction")
-            return None
+            raise IpswExtractError(
+                f"macOS {self.request.version} x86_64 DSC requires RosettaOS DMG, "
+                f"but it is AEA encrypted and cannot be mounted directly: {rosetta_dmg_path}"
+            )
 
         return rosetta_dmg_path
 
