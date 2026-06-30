@@ -1,6 +1,7 @@
 import datetime
 import logging
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Callable, Iterable, Iterator, Sequence
 
@@ -26,6 +27,12 @@ from symx.ipsw.mirror import verify_download
 from symx.ipsw.storage import IpswStorage
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class IpswMetaSnapshot:
+    db: IpswArtifactDb
+    generation: int
 
 
 def _ipsw_artifact_sort_by_released(artifact: IpswArtifact) -> datetime.date:
@@ -69,17 +76,26 @@ class IpswGcsStorage(IpswStorage):
         self.client: Client = Client(project=self.project)
         self.bucket: Bucket = self.client.bucket(bucket)
 
-    def load_artifacts_meta(self) -> Blob:
-        artifacts_meta_blob = self.bucket.blob(ARTIFACTS_META_JSON)
-        if artifacts_meta_blob.exists():
-            artifacts_meta_blob.download_to_filename(str(self.local_artifacts_meta))
-        return artifacts_meta_blob
+    def load_artifacts_meta(self) -> tuple[Blob, int]:
+        """Download IPSW metadata and return the GCS write precondition generation.
 
-    def store_artifacts_meta(self, artifacts_meta_blob: Blob) -> None:
-        artifacts_meta_blob.upload_from_filename(
-            str(self.local_artifacts_meta),
-            if_generation_match=artifacts_meta_blob.generation,
-        )
+        The returned generation is 0 only when the remote object was observed as absent,
+        which makes the next upload create-only. Existing objects must have a concrete
+        generation; otherwise we cannot safely perform a conditional write.
+        """
+        artifacts_meta_blob = self.bucket.blob(ARTIFACTS_META_JSON)
+        if not artifacts_meta_blob.exists():
+            self.local_artifacts_meta.unlink(missing_ok=True)
+            return artifacts_meta_blob, 0
+
+        artifacts_meta_blob.download_to_filename(str(self.local_artifacts_meta))
+        generation = artifacts_meta_blob.generation
+        if generation is None:
+            artifacts_meta_blob.reload()
+            generation = artifacts_meta_blob.generation
+        if generation is None:
+            raise RuntimeError("Failed to determine IPSW meta-data generation after download")
+        return artifacts_meta_blob, generation
 
     def upload_ipsw(self, artifact: IpswArtifact, downloaded_source: tuple[Path, IpswSource]) -> IpswArtifact:
         ipsw_file, source = downloaded_source
@@ -121,9 +137,33 @@ class IpswGcsStorage(IpswStorage):
         return artifact
 
     def update_meta_item(self, ipsw_meta: IpswArtifact, retry: int = 5) -> IpswArtifactDb:
+        return self.update_meta_items([ipsw_meta], retry=retry)
+
+    def update_meta_items(
+        self,
+        ipsw_metas: Iterable[IpswArtifact],
+        *,
+        base_snapshot: IpswMetaSnapshot | None = None,
+        retry: int = 5,
+    ) -> IpswArtifactDb:
+        pending_metas = list(ipsw_metas)
+        if not pending_metas:
+            if base_snapshot is not None:
+                return base_snapshot.db
+            _, meta_db, _ = self.refresh_artifacts_db()
+            return meta_db
+
         while retry > 0:
-            blob, meta_db, generation = self.refresh_artifacts_db()
-            meta_db.upsert(ipsw_meta.key, ipsw_meta)
+            if base_snapshot is None:
+                blob, meta_db, generation = self.refresh_artifacts_db()
+            else:
+                blob = self.bucket.blob(ARTIFACTS_META_JSON)
+                meta_db = base_snapshot.db.model_copy(deep=True)
+                generation = base_snapshot.generation
+
+            for ipsw_meta in pending_metas:
+                meta_db.upsert(ipsw_meta.key, ipsw_meta)
+
             try:
                 blob.upload_from_string(
                     meta_db.model_dump_json(),
@@ -131,28 +171,23 @@ class IpswGcsStorage(IpswStorage):
                 )
                 return meta_db
             except PreconditionFailed:
+                base_snapshot = None
                 retry = retry - 1
 
-        raise RuntimeError("Failed to update meta-data item")
+        raise RuntimeError("Failed to update meta-data items")
 
     def refresh_artifacts_db(self) -> tuple[Blob, IpswArtifactDb, int]:
-        blob = self.load_artifacts_meta()
-        if blob.exists():
-            try:
-                fp = open(self.local_artifacts_meta)
-            except IOError:
-                meta_db, generation = IpswArtifactDb(), 0
-            else:
-                with fp:
-                    meta_db, generation = (
-                        IpswArtifactDb.model_validate_json(fp.read()),
-                        blob.generation,
-                    )
-        else:
-            meta_db, generation = IpswArtifactDb(), 0
+        blob, generation = self.load_artifacts_meta()
+        if generation == 0:
+            return blob, IpswArtifactDb(), generation
 
-        if generation is None:
-            generation = 0
+        try:
+            fp = open(self.local_artifacts_meta)
+        except IOError as e:
+            raise RuntimeError("Failed to read downloaded IPSW meta-data") from e
+
+        with fp:
+            meta_db = IpswArtifactDb.model_validate_json(fp.read())
         return blob, meta_db, generation
 
     def artifact_iter(

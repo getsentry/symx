@@ -22,6 +22,7 @@ from symx.ipsw.mirror import verify_download
 from symx.ipsw.storage import IpswStorage
 from symx.ipsw.storage.gcs import (
     IpswGcsStorage,
+    IpswMetaSnapshot,
     mirror_filter,
     extract_filter,
 )
@@ -84,7 +85,7 @@ def _set_artifact_context(artifact: IpswArtifact) -> None:
 
 def import_meta_from_appledb(ipsw_storage: "IpswGcsStorage") -> None:
     with sentry_sdk.start_span(op="ipsw.meta_sync", name="IPSW meta-sync from AppleDB"):
-        ipsw_storage.load_artifacts_meta()
+        _, base_generation = ipsw_storage.load_artifacts_meta()
 
         importer = AppleDbIpswImport(ipsw_storage.local_dir)
         importer.run()
@@ -94,8 +95,11 @@ def import_meta_from_appledb(ipsw_storage: "IpswGcsStorage") -> None:
 
         with sentry_sdk.start_span(op="ipsw.meta_sync.upsert", name="Upsert new artifacts") as upsert_span:
             upsert_span.set_data("count", len(importer.new_artifacts))
-            for artifact in importer.new_artifacts:
-                ipsw_storage.update_meta_item(artifact)
+            if importer.new_artifacts:
+                ipsw_storage.update_meta_items(
+                    importer.new_artifacts,
+                    base_snapshot=IpswMetaSnapshot(importer.meta_db, base_generation),
+                )
 
 
 def mirror(
