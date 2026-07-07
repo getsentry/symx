@@ -7,6 +7,7 @@ import signal
 import stat
 import subprocess
 import tempfile
+import time
 import zipfile
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
@@ -53,6 +54,19 @@ _ERROR_SUMMARY_MARKERS = (
 _IGNORED_IPSW_HELP_PREFIXES = ("Usage:", "Aliases:", "Examples:", "Flags:", "Global Flags:")
 _FCS_KEY_URL_LABEL = "[com.apple.wkms.fcs-key-url]:"
 _VENDORED_PEM_DB = Path(__file__).resolve().parent / "data" / "fcs-keys.json"
+_AEA_KEY_MAX_ATTEMPTS = 3
+_AEA_KEY_RETRY_DELAY_SECONDS = 2
+_TRANSIENT_FCS_KEY_ERROR_MARKERS = (
+    "connection reset",
+    "connection refused",
+    "dial tcp",
+    "i/o timeout",
+    "network is unreachable",
+    "no such host",
+    "server misbehaving",
+    "temporary failure",
+    "tls handshake timeout",
+)
 _VERSION_MAJOR_RE = re.compile(r"^(\d+)")
 _MACOS_ROSETTA_DSC_MIN_MAJOR_VERSION = 27
 _ROSETTA_DSC_SOURCES = (
@@ -516,6 +530,13 @@ def _fcs_key_id_from_url(url: str | None) -> str | None:
     return key_id or None
 
 
+def _is_transient_fcs_key_error(stderr: str | bytes | None) -> bool:
+    text = decode_subprocess_output(stderr).lower()
+    if "failed to connect to fcs-key url" not in text:
+        return False
+    return any(marker in text for marker in _TRANSIENT_FCS_KEY_ERROR_MARKERS)
+
+
 def _compress_directory(directory: Path) -> Path:
     archive_path = directory.parent / f"{directory.name}.tar.zst"
 
@@ -665,13 +686,34 @@ class _IpswExtractionRun:
                     key_command.extend(["--pem-db", str(pem_db_path)])
                 key_command.append(str(extracted_aea))
 
-                key_result = subprocess.run(key_command, capture_output=True)
-                key_command_data = _ipsw_command_data(key_command, key_result.stdout, key_result.stderr, [temp_dir])
-                key_command_data.update(probe_data)
-                span.set_data("aea_key_probe", key_command_data)
-                if key_result.returncode != 0:
+                key_result: subprocess.CompletedProcess[bytes] | None = None
+                key_attempt_data: list[dict[str, object]] = []
+                for attempt in range(1, _AEA_KEY_MAX_ATTEMPTS + 1):
+                    key_result = subprocess.run(key_command, capture_output=True)
+                    key_command_data = _ipsw_command_data(key_command, key_result.stdout, key_result.stderr, [temp_dir])
+                    key_command_data.update(probe_data)
+                    key_command_data["attempt"] = attempt
+                    key_attempt_data.append(key_command_data)
+
+                    if key_result.returncode == 0:
+                        break
+                    if attempt == _AEA_KEY_MAX_ATTEMPTS or not _is_transient_fcs_key_error(key_result.stderr):
+                        break
+
+                    logger.warning(
+                        "Transient IPSW AEA FCS-key lookup failed for %s (attempt %d/%d), retrying",
+                        self.ipsw_path.name,
+                        attempt,
+                        _AEA_KEY_MAX_ATTEMPTS,
+                    )
+                    time.sleep(_AEA_KEY_RETRY_DELAY_SECONDS * attempt)
+
+                span.set_data("aea_key_probe", key_attempt_data[0] if len(key_attempt_data) == 1 else key_attempt_data)
+                if key_result is None or key_result.returncode != 0:
                     span.set_status("internal_error")
-                    summary = _summarize_ipsw_stderr(key_result.stderr) or "ipsw fw aea --key failed"
+                    summary = (
+                        _summarize_ipsw_stderr(key_result.stderr) if key_result is not None else None
+                    ) or "ipsw fw aea --key failed"
                     raise IpswExtractError(
                         f"IPSW AEA preflight failed for {self.ipsw_path}: "
                         f"selected_dmg={selected_dmg}; system_dmg={dmg_paths.system}; "
