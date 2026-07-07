@@ -28,9 +28,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors https://astral.sh/uv/install.sh | sh
-          echo "PATH=/home/runner/.local/bin:$PATH" >> "$GITHUB_ENV"
-          export PATH="/home/runner/.local/bin:$PATH"
+          source .github/scripts/bootstrap-uv.sh
           uv --version
           uv sync
 
@@ -39,7 +37,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SYMX_ADMIN_CACHE_DIR: ${{ runner.temp }}/symx-admin
         run: |
-          export PATH="/home/runner/.local/bin:$PATH"
           uv run symx admin sync --cache-dir "$SYMX_ADMIN_CACHE_DIR"
           uv run symx stats coverage-html \
             --cache-dir "$SYMX_ADMIN_CACHE_DIR" \

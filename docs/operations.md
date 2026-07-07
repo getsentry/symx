@@ -309,10 +309,10 @@ It does the following:
 
 - checks out the repository,
 - authenticates to GCP via GitHub OIDC,
-- installs the Cloud SDK,
-- installs `uv` and Python dependencies,
-- installs the `ipsw` CLI,
-- installs the Apple root certificate,
+- installs the pinned Cloud SDK,
+- installs pinned `uv` and Python dependencies,
+- installs the pinned, checksum-verified `ipsw` CLI,
+- installs the checksum-verified Apple root certificate,
 - removes large preinstalled toolchains to free disk,
 - runs `scripts/run_symx_gha.py`.
 
@@ -326,10 +326,10 @@ It does the following:
 
 - checks out the repository,
 - authenticates to GCP via GitHub OIDC,
-- installs the Cloud SDK,
-- installs `uv` and Python dependencies,
-- installs the `ipsw` CLI,
-- downloads a platform-appropriate `symsorter` binary,
+- installs the pinned Cloud SDK,
+- installs pinned `uv` and Python dependencies,
+- installs the pinned, checksum-verified `ipsw` CLI,
+- downloads the pinned, checksum-verified `symsorter` binary,
 - runs `scripts/run_symx_gha.py`.
 
 This is used for extraction stages.

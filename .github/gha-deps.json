@@ -1,0 +1,44 @@
+{
+  "apple_root": {
+    "sha256": "b0b1730ecbc7ff4505142c49f1295e6eda6bcaed7e2c68c5be91b5a11001f024",
+    "url": "https://www.apple.com/appleca/AppleIncRootCertificate.cer"
+  },
+  "gcloud": {
+    "version": "575.0.0"
+  },
+  "ipsw": {
+    "archives": {
+      "linux_x86_64": "cabe6f36a13b60cd74f529bfe4ed0807905abae9d7ba798da380a4159cdde5e7",
+      "macOS_universal": "d86c4b6e0503a5119df5c5a8b183146e7e29f13bfaf8eec783b20b19f62171fe"
+    },
+    "version": "3.1.685"
+  },
+  "symsorter": {
+    "asset": "symsorter-Darwin-universal",
+    "sha256": "587a8994fd34665309d9b462e609ea1893996e4e4f0537fd439e8766ccf81fe1",
+    "symbolicator_version": "26.6.0"
+  },
+  "uv": {
+    "version": "0.11.26",
+    "wheel_hashes": {
+      "uv-0.11.26-py3-none-linux_armv6l.whl": "fb97bf04512dfe16d86084e75d8129701fc8da9fb40de8746b73c3aa617c5897",
+      "uv-0.11.26-py3-none-macosx_10_12_x86_64.whl": "a58a06e5a4b0035538d3ab4160ad74c716076ea7148eb3317171c6276ac020b4",
+      "uv-0.11.26-py3-none-macosx_11_0_arm64.whl": "7b6d078d2ce83897884c2330c0676f27be4bf3d223fb2a409460f579fb5f0a98",
+      "uv-0.11.26-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl": "1cd9ba4951681ce17f1703106266fcbe27aaa7d37f07d53cce8b5686d68a8755",
+      "uv-0.11.26-py3-none-manylinux_2_17_armv7l.manylinux2014_armv7l.musllinux_1_1_armv7l.whl": "e4f4c3268e69ac96f01972274a62f5f930c03cbc680adba6f21e63237ba3a639",
+      "uv-0.11.26-py3-none-manylinux_2_17_armv7l.manylinux2014_armv7l.whl": "efcbe0e187846f5ddba23bcaed17e4f9cd2463da5c45bdb5869616f686d713ff",
+      "uv-0.11.26-py3-none-manylinux_2_17_i686.manylinux2014_i686.whl": "120ab2de93164d08cf5950f7fe18cbebe3ff670865ae41a292452bab2346477f",
+      "uv-0.11.26-py3-none-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl": "9052bf27c7ee426901f35a48715fa9288ce631c1878b91c9a6c950288f4b8633",
+      "uv-0.11.26-py3-none-manylinux_2_17_s390x.manylinux2014_s390x.whl": "efdddfcc9b1b790c5f7985c5c183c851682ced165b44ffa914f4947f5cad1fbf",
+      "uv-0.11.26-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl": "4dcf4e0b5b5cbdc242dcb002f1f8d99e7cf8c043609869228a9ce15e095c0b18",
+      "uv-0.11.26-py3-none-manylinux_2_28_aarch64.whl": "866ae8d28f7381c15de0906a284c1e97916424c635bf40f7960b3fc889cd725e",
+      "uv-0.11.26-py3-none-manylinux_2_31_riscv64.musllinux_1_1_riscv64.whl": "22f6d62e794b252ff3a1e2dfe5010cc76208f90b2c906e54971a0223ad6f16bc",
+      "uv-0.11.26-py3-none-manylinux_2_31_riscv64.whl": "edd0c12b75141a6d830d138a91e366ad66e630f1c1dcaf83b8325b80cbacfcbb",
+      "uv-0.11.26-py3-none-musllinux_1_1_i686.whl": "af6a45b11a569cc4d2437e89a25a53dcf753f2a02a8f2de96be09b9b942cb3ec",
+      "uv-0.11.26-py3-none-musllinux_1_1_x86_64.whl": "c28822517d03aebbe9549aaaecc88ad580e4b2b6a927abffe5774a74d6ba09f6",
+      "uv-0.11.26-py3-none-win32.whl": "79e5c1b3410047e1962290c3b7b8f512d2c1bb95200c60b016f7729287cf34c0",
+      "uv-0.11.26-py3-none-win_amd64.whl": "d95567e9470dc48ff03265f420c3c6973f6437f18a79d5e00b6eb4b2d9379907",
+      "uv-0.11.26-py3-none-win_arm64.whl": "7e69d1569afbb936e7bf4e4ab2f72d606405f4a68f380f088a0b2233e84e056a"
+    }
+  }
+}

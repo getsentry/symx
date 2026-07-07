@@ -58,13 +58,11 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
         with:
-          version: ">= 363.0.0"
+          version: "575.0.0"
 
       - name: Install dependencies
         run: |
-          curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors https://astral.sh/uv/install.sh | sh
-          echo "PATH=/home/runner/.local/bin:$PATH" >> "$GITHUB_ENV"
-          export PATH="/home/runner/.local/bin:$PATH"
+          source .github/scripts/bootstrap-uv.sh
           uv --version
           uv sync
 
@@ -75,7 +73,6 @@ jobs:
           SYMX_STORE: ${{ vars.SYMX_STORE }}
           REQUEST_JSON: ${{ inputs.request_json }}
         run: |
-          export PATH="/home/runner/.local/bin:$PATH"
           mkdir -p admin-apply
           uv run python -m symx admin apply-batch \
             --storage "$SYMX_STORE" \
