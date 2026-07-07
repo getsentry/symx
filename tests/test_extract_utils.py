@@ -11,7 +11,7 @@ import signal
 import subprocess
 import tempfile
 import zipfile
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO, cast
@@ -792,7 +792,7 @@ def test_ipsw_symsort_sys_image_raises_on_mount_failure_and_cleans_mount_artifac
     assert not decrypted_dmg.exists()
 
 
-def test_ipsw_aea_preflight_classifies_missing_key_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _make_ipsw_aea_preflight_extractor(tmp_path: Path) -> _IpswExtractionRun:
     processing_dir = tmp_path / "processing"
     processing_dir.mkdir()
     ipsw_path = tmp_path / "test.ipsw"
@@ -813,11 +813,17 @@ def test_ipsw_aea_preflight_classifies_missing_key_failures(tmp_path: Path, monk
         archive.writestr("system.dmg.aea", b"dummy")
 
     request = IpswExtractionRequest(IpswPlatform.IPADOS, ipsw_path, processing_dir)
-    extractor = _IpswExtractionRun(request)
-    pem_db = tmp_path / "fcs-keys.json"
-    pem_db.write_text(json.dumps({"known-key": "known-value"}))
+    return _IpswExtractionRun(request)
+
+
+def _install_fake_aea_preflight_run(
+    monkeypatch: pytest.MonkeyPatch,
+    key_attempt_results: list[tuple[int, bytes, bytes]],
+) -> Callable[[], int]:
+    key_attempts = 0
 
     def fake_run(command: list[str], capture_output: bool = False) -> CompletedProcess[bytes]:
+        nonlocal key_attempts
         if "--info" in command:
             return CompletedProcess(
                 args=command,
@@ -828,27 +834,70 @@ def test_ipsw_aea_preflight_classifies_missing_key_failures(tmp_path: Path, monk
                 stderr=b"",
             )
 
-        return CompletedProcess(
-            args=command,
-            returncode=1,
-            stdout=b"",
-            stderr=b"\xe2\xa8\xaf failed to HPKE decrypt fcs-key: failed to connect to fcs-key URL: 403 Forbidden\n",
-        )
+        key_attempts += 1
+        returncode, stdout, stderr = key_attempt_results[key_attempts - 1]
+        return CompletedProcess(args=command, returncode=returncode, stdout=stdout, stderr=stderr)
+
+    monkeypatch.setattr("symx.ipsw.extract.subprocess.run", fake_run)
+    return lambda: key_attempts
+
+
+def test_ipsw_aea_preflight_classifies_missing_key_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    extractor = _make_ipsw_aea_preflight_extractor(tmp_path)
+    pem_db = tmp_path / "fcs-keys.json"
+    pem_db.write_text(json.dumps({"known-key": "known-value"}))
+    get_key_attempts = _install_fake_aea_preflight_run(
+        monkeypatch,
+        [
+            (
+                1,
+                b"",
+                b"\xe2\xa8\xaf failed to HPKE decrypt fcs-key: failed to connect to fcs-key URL: 403 Forbidden\n",
+            )
+        ],
+    )
 
     monkeypatch.setattr("symx.ipsw.extract.vendored_ipsw_pem_db_path", lambda: pem_db)
     monkeypatch.setattr("symx.ipsw.extract._vendored_ipsw_pem_db_keys", lambda: frozenset({"known-key"}))
-    monkeypatch.setattr("symx.ipsw.extract.subprocess.run", fake_run)
 
     with pytest.raises(IpswExtractError, match="IPSW AEA preflight failed") as exc_info:
         extractor._ipsw_aea_preflight()
 
     message = str(exc_info.value)
+    assert get_key_attempts() == 1
     assert "selected_dmg=system.dmg.aea" in message
     assert "system_dmg=system.dmg.aea" in message
     assert "filesystem_dmg=filesystem.dmg.aea" in message
     assert "fcs_key=missing-key=" in message
     assert "vendored_db_hit=False" in message
     assert "failed to HPKE decrypt fcs-key: failed to connect to fcs-key URL: 403 Forbidden" in message
+
+
+def test_ipsw_aea_preflight_retries_transient_fcs_key_lookup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    extractor = _make_ipsw_aea_preflight_extractor(tmp_path)
+    get_key_attempts = _install_fake_aea_preflight_run(
+        monkeypatch,
+        [
+            (
+                1,
+                b"",
+                (
+                    b"\xe2\xa8\xaf failed to HPKE decrypt fcs-key: failed to connect to fcs-key URL: "
+                    b'Get "https://wkms-public.apple.com/fcs-keys/missing-key=": '
+                    b"dial tcp: lookup wkms-public.apple.com: no such host\n"
+                ),
+            ),
+            (0, b"key", b""),
+        ],
+    )
+
+    monkeypatch.setattr("symx.ipsw.extract.vendored_ipsw_pem_db_path", lambda: None)
+    monkeypatch.setattr("symx.ipsw.extract._vendored_ipsw_pem_db_keys", lambda: frozenset())
+    monkeypatch.setattr("symx.ipsw.extract.time.sleep", lambda seconds: None)
+
+    extractor._ipsw_aea_preflight()
+
+    assert get_key_attempts() == 2
 
 
 def test_ipsw_extract_dsc_includes_stderr_summary_when_available(
