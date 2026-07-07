@@ -47,6 +47,16 @@ UNSUPPORTED_AA_ERROR_MARKERS = (
     "archive stream read error (header)",
 )
 MAX_AA_PROBE_OUTPUT_CHARS = 500
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+_LEADING_IPSW_GLYPH_RE = re.compile(r"^\s*[•⨯]\s*")
+_OTA_ERROR_SUMMARY_MARKERS = (
+    "error",
+    "failed",
+    "invalid",
+    "not found",
+    "unable",
+    "unsupported",
+)
 
 
 class PayloadAaProbeResult(TypedDict):
@@ -65,8 +75,13 @@ def _extract_dirs_data(output_dir: Path) -> list[dict[str, object]]:
     extract_dirs = list_dirs_in(output_dir)
     results: list[dict[str, object]] = []
     for extract_dir in extract_dirs:
+        dsc_paths = _find_dsc_files(extract_dir)
+        supported_dsc_paths = _find_supported_dsc_files(extract_dir)
         data = directory_data(extract_dir, max_entries=DEFAULT_DIRECTORY_SAMPLE_ENTRIES)
-        data["contains_dsc"] = _dir_contains_dsc(extract_dir)
+        data["contains_dsc"] = bool(dsc_paths)
+        data["dsc_path_count"] = len(dsc_paths)
+        data["dsc_paths_sample"] = _relative_path_sample(extract_dir, dsc_paths)
+        data["supported_dsc_paths"] = _relative_path_sample(extract_dir, supported_dsc_paths)
         results.append(data)
     return results
 
@@ -79,6 +94,7 @@ def _should_probe_unsupported_payload(error: OtaExtractError) -> bool:
             f"Could not find {DYLD_SHARED_CACHE}",
             f"OTA extraction produced no {DYLD_SHARED_CACHE} files",
             f"Couldn't find any {DYLD_SHARED_CACHE} paths",
+            "payloadv2 pattern DSC extraction failed",
         )
     )
 
@@ -198,6 +214,60 @@ def _probe_unsupported_payload_format(artifact: Path) -> bool:
             return False
 
 
+def _strip_ansi(text: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", text)
+
+
+def _normalize_ipsw_output_line(line: str) -> str:
+    return _LEADING_IPSW_GLYPH_RE.sub("", line).strip()
+
+
+def _summarize_subprocess_failure(result: subprocess.CompletedProcess[bytes] | None) -> str | None:
+    if result is None:
+        return None
+
+    output = "\n".join(
+        part for part in (decode_subprocess_output(result.stderr), decode_subprocess_output(result.stdout)) if part
+    )
+    if not output:
+        return None
+
+    lines = [_normalize_ipsw_output_line(line) for line in _strip_ansi(output).splitlines() if line.strip()]
+    for line in reversed(lines):
+        if any(marker in line.lower() for marker in _OTA_ERROR_SUMMARY_MARKERS):
+            return line
+
+    return lines[-1] if lines else None
+
+
+def _find_dsc_files(directory: Path) -> list[Path]:
+    if not directory.is_dir():
+        return []
+    return sorted(path for path in directory.rglob(f"{DYLD_SHARED_CACHE}*") if path.is_file())
+
+
+def _supported_dsc_path_options(input_dir: Path) -> list[Path]:
+    return [input_dir / f"System/Library/dyld/{DYLD_SHARED_CACHE}_{arch}" for arch in Arch] + [
+        input_dir / f"System/Library/Caches/com.apple.dyld/{DYLD_SHARED_CACHE}_{arch}" for arch in Arch
+    ]
+
+
+def _find_supported_dsc_files(directory: Path) -> list[Path]:
+    return [dsc_path for dsc_path in _supported_dsc_path_options(directory) if dsc_path.is_file()]
+
+
+def _relative_path_sample(
+    root: Path, paths: list[Path], max_entries: int = DEFAULT_DIRECTORY_SAMPLE_ENTRIES
+) -> list[str]:
+    sample: list[str] = []
+    for path in paths[:max_entries]:
+        try:
+            sample.append(str(path.relative_to(root)))
+        except ValueError:
+            sample.append(str(path))
+    return sample
+
+
 def parse_cryptex_patch_output(stderr: str) -> dict[str, Path]:
     """Parse ipsw ota patch stderr to extract DMG file mappings."""
     dmg_files: dict[str, Path] = {}
@@ -301,7 +371,14 @@ def find_dsc(input_dir: Path, version: str, build: str, output_dir: Path) -> lis
                 dsc_search_results.append(DSCSearchResult(arch=Arch(arch), artifact=dsc_path, split_dir=split_dir))
 
     if not dsc_search_results:
-        raise OtaExtractError(f"Couldn't find any {DYLD_SHARED_CACHE} paths in {input_dir}")
+        discovered_dsc_paths = _find_dsc_files(input_dir)
+        detail = ""
+        if discovered_dsc_paths:
+            detail = (
+                f"; found {len(discovered_dsc_paths)} {DYLD_SHARED_CACHE}-like files outside supported roots; "
+                f"sample={_relative_path_sample(input_dir, discovered_dsc_paths)}"
+            )
+        raise OtaExtractError(f"Couldn't find any {DYLD_SHARED_CACHE} paths in {input_dir}{detail}")
 
     return dsc_search_results
 
@@ -332,11 +409,7 @@ def mount_dmg(dmg: Path) -> MountInfo:
 
 def _dir_contains_dsc(directory: Path) -> bool:
     """Check if a directory (recursively) contains any dyld_shared_cache files."""
-    for _, _, files in os.walk(directory):
-        for f in files:
-            if f.startswith(DYLD_SHARED_CACHE):
-                return True
-    return False
+    return bool(_find_dsc_files(directory))
 
 
 def _classify_ota_failure(artifact: Path) -> type[Exception] | None:
@@ -394,9 +467,9 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
         )
         pattern_result: subprocess.CompletedProcess[bytes] | None = None
         extract_dirs = list_dirs_in(output_dir)
-        if not extract_dirs or not _dir_contains_dsc(extract_dirs[0]):
+        if not extract_dirs or not _find_supported_dsc_files(extract_dirs[0]):
             # Fallback: modern payloadv2 OTAs (e.g. watchOS) store the DSC inside numbered payload
-            # chunks. The literal filename lookup fails to find anything, so we use -p (pattern)
+            # chunks. The literal filename lookup fails to find a supported root cache, so we use -p (pattern)
             # with -y (confirm payloadv2 search) instead.
             # Note: -d -y should work but is buggy in ipsw <=3.1.655.
             logger.info("Literal DSC extraction failed, trying payloadv2 pattern search for %s", artifact.name)
@@ -419,6 +492,17 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
         span.set_data("literal_extract", subprocess_result_data(literal_result))
         span.set_data("payloadv2_pattern_extract", subprocess_result_data(pattern_result))
         span.set_data("extract_dirs", _extract_dirs_data(output_dir))
+
+        if pattern_result is not None and pattern_result.returncode != 0:
+            span.set_status("internal_error")
+            summary = _summarize_subprocess_failure(pattern_result)
+            detail = f": {summary}" if summary else ""
+            failure_reason = (
+                f"payloadv2 pattern DSC extraction failed for {artifact} "
+                f"with exit code {pattern_result.returncode}{detail}"
+            )
+            span.set_data("extract_failure_reason", failure_reason)
+            raise OtaExtractError(failure_reason)
 
         if not extract_dirs:
             span.set_status("internal_error")
