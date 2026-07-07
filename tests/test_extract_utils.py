@@ -1140,6 +1140,20 @@ def test_find_dsc_no_dsc_raises_error() -> None:
             find_dsc(input_dir, "17.0", "21A100", output_dir)
 
 
+def test_find_dsc_error_includes_sample_for_unsupported_dsc_layout() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_dir = Path(tmpdir) / "input"
+        output_dir = Path(tmpdir) / "output"
+        driverkit_dsc_dir = input_dir / "System/DriverKit/System/Library/dyld"
+        driverkit_dsc_dir.mkdir(parents=True)
+        (driverkit_dsc_dir / "dyld_shared_cache_arm64e").touch()
+
+        with pytest.raises(OtaExtractError, match="outside supported roots") as exc_info:
+            find_dsc(input_dir, "17.0", "21A100", output_dir)
+
+        assert "System/DriverKit/System/Library/dyld/dyld_shared_cache_arm64e" in str(exc_info.value)
+
+
 def test_find_dsc_generates_unique_split_dirs() -> None:
     """Split dirs should be unique even if same arch found in multiple locations."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1184,6 +1198,37 @@ def test_extract_ota_raises_detailed_error_when_no_dsc_extracted(monkeypatch: py
 
         message = str(exc_info.value)
         assert message == "OTA extraction produced no dyld_shared_cache files for /tmp/test.ota"
+
+
+def test_extract_ota_fails_when_payloadv2_pattern_extract_returns_nonzero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_dir = Path(tmpdir) / "output"
+        image_dir = output_dir / "21A100__Device1,1"
+
+        def fake_run(args: list[str], capture_output: bool) -> CompletedProcess[bytes]:
+            image_dir.mkdir(parents=True, exist_ok=True)
+            if "-p" in args:
+                dsc_dir = image_dir / "System/Library/Caches/com.apple.dyld"
+                dsc_dir.mkdir(parents=True, exist_ok=True)
+                (dsc_dir / "dyld_shared_cache_arm64e.01").touch()
+                return CompletedProcess(
+                    args=args,
+                    returncode=2,
+                    stdout=b"pattern stdout",
+                    stderr=b"\xe2\xa8\xaf failed to extract payload.039\n",
+                )
+            return CompletedProcess(args=args, returncode=1, stdout=b"literal stdout", stderr=b"literal stderr")
+
+        monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+
+        with pytest.raises(OtaExtractError, match="payloadv2 pattern DSC extraction failed") as exc_info:
+            extract_ota(Path("/tmp/test.ota"), output_dir)
+
+        message = str(exc_info.value)
+        assert "with exit code 2" in message
+        assert "failed to extract payload.039" in message
 
 
 def test_extract_ota_falls_back_to_pattern_extract(monkeypatch: pytest.MonkeyPatch) -> None:
