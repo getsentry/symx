@@ -79,7 +79,8 @@ More detail, including the "who processes what when" walkthrough and the state d
 | [`symx-admin-apply.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-admin-apply.yml)             | Ubuntu              | Apply curated admin rerun batches               |
 | [`symx-coverage-pages.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-coverage-pages.yml)       | Ubuntu              | Publish the coverage stats page to GitHub Pages |
 
-The workflow files in [`.github/workflows/`](.github/workflows/) are the authoritative deployment config.
+The workflow files in [`.github/workflows/`](.github/workflows/) are the authoritative deployment config. GitHub Actions bootstrap dependency pins and bump instructions live in
+[docs/gha-dependencies.md](docs/gha-dependencies.md).
 
 ## Quick start
 
@@ -172,6 +173,7 @@ Useful entry points:
 - Admin TUI and local SQLite snapshot: [docs/operations.md#admin-tui-and-local-snapshots](docs/operations.md#admin-tui-and-local-snapshots)
 - Sentry tags, transactions, and metrics: [docs/operations.md#sentry](docs/operations.md#sentry)
 - Failure-state diagrams: [docs/architecture.md#artifact-state-model](docs/architecture.md#artifact-state-model)
+- GitHub Actions dependency pins and bumping: [docs/gha-dependencies.md](docs/gha-dependencies.md)
 
 ## Current system boundaries and caveats
 

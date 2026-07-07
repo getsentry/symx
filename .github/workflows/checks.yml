@@ -11,14 +11,13 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install dependencies
         run: |
-          curl -LsSf --retry 6 --retry-delay 10 --retry-all-errors https://astral.sh/uv/install.sh | sh
-          echo "PATH=/Users/runner/.local/bin:$PATH" >> $GITHUB_ENV
+          source .github/scripts/bootstrap-uv.sh
       - name: uv version
         run: uv --version
       - name: uv sync
         run: uv sync
       - name: ruff
-        run: uv run ruff check symx
+        run: uv run ruff check
       - name: ruff format
         run: uv run ruff format --check
       - name: pyright
