@@ -9,12 +9,12 @@ authors = [
 license = {text = "MIT"}
 requires-python = ">=3.14"
 dependencies = [
-    "typer==0.25.1",
-    "sentry-sdk==2.60.0",
-    "google-cloud-storage==3.10.1",
+    "typer==0.26.8",
+    "sentry-sdk==2.64.0",
+    "google-cloud-storage==3.12.0",
     "pydantic==2.13.4",
-    "deepdiff==9.0.0",
-    "textual==8.2.6",
+    "deepdiff==9.1.0",
+    "textual==8.2.8",
 ]
 name = "symx"
 version = "0.2.0"
