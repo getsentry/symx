@@ -330,6 +330,7 @@ It does the following:
 - installs pinned `uv` and Python dependencies,
 - installs the pinned, checksum-verified `ipsw` CLI,
 - downloads the pinned, checksum-verified `symsorter` binary,
+- logs macOS host, Xcode, AppleArchive (`/usr/bin/aa`), and `ipsw` versions for extraction diagnostics,
 - runs `scripts/run_symx_gha.py`.
 
 This is used for extraction stages.
