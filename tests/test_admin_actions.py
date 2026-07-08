@@ -34,6 +34,12 @@ def test_preview_action_requires_existing_path_for_extract_and_blocks_curated_ex
         ArtifactProcessingState.RECOVERY_OTA,
         has_required_path=True,
     )
+    unsupported_retry = preview_action(
+        AdminStore.OTA,
+        AdminActionKind.QUEUE_EXTRACT,
+        ArtifactProcessingState.UNSUPPORTED_OTA_PAYLOAD,
+        has_required_path=True,
+    )
     already_eligible = preview_action(
         AdminStore.OTA,
         AdminActionKind.QUEUE_MIRROR,
@@ -45,6 +51,8 @@ def test_preview_action_requires_existing_path_for_extract_and_blocks_curated_ex
     assert "mirror_path" in missing_path.note
     assert excluded.allowed is False
     assert "excluded" in excluded.note
+    assert unsupported_retry.allowed is True
+    assert unsupported_retry.resulting_state == ArtifactProcessingState.MIRRORED
     assert already_eligible.allowed is True
     assert already_eligible.resulting_state == ArtifactProcessingState.INDEXED
     assert "already eligible" in already_eligible.note
