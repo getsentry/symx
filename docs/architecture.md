@@ -414,6 +414,7 @@ stateDiagram-v2
     mirrored --> indexed: mirrored zip missing
 
     symbol_extraction_failed --> mirrored: migrate-storage / manual retry
+    unsupported_ota_payload --> mirrored: manual retry after tooling change
 ```
 
 ### OTA state notes
@@ -421,7 +422,7 @@ stateDiagram-v2
 - The persisted state lives directly on each **`OtaArtifact`**.
 - OTA metadata merge preserves `processing_state` and `download_path` for already-known artifacts.
 - `iter_mirror()` always reloads metadata and prefers the newest mirrored OTA first.
-- `unsupported_ota_payload` is a terminal skip state distinct from `delta_ota` / `recovery_ota`: the OTA references a DSC in payload/BOM metadata, but current tooling cannot materialize it. BOM-only evidence may describe post-state files rather than proving every DSC byte is present in the OTA.
+- `unsupported_ota_payload` is a terminal skip state distinct from `delta_ota` / `recovery_ota`: the OTA references a DSC in payload/BOM metadata, but current tooling cannot materialize it. BOM-only evidence may describe post-state files rather than proving every DSC byte is present in the OTA. Admin curated reruns may reset it to `mirrored` after a runner/tooling change.
 - The current `ota migrate-storage` path resets **all** OTAs in `symbol_extraction_failed` back to `mirrored`.
 
 ## 5.3 Manual-only and domain-specific nuances

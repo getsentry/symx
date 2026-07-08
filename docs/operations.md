@@ -601,6 +601,8 @@ This is also usually a terminal skip state rather than an operator emergency.
 
 It means the OTA references a DSC in payload listings or BOM/post-state metadata, but the current payloadv2 / Apple Archive tooling cannot materialize or verify it. In AEA BOM-only cases, this does not prove that every DSC byte is present in the OTA; it separates known payload tooling limitations from unknown extraction failures.
 
+After a runner, macOS, `ipsw`, or AppleArchive tooling change, these rows can be included in a curated admin extract rerun and reset to `mirrored`. They are still outside the default failure view, so include `unsupported_ota_payload` in the admin state filter when reviewing them.
+
 ## 5. Current recovery mechanisms
 
 There is no free-form general-purpose state editor in production today.
