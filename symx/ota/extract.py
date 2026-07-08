@@ -41,12 +41,17 @@ PAYLOAD_FILE_NAME_RE = re.compile(r"(^|.*/)payloadv2/payload\.\d+$")
 DYLD_BOM_ENTRY_RE = re.compile(
     r"^(?:\./)?(?:System/DriverKit/)?System/Library/(?:dyld|Caches/com\.apple\.dyld)/dyld_shared_cache_[^\s/]+$"
 )
+DYLD_LISTING_ENTRY_RE = re.compile(
+    r"(?:\./)?(?:System/DriverKit/)?System/Library/(?:dyld|Caches/com\.apple\.dyld)/dyld_shared_cache_[^\s/]+"
+)
 DYLD_AA_INCLUDE_REGEX = r"(System/DriverKit/)?System/Library/(dyld|Caches/com\.apple\.dyld)/dyld_shared_cache_"
 UNSUPPORTED_AA_ERROR_MARKERS = (
     "invalid/non-supported archive stream",
     "archive stream read error (header)",
 )
 MAX_AA_PROBE_OUTPUT_CHARS = 500
+MAX_IPSW_LISTING_PROBE_OUTPUT_CHARS = 1000
+AEA_MAGIC = b"AEA1"
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 _LEADING_IPSW_GLYPH_RE = re.compile(r"^\s*[•⨯]\s*")
 _OTA_ERROR_SUMMARY_MARKERS = (
@@ -66,6 +71,13 @@ class PayloadAaProbeResult(TypedDict):
     stderr: str | None
     extracted_count: int
     unsupported_error: bool
+
+
+class PayloadListingProbeResult(TypedDict):
+    returncode: int
+    stdout: str | None
+    stderr: str | None
+    dsc_entries: list[str]
 
 
 def _extract_dirs_data(output_dir: Path) -> list[dict[str, object]]:
@@ -102,6 +114,14 @@ def _should_probe_unsupported_payload(error: OtaExtractError) -> bool:
 def _ota_is_zip_archive(artifact: Path) -> bool:
     try:
         return zipfile.is_zipfile(artifact)
+    except OSError:
+        return False
+
+
+def _ota_is_aea_archive(artifact: Path) -> bool:
+    try:
+        with artifact.open("rb") as f:
+            return f.read(len(AEA_MAGIC)) == AEA_MAGIC
     except OSError:
         return False
 
@@ -168,6 +188,44 @@ def _probe_payload_with_aa(artifact: Path, payload_name: str, pattern: str) -> P
         }
 
 
+def _dsc_entries_from_ipsw_listing(output: str) -> list[str]:
+    entries: list[str] = []
+    for raw_line in _strip_ansi(output).splitlines():
+        line = _normalize_ipsw_output_line(raw_line)
+        match = DYLD_LISTING_ENTRY_RE.search(line)
+        if match:
+            entries.append(match.group(0).removeprefix("./"))
+    return entries
+
+
+def _probe_aea_bom_listing_for_dsc(artifact: Path) -> PayloadListingProbeResult:
+    result = subprocess.run(
+        ["ipsw", "ota", "ls", str(artifact), "--bom"],
+        capture_output=True,
+        text=True,
+    )
+    return {
+        "returncode": result.returncode,
+        "stdout": truncate_text(result.stdout, max_chars=MAX_IPSW_LISTING_PROBE_OUTPUT_CHARS),
+        "stderr": truncate_text(result.stderr, max_chars=MAX_IPSW_LISTING_PROBE_OUTPUT_CHARS),
+        "dsc_entries": _dsc_entries_from_ipsw_listing(result.stdout),
+    }
+
+
+def _probe_aea_payload_listing_for_dsc(artifact: Path) -> PayloadListingProbeResult:
+    result = subprocess.run(
+        ["ipsw", "ota", "ls", str(artifact), "--payload", "--pattern", DYLD_SHARED_CACHE],
+        capture_output=True,
+        text=True,
+    )
+    return {
+        "returncode": result.returncode,
+        "stdout": truncate_text(result.stdout, max_chars=MAX_IPSW_LISTING_PROBE_OUTPUT_CHARS),
+        "stderr": truncate_text(result.stderr, max_chars=MAX_IPSW_LISTING_PROBE_OUTPUT_CHARS),
+        "dsc_entries": _dsc_entries_from_ipsw_listing(result.stdout),
+    }
+
+
 def _probe_unsupported_payload_format(artifact: Path) -> bool:
     with sentry_sdk.start_span(op="ota.extract.payload_probe", name="Probe unsupported OTA payload") as span:
         span.set_data("artifact", str(artifact))
@@ -175,9 +233,47 @@ def _probe_unsupported_payload_format(artifact: Path) -> bool:
         try:
             if not _ota_is_zip_archive(artifact):
                 span.set_data("is_zip_archive", False)
-                return False
+                is_aea_archive = _ota_is_aea_archive(artifact)
+                span.set_data("is_aea_archive", is_aea_archive)
+                if not is_aea_archive:
+                    return False
+
+                payload_listing = _probe_aea_payload_listing_for_dsc(artifact)
+                payload_dsc_entries = payload_listing["dsc_entries"]
+                span.set_data(
+                    "aea_payload_listing_probe",
+                    {
+                        "returncode": payload_listing["returncode"],
+                        "stdout": payload_listing["stdout"],
+                        "stderr": payload_listing["stderr"],
+                        "dsc_entry_count": len(payload_dsc_entries),
+                        "dsc_entries_sample": payload_dsc_entries[:10],
+                    },
+                )
+                if payload_listing["returncode"] == 0 and payload_dsc_entries:
+                    span.set_data("unsupported_payload_format", True)
+                    return True
+
+                # `ipsw ota ls --bom` can describe post-state files for partial OTAs, so BOM matches are
+                # evidence that the OTA references a DSC, not proof that every DSC byte is present.
+                bom_listing = _probe_aea_bom_listing_for_dsc(artifact)
+                bom_dsc_entries = bom_listing["dsc_entries"]
+                span.set_data(
+                    "aea_bom_listing_probe",
+                    {
+                        "returncode": bom_listing["returncode"],
+                        "stdout": bom_listing["stdout"],
+                        "stderr": bom_listing["stderr"],
+                        "dsc_entry_count": len(bom_dsc_entries),
+                        "dsc_entries_sample": bom_dsc_entries[:10],
+                    },
+                )
+                unsupported = bom_listing["returncode"] == 0 and bool(bom_dsc_entries)
+                span.set_data("unsupported_payload_format", unsupported)
+                return unsupported
 
             span.set_data("is_zip_archive", True)
+            span.set_data("is_aea_archive", False)
             bom_matches = _read_post_bom_dsc_matches(artifact)
             span.set_data("post_bom_dsc_match_count", len(bom_matches))
             span.set_data("post_bom_dsc_matches", bom_matches[:10])

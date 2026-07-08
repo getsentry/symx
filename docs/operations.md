@@ -598,7 +598,7 @@ They mean the OTA does not contain a full DSC that Symx can process.
 
 This is also usually a terminal skip state rather than an operator emergency.
 
-It means the OTA appears to reference a full DSC, but the current payloadv2 / Apple Archive tooling cannot materialize it. In other words, this is different from delta or recovery OTAs: the DSC seems to exist conceptually, but current automation cannot extract it.
+It means the OTA references a DSC in payload listings or BOM/post-state metadata, but the current payloadv2 / Apple Archive tooling cannot materialize or verify it. In AEA BOM-only cases, this does not prove that every DSC byte is present in the OTA; it separates known payload tooling limitations from unknown extraction failures.
 
 ## 5. Current recovery mechanisms
 

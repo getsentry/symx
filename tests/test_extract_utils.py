@@ -14,6 +14,7 @@ import zipfile
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
+from subprocess import CompletedProcess
 from typing import BinaryIO, cast
 
 import pytest
@@ -35,14 +36,14 @@ from symx.ipsw.extract import (
     inspect_ipsw_product_metadata,
     map_platform_to_prefix,
 )
-from subprocess import CompletedProcess
-
-from symx.ota.model import DSCSearchResult, OtaExtractError
+from symx.ota.model import DSCSearchResult, OtaExtractError, OtaExtractionRequest, UnsupportedOtaPayloadError
 from symx.ota.extract import (
     DYLD_AA_INCLUDE_REGEX,
+    _dsc_entries_from_ipsw_listing,
     _probe_payload_with_aa,
     _probe_unsupported_payload_format,
     extract_ota,
+    extract_symbols,
     find_dsc,
     parse_cryptex_patch_output,
     parse_hdiutil_mount_output,
@@ -1331,3 +1332,132 @@ def test_probe_unsupported_payload_format_returns_false_when_payload_extracts(
     )
 
     assert _probe_unsupported_payload_format(artifact) is False
+
+
+def test_dsc_entries_from_ipsw_listing_parses_payload_and_bom_listing() -> None:
+    listing = (
+        "\n"
+        "- [ PAYLOAD FILES    ] --------------------------------------------------\n"
+        "\x1b[34m\x1b[1m   •\x1b[22m "
+        "System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e\x1b[0m\n"
+        "- [ BOM FILES        ] --------------------------------------------------\n"
+        "      (OTA might not actually contain all these files if it is a partial update file)\n"
+        "\x1b[94m-rwxr-xr-x\x1b[0m "
+        "\x1b[2m2026-07-03T05:47:41+02:00\x1b[22m "
+        "\x1b[96m23 MB\x1b[0m   "
+        "\x1b[1mSystem/DriverKit/System/Library/dyld/dyld_shared_cache_arm64e\x1b[22m\n"
+        "-rwxr-xr-x 2026-07-03T05:47:41+02:00 131 MB  "
+        "System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e.01\n"
+        "System/Library/Other/file\n"
+    )
+
+    assert _dsc_entries_from_ipsw_listing(listing) == [
+        "System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e",
+        "System/DriverKit/System/Library/dyld/dyld_shared_cache_arm64e",
+        "System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e.01",
+    ]
+
+
+def test_probe_unsupported_payload_format_returns_true_for_aea_with_dsc_listing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = Path("/tmp/test.aea")
+
+    monkeypatch.setattr("symx.ota.extract._ota_is_zip_archive", lambda artifact: False)
+    monkeypatch.setattr("symx.ota.extract._ota_is_aea_archive", lambda artifact: True)
+    monkeypatch.setattr(
+        "symx.ota.extract._probe_aea_payload_listing_for_dsc",
+        lambda artifact: {
+            "returncode": 0,
+            "stdout": "System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e",
+            "stderr": None,
+            "dsc_entries": ["System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e"],
+        },
+    )
+
+    assert _probe_unsupported_payload_format(artifact) is True
+
+
+def test_probe_unsupported_payload_format_returns_true_for_aea_with_bom_dsc_references(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = Path("/tmp/test.aea")
+
+    monkeypatch.setattr("symx.ota.extract._ota_is_zip_archive", lambda artifact: False)
+    monkeypatch.setattr("symx.ota.extract._ota_is_aea_archive", lambda artifact: True)
+    monkeypatch.setattr(
+        "symx.ota.extract._probe_aea_payload_listing_for_dsc",
+        lambda artifact: {
+            "returncode": 1,
+            "stdout": "- [ PAYLOAD FILES    ] --------------------------------------------------",
+            "stderr": "Invalid/non-supported archive stream",
+            "dsc_entries": [],
+        },
+    )
+    monkeypatch.setattr(
+        "symx.ota.extract._probe_aea_bom_listing_for_dsc",
+        lambda artifact: {
+            "returncode": 0,
+            "stdout": "System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e",
+            "stderr": None,
+            "dsc_entries": ["System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e"],
+        },
+    )
+
+    assert _probe_unsupported_payload_format(artifact) is True
+
+
+def test_probe_unsupported_payload_format_returns_false_for_aea_without_dsc_references(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = Path("/tmp/test.aea")
+
+    monkeypatch.setattr("symx.ota.extract._ota_is_zip_archive", lambda artifact: False)
+    monkeypatch.setattr("symx.ota.extract._ota_is_aea_archive", lambda artifact: True)
+    monkeypatch.setattr(
+        "symx.ota.extract._probe_aea_payload_listing_for_dsc",
+        lambda artifact: {
+            "returncode": 1,
+            "stdout": "- [ PAYLOAD FILES    ] --------------------------------------------------",
+            "stderr": "Invalid/non-supported archive stream",
+            "dsc_entries": [],
+        },
+    )
+    monkeypatch.setattr(
+        "symx.ota.extract._probe_aea_bom_listing_for_dsc",
+        lambda artifact: {
+            "returncode": 0,
+            "stdout": "- [ BOM FILES        ] --------------------------------------------------",
+            "stderr": None,
+            "dsc_entries": [],
+        },
+    )
+
+    assert _probe_unsupported_payload_format(artifact) is False
+
+
+def test_extract_symbols_classifies_aea_dsc_listing_extracting_no_dsc_as_unsupported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "test.aea"
+    artifact.write_bytes(b"AEA1")
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="visionos",
+        version="27.0",
+        build="24M5316k",
+        bundle_id="ota_test",
+    )
+
+    monkeypatch.setattr(
+        "symx.ota.extract.extract_ota",
+        lambda artifact, output_dir: (_ for _ in ()).throw(
+            OtaExtractError(f"OTA extraction produced no dyld_shared_cache files for {artifact}")
+        ),
+    )
+    monkeypatch.setattr("symx.ota.extract._classify_ota_failure", lambda artifact: None)
+    monkeypatch.setattr("symx.ota.extract._probe_unsupported_payload_format", lambda artifact: True)
+
+    with pytest.raises(UnsupportedOtaPayloadError):
+        extract_symbols(request)

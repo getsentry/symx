@@ -179,7 +179,7 @@ class RecoveryOtaError(Exception):
 
 
 class UnsupportedOtaPayloadError(Exception):
-    """Raised when an OTA references a DSC but current tooling cannot extract its payload format."""
+    """Raised when an OTA references a DSC but current tooling cannot materialize it."""
 
     pass
 
