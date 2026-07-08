@@ -24,7 +24,7 @@ on:
 jobs:
   symx-macos-job:
     name: ${{ inputs.job_name }}
-    runs-on: ["bitrise_pool_name:tahoe-xl"]
+    runs-on: ["bitrise_pool_name:xcode-beta"]
     permissions:
       actions: "read"
       contents: "read"
