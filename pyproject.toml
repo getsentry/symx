@@ -26,9 +26,9 @@ symx = "symx.__main__:main"
 
 [dependency-groups]
 dev = [
-    "pyright==1.1.409",
-    "ruff==0.15.12",
-    "pytest==9.0.3",
+    "pyright==1.1.411",
+    "ruff==0.15.20",
+    "pytest==9.1.1",
     "pytest-cov==7.1.0",
 ]
 
