@@ -1450,6 +1450,7 @@ def test_extract_symbols_classifies_aea_dsc_listing_extracting_no_dsc_as_unsuppo
         bundle_id="ota_test",
     )
 
+    monkeypatch.setattr("symx.ota.extract.patch_cryptex_dmg", lambda artifact, output_dir: {})
     monkeypatch.setattr(
         "symx.ota.extract.extract_ota",
         lambda artifact, output_dir: (_ for _ in ()).throw(
