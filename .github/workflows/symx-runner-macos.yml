@@ -75,9 +75,45 @@ jobs:
         with:
           platform: macos
 
+      - name: Verify macOS host tooling
+        id: host_verification
+        if: ${{ steps.auth.outcome == 'success' && steps.setup_gcloud.outcome == 'success' && steps.install_dependencies.outcome == 'success' && steps.install_ipsw.outcome == 'success' }}
+        run: |
+          set +e
+          echo "## host"
+          uname -a
+          sw_vers
+          sysctl -n kern.hv_support 2>/dev/null | sed 's/^/kern.hv_support=/'
+
+          echo
+          echo "## xcode"
+          xcode-select -p
+          xcodebuild -version
+
+          echo
+          echo "## aa"
+          AA_PATH="$(command -v aa || true)"
+          echo "command -v aa: ${AA_PATH:-<not found>}"
+          echo "xcrun --find aa: $(xcrun --find aa 2>/dev/null || echo '<not found>')"
+          if [ -n "$AA_PATH" ]; then
+            "$AA_PATH" 2>&1 | sed -n '1,140p'
+            echo
+            echo "## aa feature markers"
+            "$AA_PATH" 2>&1 | grep -E "lzraven|sparse|Sparse|Archive patch" || true
+            echo
+            echo "## aa linked libraries"
+            otool -L "$AA_PATH"
+          fi
+
+          echo
+          echo "## ipsw"
+          which ipsw
+          ipsw version
+          true
+
       - name: ${{ inputs.symx_step }}
         id: symx
-        if: ${{ steps.auth.outcome == 'success' && steps.setup_gcloud.outcome == 'success' && steps.install_dependencies.outcome == 'success' && steps.install_ipsw.outcome == 'success' }}
+        if: ${{ steps.auth.outcome == 'success' && steps.setup_gcloud.outcome == 'success' && steps.install_dependencies.outcome == 'success' && steps.install_ipsw.outcome == 'success' && steps.host_verification.outcome == 'success' }}
         continue-on-error: true
         run: |
           mkdir -p .github/logs
@@ -107,9 +143,10 @@ jobs:
               {"name":"Set up Cloud SDK","outcome":${{ toJSON(steps.setup_gcloud.outcome) }},"fallback_snippet":"uses google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1"},
               {"name":"Install dependencies","outcome":${{ toJSON(steps.install_dependencies.outcome) }},"log_path":"install-dependencies.log","fallback_snippet":"Install uv dependencies and symsorter."},
               {"name":"Install ipsw","outcome":${{ toJSON(steps.install_ipsw.outcome) }},"log_path":"install-ipsw.log","fallback_snippet":"Install ipsw release tarball."},
+              {"name":"Verify macOS host tooling","outcome":${{ toJSON(steps.host_verification.outcome) }},"fallback_snippet":"Log macOS/Xcode/AppleArchive/ipsw host tooling versions."},
               {"name":${{ toJSON(inputs.symx_step) }},"outcome":${{ toJSON(steps.symx.outcome) }},"log_path":"symx.log","fallback_snippet":${{ toJSON(inputs.symx_run) }}}
             ]
 
       - name: Fail workflow after notification
-        if: ${{ always() && (steps.auth.outcome == 'failure' || steps.setup_gcloud.outcome == 'failure' || steps.install_dependencies.outcome == 'failure' || steps.install_ipsw.outcome == 'failure' || steps.symx.outcome == 'failure') }}
+        if: ${{ always() && (steps.auth.outcome == 'failure' || steps.setup_gcloud.outcome == 'failure' || steps.install_dependencies.outcome == 'failure' || steps.install_ipsw.outcome == 'failure' || steps.host_verification.outcome == 'failure' || steps.symx.outcome == 'failure') }}
         run: exit 1
