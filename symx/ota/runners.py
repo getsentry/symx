@@ -239,7 +239,7 @@ class OtaExtract:
                         )
                     except UnsupportedOtaPayloadError:
                         logger.info(
-                            "Skipping unsupported OTA payload %s %s %s (current tooling cannot extract payloadv2 DSC)",
+                            "Skipping unsupported OTA payload %s %s %s (DSC referenced but current tooling cannot materialize it)",
                             ota.platform,
                             ota.version,
                             ota.build,
