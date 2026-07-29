@@ -380,6 +380,7 @@ def patch_cryptex_dmg(artifact: Path, output_dir: Path) -> dict[str, Path]:
             ["ipsw", "ota", "patch", str(artifact), "--output", str(output_dir)],
             capture_output=True,
         )
+        logger.info("Cryptex patch result: %s", subprocess_result_data(result))
         if result.returncode == 0 and result.stderr:
             return parse_cryptex_patch_output(result.stderr.decode("utf-8"))
     return {}
