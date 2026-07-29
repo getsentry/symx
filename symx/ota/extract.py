@@ -385,6 +385,22 @@ def patch_cryptex_dmg(artifact: Path, output_dir: Path) -> dict[str, Path]:
     return {}
 
 
+def extract_cryptex_dmg(artifact: Path, output_dir: Path) -> dict[str, Path]:
+    # NOTE: ipsw removed the top-level `ota patch <artifact> --output` command
+    # (it was split into `ota patch bxdiff`/`rsr`, neither of which emits the
+    # system cryptex). For full OTAs the system cryptex is obtained via
+    # `ipsw ota extract --cryptex system`, which writes
+    # <output_dir>/<BUILD>__<PLATFORM>/cryptex-system-arm64e.dmg.
+    with sentry_sdk.start_span(op="subprocess.ipsw_ota_patch", name="Patch cryptex DMG"):
+        result = subprocess.run(
+            ["ipsw", "ota", "extract", str(artifact), "--cryptex", "system", "-o", str(output_dir)],
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            return {dmg.stem: dmg for dmg in output_dir.glob("**/cryptex-*.dmg")}
+    return {}
+
+
 def find_system_os_dmgs(search_dir: Path) -> list[Path]:
     result: list[Path] = []
     for artifact in glob.iglob(str(search_dir) + "/**/SystemOS/*.dmg", recursive=True):
@@ -636,10 +652,10 @@ def extract_symbols(request: OtaExtractionRequest) -> list[Path]:
 def _try_processing_ota_as_cryptex(request: OtaExtractionRequest) -> list[Path]:
     with sentry_sdk.start_span(op="ota.extract.try_cryptex", name="Try cryptex patch"):
         with tempfile.TemporaryDirectory(suffix="_cryptex_dmg") as cryptex_patch_dir:
-            logger.info("Trying cryptex patch for %s", request.local_ota.name)
-            extracted_dmgs = patch_cryptex_dmg(request.local_ota, Path(cryptex_patch_dir))
+            logger.info("Trying to extracting cryptex for %s", request.local_ota.name)
+            extracted_dmgs = extract_cryptex_dmg(request.local_ota, Path(cryptex_patch_dir))
             if extracted_dmgs:
-                logger.info("Cryptex patch successful, mounting and processing DSC for %s", request.local_ota.name)
+                logger.info("Cryptex extraction successful, mounting and processing DSC for %s", request.local_ota.name)
                 return _process_cryptex_dmg(extracted_dmgs, request)
 
     return []

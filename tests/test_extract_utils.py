@@ -1462,3 +1462,31 @@ def test_extract_symbols_classifies_aea_dsc_listing_extracting_no_dsc_as_unsuppo
 
     with pytest.raises(UnsupportedOtaPayloadError):
         extract_symbols(request)
+
+
+def test_extract_symbols_classifies_aea_dsc_listing_extracting_no_dsc_as_unsupported_New(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "test.aea"
+    artifact.write_bytes(b"AEA1")
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="visionos",
+        version="27.0",
+        build="24M5316k",
+        bundle_id="ota_test",
+    )
+
+    monkeypatch.setattr("symx.ota.extract.extract_cryptex_dmg", lambda artifact, output_dir: {})
+    monkeypatch.setattr(
+        "symx.ota.extract.extract_ota",
+        lambda artifact, output_dir: (_ for _ in ()).throw(
+            OtaExtractError(f"OTA extraction produced no dyld_shared_cache files for {artifact}")
+        ),
+    )
+    monkeypatch.setattr("symx.ota.extract._classify_ota_failure", lambda artifact: None)
+    monkeypatch.setattr("symx.ota.extract._probe_unsupported_payload_format", lambda artifact: True)
+
+    with pytest.raises(UnsupportedOtaPayloadError):
+        extract_symbols(request)
