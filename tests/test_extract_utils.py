@@ -37,16 +37,16 @@ from symx.ipsw.extract import (
     map_platform_to_prefix,
 )
 from symx.ota.model import DSCSearchResult, OtaExtractError, OtaExtractionRequest, UnsupportedOtaPayloadError
+from symx.tools import symsort as tool_symsort
 from symx.ota.extract import (
     DYLD_AA_INCLUDE_REGEX,
     _dsc_entries_from_ipsw_listing,
     _probe_payload_with_aa,
     _probe_unsupported_payload_format,
+    _symsort_split_results,
     extract_ota,
     extract_symbols,
     find_dsc,
-    parse_cryptex_patch_output,
-    parse_hdiutil_mount_output,
     split_dsc,
 )
 
@@ -980,48 +980,6 @@ def test_ipsw_symsort_raises_detailed_error_when_symsorter_fails(
     assert message == f"Symsorter failed for bundle {extractor.bundle_id}"
 
 
-# --- parse_cryptex_patch_output tests ---
-
-
-def test_parse_cryptex_patch_output_extracts_dmg_mappings() -> None:
-    stderr = """• Patching cryptex-system-arm64e to /tmp/out/cryptex-system-arm64e.dmg
-• Patching cryptex-app-arm64e to /tmp/out/cryptex-app-arm64e.dmg"""
-
-    result = parse_cryptex_patch_output(stderr)
-
-    assert result["cryptex-system-arm64e"] == Path("/tmp/out/cryptex-system-arm64e.dmg")
-    assert result["cryptex-app-arm64e"] == Path("/tmp/out/cryptex-app-arm64e.dmg")
-
-
-def test_parse_cryptex_patch_output_empty_on_no_match() -> None:
-    assert parse_cryptex_patch_output("some other output") == {}
-    assert parse_cryptex_patch_output("") == {}
-
-
-# --- parse_hdiutil_mount_output tests ---
-
-
-def test_parse_hdiutil_mount_output_standard() -> None:
-    output = """/dev/disk4          	GUID_partition_scheme
-/dev/disk4s1        	Apple_APFS
-/dev/disk5          	EF57347C-0000-11AA-AA11-0030654
-/dev/disk5s1        	41504653-0000-11AA-AA11-0030654	/Volumes/Macintosh HD"""
-
-    result = parse_hdiutil_mount_output(output)
-
-    assert result.dev == "/dev/disk5s1"
-    assert result.id == "41504653-0000-11AA-AA11-0030654"
-    assert result.point == Path("/Volumes/Macintosh HD")
-
-
-def test_parse_hdiutil_mount_output_simple() -> None:
-    output = "/dev/disk2s1\tGUID\t/Volumes/Test"
-    result = parse_hdiutil_mount_output(output)
-
-    assert result.dev == "/dev/disk2s1"
-    assert result.point == Path("/Volumes/Test")
-
-
 # --- split_dsc tests ---
 
 
@@ -1178,77 +1136,223 @@ def test_find_dsc_generates_unique_split_dirs() -> None:
         assert len(set(split_dirs)) == 2  # All unique
 
 
+# --- OTA symsort tests ---
+
+
+def test_tool_symsort_accepts_multiple_input_directories(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    split_dirs = [tmp_path / "split_arm64e", tmp_path / "split_x86_64"]
+    calls: list[list[str | Path]] = []
+
+    def fake_run(args: list[str | Path], capture_output: bool) -> CompletedProcess[bytes]:
+        calls.append(args)
+        return CompletedProcess(args=args, returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr("symx.tools.subprocess.run", fake_run)
+
+    output_dir = tmp_path / "symbols"
+    result = tool_symsort(output_dir, "macos", "ota_test", split_dirs)
+
+    assert result.returncode == 0
+    assert calls == [
+        [
+            "./symsorter",
+            "-zz",
+            "-o",
+            output_dir,
+            "--prefix",
+            "macos",
+            "--bundle-id",
+            "ota_test",
+            *split_dirs,
+        ]
+    ]
+
+
+def test_symsort_split_results_processes_all_architectures_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    split_dirs = [tmp_path / "split_arm64e", tmp_path / "split_x86_64"]
+    common_symsort_inputs: list[Path | list[Path]] = []
+
+    def fake_common_symsort(
+        output_dir: Path,
+        prefix: str,
+        bundle_id: str,
+        input_paths: Path | list[Path],
+    ) -> CompletedProcess[bytes]:
+        common_symsort_inputs.append(input_paths)
+        return CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr("symx.ota.extract.common_symsort", fake_common_symsort)
+
+    symbol_dir = tmp_path / "symbols" / "ota_test"
+    assert _symsort_split_results(split_dirs, "macos", "ota_test", tmp_path) == [symbol_dir]
+    assert common_symsort_inputs == [split_dirs]
+
+
 # --- extract_ota tests ---
 
 
-def test_extract_ota_raises_detailed_error_when_no_dsc_extracted(monkeypatch: pytest.MonkeyPatch) -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_dir = Path(tmpdir) / "output"
-        image_dir = output_dir / "21A100__Device1,1"
+def test_extract_ota_uses_primary_dyld_materialization(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    artifact = Path("/tmp/test.ota")
+    output_dir = tmp_path / "output"
+    image_dir = output_dir / "21A100__Device1,1"
+    calls: list[list[str]] = []
 
-        def fake_run(args: list[str], capture_output: bool) -> CompletedProcess[bytes]:
-            image_dir.mkdir(parents=True, exist_ok=True)
-            if "-p" in args:
-                return CompletedProcess(args=args, returncode=0, stdout=b"pattern stdout", stderr=b"pattern stderr")
-            return CompletedProcess(args=args, returncode=1, stdout=b"literal stdout", stderr=b"literal stderr")
+    def fake_run(args: list[str], *, stdin: int | None = None, capture_output: bool = False) -> CompletedProcess[bytes]:
+        calls.append(args)
+        assert stdin == subprocess.DEVNULL
+        assert capture_output is False
+        dsc_dir = image_dir / "System/Library/dyld"
+        dsc_dir.mkdir(parents=True)
+        (dsc_dir / "dyld_shared_cache_arm64e").touch()
+        return CompletedProcess(args=args, returncode=0, stdout=None, stderr=None)
 
-        monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
 
-        with pytest.raises(OtaExtractError, match="OTA extraction produced no dyld_shared_cache files") as exc_info:
-            extract_ota(Path("/tmp/test.ota"), output_dir)
+    assert extract_ota(artifact, output_dir) == image_dir
+    assert calls == [
+        [
+            "ipsw",
+            "--no-color",
+            "ota",
+            "extract",
+            str(artifact),
+            "--dyld",
+            "--output",
+            str(output_dir),
+        ]
+    ]
 
-        message = str(exc_info.value)
-        assert message == "OTA extraction produced no dyld_shared_cache files for /tmp/test.ota"
+
+def test_extract_ota_dyld_failure_is_diagnostic_and_does_not_fall_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = Path("/tmp/test.ota")
+    output_dir = tmp_path / "output"
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], *, stdin: int | None = None) -> CompletedProcess[bytes]:
+        calls.append(args)
+        assert stdin == subprocess.DEVNULL
+        return CompletedProcess(args=args, returncode=2, stdout=None, stderr=None)
+
+    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+
+    with pytest.raises(OtaExtractError, match="OTA DSC materialization failed") as exc_info:
+        extract_ota(artifact, output_dir)
+
+    assert len(calls) == 1
+    assert calls[0][5] == "--dyld"
+    assert "with exit code 2" in str(exc_info.value)
+    assert "ipsw --no-color ota extract /tmp/test.ota --dyld --output" in str(exc_info.value)
+
+
+def test_extract_symbols_does_not_reclassify_dyld_command_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = OtaExtractionRequest(
+        local_ota=tmp_path / "test.ota",
+        work_dir=tmp_path / "work",
+        platform="macos",
+        version="15.7.7",
+        build="24G720",
+        bundle_id="ota_test",
+    )
+
+    def fake_run(args: list[str], *, stdin: int | None = None) -> CompletedProcess[bytes]:
+        return CompletedProcess(args=args, returncode=2, stdout=None, stderr=None)
+
+    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+
+    def fail_classification(artifact: Path) -> type[Exception] | None:
+        pytest.fail("a dyld command failure must not be reclassified")
+
+    monkeypatch.setattr("symx.ota.extract._classify_ota_failure", fail_classification)
+
+    with pytest.raises(OtaExtractError, match="OTA DSC materialization failed .* with exit code 2"):
+        extract_symbols(request)
+
+
+def test_extract_ota_rejects_zero_result_without_supported_dsc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    output_dir = tmp_path / "output"
+    image_dir = output_dir / "21A100__Device1,1"
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], *, stdin: int | None = None, capture_output: bool = False) -> CompletedProcess[bytes]:
+        calls.append(args)
+        assert stdin == subprocess.DEVNULL
+        image_dir.mkdir(parents=True, exist_ok=True)
+        if "-p" in args:
+            dsc_dir = image_dir / "System/Library/Caches/com.apple.dyld"
+            dsc_dir.mkdir(parents=True)
+            (dsc_dir / "dyld_shared_cache_arm64e.01").touch()
+        return CompletedProcess(args=args, returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+
+    with pytest.raises(OtaExtractError, match="no supported dyld_shared_cache files"):
+        extract_ota(Path("/tmp/test.ota"), output_dir)
+
+    assert len(calls) == 3
+    assert "--dyld" in calls[0]
+    assert calls[1][4] == "dyld_shared_cache"
+    assert "-p" in calls[2]
 
 
 def test_extract_ota_fails_when_payloadv2_pattern_extract_returns_nonzero(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_dir = Path(tmpdir) / "output"
-        image_dir = output_dir / "21A100__Device1,1"
+    output_dir = tmp_path / "output"
+    image_dir = output_dir / "21A100__Device1,1"
 
-        def fake_run(args: list[str], capture_output: bool) -> CompletedProcess[bytes]:
-            image_dir.mkdir(parents=True, exist_ok=True)
-            if "-p" in args:
-                dsc_dir = image_dir / "System/Library/Caches/com.apple.dyld"
-                dsc_dir.mkdir(parents=True, exist_ok=True)
-                (dsc_dir / "dyld_shared_cache_arm64e.01").touch()
-                return CompletedProcess(
-                    args=args,
-                    returncode=2,
-                    stdout=b"pattern stdout",
-                    stderr=b"\xe2\xa8\xaf failed to extract payload.039\n",
-                )
-            return CompletedProcess(args=args, returncode=1, stdout=b"literal stdout", stderr=b"literal stderr")
+    def fake_run(args: list[str], *, stdin: int | None = None, capture_output: bool = False) -> CompletedProcess[bytes]:
+        assert stdin == subprocess.DEVNULL
+        image_dir.mkdir(parents=True, exist_ok=True)
+        if "-p" in args:
+            dsc_dir = image_dir / "System/Library/Caches/com.apple.dyld"
+            dsc_dir.mkdir(parents=True, exist_ok=True)
+            (dsc_dir / "dyld_shared_cache_arm64e.01").touch()
+            return CompletedProcess(
+                args=args,
+                returncode=2,
+                stdout=b"pattern stdout",
+                stderr=b"\xe2\xa8\xaf failed to extract payload.039\n",
+            )
+        return CompletedProcess(args=args, returncode=0, stdout=b"literal stdout", stderr=b"literal stderr")
 
-        monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
 
-        with pytest.raises(OtaExtractError, match="payloadv2 pattern DSC extraction failed") as exc_info:
-            extract_ota(Path("/tmp/test.ota"), output_dir)
+    with pytest.raises(OtaExtractError, match="payloadv2 pattern DSC extraction failed") as exc_info:
+        extract_ota(Path("/tmp/test.ota"), output_dir)
 
-        message = str(exc_info.value)
-        assert "with exit code 2" in message
-        assert "failed to extract payload.039" in message
+    message = str(exc_info.value)
+    assert "with exit code 2" in message
+    assert "failed to extract payload.039" in message
 
 
-def test_extract_ota_falls_back_to_pattern_extract(monkeypatch: pytest.MonkeyPatch) -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_dir = Path(tmpdir) / "output"
-        image_dir = output_dir / "21A100__Device1,1"
+def test_extract_ota_falls_back_after_zero_output_dyld_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    output_dir = tmp_path / "output"
+    image_dir = output_dir / "21A100__Device1,1"
+    calls: list[list[str]] = []
 
-        def fake_run(args: list[str], capture_output: bool) -> CompletedProcess[bytes]:
-            image_dir.mkdir(parents=True, exist_ok=True)
-            if "-p" in args:
-                dsc_dir = image_dir / "System/Library/Caches/com.apple.dyld"
-                dsc_dir.mkdir(parents=True, exist_ok=True)
-                (dsc_dir / "dyld_shared_cache_arm64e").touch()
-                return CompletedProcess(args=args, returncode=0, stdout=b"", stderr=b"")
-            return CompletedProcess(args=args, returncode=1, stdout=b"", stderr=b"literal failed")
+    def fake_run(args: list[str], *, stdin: int | None = None, capture_output: bool = False) -> CompletedProcess[bytes]:
+        calls.append(args)
+        assert stdin == subprocess.DEVNULL
+        image_dir.mkdir(parents=True, exist_ok=True)
+        if "-p" in args:
+            dsc_dir = image_dir / "System/Library/Caches/com.apple.dyld"
+            dsc_dir.mkdir(parents=True)
+            (dsc_dir / "dyld_shared_cache_arm64e").touch()
+        return CompletedProcess(args=args, returncode=0, stdout=b"", stderr=b"")
 
-        monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
 
-        assert extract_ota(Path("/tmp/test.ota"), output_dir) == image_dir
+    assert extract_ota(Path("/tmp/test.ota"), output_dir) == image_dir
+    assert len(calls) == 3
+    assert "--dyld" in calls[0]
+    assert calls[1][4] == "dyld_shared_cache"
+    assert "-p" in calls[2]
 
 
 def test_probe_payload_with_aa_materializes_zip_member_for_subprocess_stdin(
@@ -1450,7 +1554,6 @@ def test_extract_symbols_classifies_aea_dsc_listing_extracting_no_dsc_as_unsuppo
         bundle_id="ota_test",
     )
 
-    monkeypatch.setattr("symx.ota.extract.patch_cryptex_dmg", lambda artifact, output_dir: {})
     monkeypatch.setattr(
         "symx.ota.extract.extract_ota",
         lambda artifact, output_dir: (_ for _ in ()).throw(

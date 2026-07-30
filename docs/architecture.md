@@ -140,12 +140,19 @@ Workflow: [`symx-ota-extract.yml`](../.github/workflows/symx-ota-extract.yml)
 3. `iter_mirror()` continuously reloads OTA metadata from GCS and always yields the newest mirrored OTA first.
 4. For each mirrored OTA:
    - download the mirrored zip from GCS,
-   - try the cryptex path first,
-   - otherwise extract DSC content directly from the OTA,
-   - split DSCs into binaries,
-   - symsort them,
+   - invoke `ipsw --no-color ota extract <OTA> --dyld --output <dir>` so `ipsw` owns direct,
+     payload, and cryptex DSC materialization and any temporary mounts,
+   - validate that the command materialized a DSC in a supported location,
+   - split each supported DSC into an architecture-specific directory,
+   - symsort all split directories together so one architecture cannot replace another's output,
    - upload symbol files,
    - update the OTA state.
+
+The pinned `ipsw` 3.1.702 can exit zero from `--dyld` without running its payload search. As a temporary
+compatibility bridge, and only for that zero-result/no-supported-DSC case, Symx retries the previous literal
+filename and confirmed payload-pattern extraction sequence. A non-zero `--dyld` result is an extraction failure
+and does not select another materialization command. Symx no longer invokes the removed top-level `ipsw ota patch`
+interface or owns OTA cryptex mount lifecycle.
 
 Special OTA-only exits:
 
@@ -178,7 +185,7 @@ All cron times are UTC.
 | `symx-ipsw-mirror.yml`       | `15 */6 * * *` | Ubuntu              | download + verify + upload only                       |
 | `symx-ipsw-extract.yml`      | `55 */6 * * *` | macOS               | uses `ipsw mount`, `dyld split`, and `symsorter`      |
 | `symx-ota-mirror.yml`        | `30 */6 * * *` | Ubuntu              | metadata fetch + mirroring only                       |
-| `symx-ota-extract.yml`       | `30 */6 * * *` | macOS               | needs OTA extraction and DMG mounting paths           |
+| `symx-ota-extract.yml`       | `30 */6 * * *` | macOS               | uses `ipsw --dyld` plus split/symsort                 |
 | `symx-simulator-extract.yml` | `0 4 * * *`    | GitHub macOS matrix | depends on runner-local simulator caches              |
 
 Note that OTA mirror and OTA extract are both scheduled at the same minute. This works because the extractor reloads metadata on every loop iteration instead of taking a single stale snapshot at startup.

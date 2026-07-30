@@ -4,6 +4,7 @@ import logging
 import re
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -50,12 +51,17 @@ def validate_shell_deps() -> None:
 
 
 def symsort(
-    output_dir: Path, prefix: str, bundle_id: str, split_dir: Path, ignore_errors: bool = False
+    output_dir: Path,
+    prefix: str,
+    bundle_id: str,
+    split_dir: Path | Sequence[Path],
+    ignore_errors: bool = False,
 ) -> CompletedProcess[bytes]:
+    input_paths = [split_dir] if isinstance(split_dir, Path) else list(split_dir)
     with sentry_sdk.start_span(op="subprocess.symsort", name=f"Symsort {prefix}/{bundle_id}") as span:
         span.set_data("prefix", prefix)
         span.set_data("bundle_id", bundle_id)
-        span.set_data("split_dir", str(split_dir))
+        span.set_data("split_dirs", [str(path) for path in input_paths])
 
         symsorter_args = [
             "./symsorter",
@@ -71,7 +77,7 @@ def symsort(
         if ignore_errors:
             symsorter_args.append("--ignore-errors")
 
-        symsorter_args.append(split_dir)
+        symsorter_args.extend(input_paths)
 
         result = subprocess.run(
             symsorter_args,
