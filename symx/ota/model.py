@@ -103,14 +103,6 @@ class DSCSearchResult(BaseModel):
     split_dir: Path
 
 
-class MountInfo(BaseModel):
-    model_config = {"frozen": True}
-
-    dev: str
-    id: str
-    point: Path
-
-
 # -- Protocols --
 
 

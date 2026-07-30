@@ -1,6 +1,5 @@
-"""OTA extraction pipeline: DSC finding, splitting, DMG mount/patch, and symsort."""
+"""OTA extraction pipeline: DSC materialization, splitting, and symsort."""
 
-import glob
 import logging
 import os
 import re
@@ -17,6 +16,7 @@ from symx.diagnostics import (
     DEFAULT_DIRECTORY_SAMPLE_ENTRIES,
     decode_subprocess_output,
     directory_data,
+    format_command,
     subprocess_result_data,
     truncate_text,
 )
@@ -28,7 +28,6 @@ from symx.ota.model import (
     DSCSearchResult,
     DeltaOtaError,
     DscSplitter,
-    MountInfo,
     OtaExtractError,
     OtaExtractionRequest,
     RecoveryOtaError,
@@ -64,6 +63,10 @@ _OTA_ERROR_SUMMARY_MARKERS = (
 )
 
 
+class _DyldMaterializationCommandError(OtaExtractError):
+    """Raised when the primary ipsw OTA DSC operation returns non-zero."""
+
+
 class PayloadAaProbeResult(TypedDict):
     payload: str
     returncode: int
@@ -80,11 +83,14 @@ class PayloadListingProbeResult(TypedDict):
     dsc_entries: list[str]
 
 
-def _extract_dirs_data(output_dir: Path) -> list[dict[str, object]]:
+def _list_extract_dirs(output_dir: Path) -> list[Path]:
     if not output_dir.exists() or not output_dir.is_dir():
         return []
+    return list_dirs_in(output_dir)
 
-    extract_dirs = list_dirs_in(output_dir)
+
+def _extract_dirs_data(output_dir: Path) -> list[dict[str, object]]:
+    extract_dirs = _list_extract_dirs(output_dir)
     results: list[dict[str, object]] = []
     for extract_dir in extract_dirs:
         dsc_paths = _find_dsc_files(extract_dir)
@@ -105,6 +111,7 @@ def _should_probe_unsupported_payload(error: OtaExtractError) -> bool:
         for marker in (
             f"Could not find {DYLD_SHARED_CACHE}",
             f"OTA extraction produced no {DYLD_SHARED_CACHE} files",
+            f"OTA extraction produced no supported {DYLD_SHARED_CACHE} files",
             f"Couldn't find any {DYLD_SHARED_CACHE} paths",
             "payloadv2 pattern DSC extraction failed",
         )
@@ -364,41 +371,6 @@ def _relative_path_sample(
     return sample
 
 
-def parse_cryptex_patch_output(stderr: str) -> dict[str, Path]:
-    """Parse ipsw ota patch stderr to extract DMG file mappings."""
-    dmg_files: dict[str, Path] = {}
-    for line in stderr.splitlines():
-        match = re.search(r"Patching (.*) to (.*)", line)
-        if match:
-            dmg_files[match.group(1)] = Path(match.group(2))
-    return dmg_files
-
-
-def patch_cryptex_dmg(artifact: Path, output_dir: Path) -> dict[str, Path]:
-    with sentry_sdk.start_span(op="subprocess.ipsw_ota_patch", name="Patch cryptex DMG"):
-        result = subprocess.run(
-            ["ipsw", "ota", "patch", str(artifact), "--output", str(output_dir)],
-            capture_output=True,
-        )
-        if result.returncode == 0 and result.stderr:
-            return parse_cryptex_patch_output(result.stderr.decode("utf-8"))
-    return {}
-
-
-def find_system_os_dmgs(search_dir: Path) -> list[Path]:
-    result: list[Path] = []
-    for artifact in glob.iglob(str(search_dir) + "/**/SystemOS/*.dmg", recursive=True):
-        result.append(Path(artifact))
-    return result
-
-
-def parse_hdiutil_mount_output(cmd_output: str) -> MountInfo:
-    # hdiutil output uses tabs as delimiters with space padding, handle both
-    last_line = cmd_output.splitlines().pop()
-    parts = [p.strip() for p in last_line.split("\t")]
-    return MountInfo(dev=parts[0], id=parts[1], point=Path(parts[2]))
-
-
 def split_dsc(
     search_result: list[DSCSearchResult],
     splitter: DscSplitter = dyld_split,
@@ -479,33 +451,13 @@ def find_dsc(input_dir: Path, version: str, build: str, output_dir: Path) -> lis
     return dsc_search_results
 
 
-def symsort(dsc_split_dir: Path, output_dir: Path, prefix: str, bundle_id: str) -> None:
-    logger.info("Symsorting %s -> %s", dsc_split_dir, output_dir)
+def symsort(dsc_split_dirs: list[Path], output_dir: Path, prefix: str, bundle_id: str) -> None:
+    logger.info("Symsorting %d DSC split directories -> %s", len(dsc_split_dirs), output_dir)
 
     rmdir_if_exists(output_dir)
-    result = common_symsort(output_dir, prefix, bundle_id, dsc_split_dir)
+    result = common_symsort(output_dir, prefix, bundle_id, dsc_split_dirs)
     if result.returncode != 0:
         raise OtaExtractError(f"Symsorter failed with {result}")
-
-
-def detach_dev(dev: str) -> None:
-    subprocess.run(["hdiutil", "detach", dev], capture_output=True, check=True)
-    logger.debug("Detached DMG %s", dev)
-
-
-def mount_dmg(dmg: Path) -> MountInfo:
-    with sentry_sdk.start_span(op="subprocess.hdiutil_mount", name=f"Mount DMG {dmg.name}"):
-        result = subprocess.run(
-            ["hdiutil", "mount", str(dmg)],
-            capture_output=True,
-            check=True,
-        )
-        return parse_hdiutil_mount_output(result.stdout.decode("utf-8"))
-
-
-def _dir_contains_dsc(directory: Path) -> bool:
-    """Check if a directory (recursively) contains any dyld_shared_cache files."""
-    return bool(_find_dsc_files(directory))
 
 
 def _classify_ota_failure(artifact: Path) -> type[Exception] | None:
@@ -544,46 +496,101 @@ def _classify_ota_failure(artifact: Path) -> type[Exception] | None:
     return None
 
 
-def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
+def _supported_dsc_count(output_dir: Path) -> int:
+    return sum(len(_find_supported_dsc_files(extract_dir)) for extract_dir in _list_extract_dirs(output_dir))
+
+
+def _validate_extract_output(artifact: Path, output_dir: Path) -> Path:
+    extract_dirs = _list_extract_dirs(output_dir)
+    if not extract_dirs:
+        raise OtaExtractError(f"Could not find {DYLD_SHARED_CACHE} in {artifact}")
+    if len(extract_dirs) > 1:
+        raise OtaExtractError(f"Found more than one image directory in {artifact}")
+    if not _find_supported_dsc_files(extract_dirs[0]):
+        raise OtaExtractError(f"OTA extraction produced no supported {DYLD_SHARED_CACHE} files for {artifact}")
+    return extract_dirs[0]
+
+
+def extract_ota(artifact: Path, output_dir: Path) -> Path:
+    """Materialize supported OTA DSCs behind the tactical ``ipsw`` compatibility seam."""
     with sentry_sdk.start_span(op="subprocess.ipsw_ota_extract", name="Extract OTA DSC") as span:
         span.set_data("artifact", str(artifact))
 
-        # First try the legacy approach: literal filename extraction (works for older OTAs)
-        literal_result = subprocess.run(
-            [
-                "ipsw",
-                "ota",
-                "extract",
-                str(artifact),
-                DYLD_SHARED_CACHE,
-                "-o",
-                str(output_dir),
-            ],
-            capture_output=True,
+        dyld_command = [
+            "ipsw",
+            "--no-color",
+            "ota",
+            "extract",
+            str(artifact),
+            "--dyld",
+            "--output",
+            str(output_dir),
+        ]
+        logger.info("Materializing OTA DSCs: %s", format_command(dyld_command))
+        # Let ipsw write directly to the workflow log while preventing an interactive payload prompt.
+        dyld_result = subprocess.run(dyld_command, stdin=subprocess.DEVNULL)
+        span.set_data(
+            "dyld_extract",
+            {
+                "command": format_command(dyld_command),
+                **subprocess_result_data(dyld_result),
+            },
         )
+        span.set_data("dyld_extract_dirs", _extract_dirs_data(output_dir))
+
+        if dyld_result.returncode != 0:
+            span.set_status("internal_error")
+            failure_reason = (
+                f"OTA DSC materialization failed for {artifact} with exit code {dyld_result.returncode}: "
+                f"{format_command(dyld_command)}"
+            )
+            span.set_data("extract_failure_reason", failure_reason)
+            raise _DyldMaterializationCommandError(failure_reason)
+
+        literal_result: subprocess.CompletedProcess[bytes] | None = None
         pattern_result: subprocess.CompletedProcess[bytes] | None = None
-        extract_dirs = list_dirs_in(output_dir)
-        if not extract_dirs or not _find_supported_dsc_files(extract_dirs[0]):
-            # Fallback: modern payloadv2 OTAs (e.g. watchOS) store the DSC inside numbered payload
-            # chunks. The literal filename lookup fails to find a supported root cache, so we use -p (pattern)
-            # with -y (confirm payloadv2 search) instead.
-            # Note: -d -y should work but is buggy in ipsw <=3.1.655.
-            logger.info("Literal DSC extraction failed, trying payloadv2 pattern search for %s", artifact.name)
-            pattern_result = subprocess.run(
+        if _supported_dsc_count(output_dir) == 0:
+            # ipsw 3.1.702 can return zero from --dyld without executing its payload fallback. Keep the
+            # pre-existing literal/pattern sequence temporarily, but only for that exact zero-result case.
+            logger.info(
+                "ipsw --dyld produced no supported DSC for %s; trying the temporary compatibility fallback",
+                artifact.name,
+            )
+            rmdir_if_exists(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            literal_result = subprocess.run(
                 [
                     "ipsw",
                     "ota",
                     "extract",
                     str(artifact),
-                    "-p",
                     DYLD_SHARED_CACHE,
-                    "-y",
                     "-o",
                     str(output_dir),
                 ],
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
             )
-            extract_dirs = list_dirs_in(output_dir)
+            if _supported_dsc_count(output_dir) == 0:
+                # Modern payloadv2 OTAs (for example watchOS) can store the DSC in numbered payload chunks.
+                # Note: -d -y should work but is buggy in ipsw <=3.1.655.
+                logger.info("Literal DSC extraction failed, trying payloadv2 pattern search for %s", artifact.name)
+                pattern_result = subprocess.run(
+                    [
+                        "ipsw",
+                        "ota",
+                        "extract",
+                        str(artifact),
+                        "-p",
+                        DYLD_SHARED_CACHE,
+                        "-y",
+                        "-o",
+                        str(output_dir),
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                )
 
         span.set_data("literal_extract", subprocess_result_data(literal_result))
         span.set_data("payloadv2_pattern_extract", subprocess_result_data(pattern_result))
@@ -600,68 +607,37 @@ def extract_ota(artifact: Path, output_dir: Path) -> Path | None:
             span.set_data("extract_failure_reason", failure_reason)
             raise OtaExtractError(failure_reason)
 
-        if not extract_dirs:
+        try:
+            extract_dir = _validate_extract_output(artifact, output_dir)
+        except OtaExtractError as error:
             span.set_status("internal_error")
-            span.set_data("extract_failure_reason", f"Could not find {DYLD_SHARED_CACHE} in {artifact}")
-            raise OtaExtractError(f"Could not find {DYLD_SHARED_CACHE} in {artifact}")
-        elif len(extract_dirs) > 1:
-            span.set_status("internal_error")
-            span.set_data("extract_failure_reason", f"Found more than one image directory in {artifact}")
-            raise OtaExtractError(f"Found more than one image directory in {artifact}")
-        elif not _dir_contains_dsc(extract_dirs[0]):
-            span.set_status("internal_error")
-            span.set_data(
-                "extract_failure_reason", f"OTA extraction produced no {DYLD_SHARED_CACHE} files for {artifact}"
-            )
-            raise OtaExtractError(f"OTA extraction produced no {DYLD_SHARED_CACHE} files for {artifact}")
+            span.set_data("extract_failure_reason", str(error))
+            raise
 
         logger.info("Successfully extracted DSC from %s", artifact.name)
-
-    return extract_dirs[0]
+        return extract_dir
 
 
 def extract_symbols(request: OtaExtractionRequest) -> list[Path]:
-    """
-    Extract symbols from a local OTA file. No storage interaction.
-
-    Returns a list of directories containing symsorter output.
-    """
-    symbol_dirs = _try_processing_ota_as_cryptex(request)
-    if not symbol_dirs:
-        logger.info("Not a cryptex, extracting OTA DSC directly")
-        symbol_dirs = _process_ota_directly(request)
-    return symbol_dirs
+    """Extract symbols from a local OTA file without interacting with storage."""
+    return _process_ota(request)
 
 
-def _try_processing_ota_as_cryptex(request: OtaExtractionRequest) -> list[Path]:
-    with sentry_sdk.start_span(op="ota.extract.try_cryptex", name="Try cryptex patch"):
-        with tempfile.TemporaryDirectory(suffix="_cryptex_dmg") as cryptex_patch_dir:
-            logger.info("Trying cryptex patch for %s", request.local_ota.name)
-            extracted_dmgs = patch_cryptex_dmg(request.local_ota, Path(cryptex_patch_dir))
-            if extracted_dmgs:
-                logger.info("Cryptex patch successful, mounting and processing DSC for %s", request.local_ota.name)
-                return _process_cryptex_dmg(extracted_dmgs, request)
-
-    return []
-
-
-def _process_ota_directly(request: OtaExtractionRequest) -> list[Path]:
+def _process_ota(request: OtaExtractionRequest) -> list[Path]:
     try:
         with tempfile.TemporaryDirectory(suffix="_dsc_extract") as extract_dsc_tmp_dir:
             extracted_dsc_dir = extract_ota(request.local_ota, Path(extract_dsc_tmp_dir))
             logger.info("Splitting & symsorting DSC for %s", request.local_ota.name)
-
-            if extracted_dsc_dir:
-                return _split_and_symsort_dsc(extracted_dsc_dir, request)
-    except OtaExtractError as e:
+            return _split_and_symsort_dsc(extracted_dsc_dir, request)
+    except _DyldMaterializationCommandError:
+        raise
+    except OtaExtractError as error:
         error_cls = _classify_ota_failure(request.local_ota)
         if error_cls is not None:
-            raise error_cls(f"{error_cls.__name__}: {request.local_ota}") from e
-        if _should_probe_unsupported_payload(e) and _probe_unsupported_payload_format(request.local_ota):
-            raise UnsupportedOtaPayloadError(f"Unsupported OTA payload format: {request.local_ota}") from e
+            raise error_cls(f"{error_cls.__name__}: {request.local_ota}") from error
+        if _should_probe_unsupported_payload(error) and _probe_unsupported_payload_format(request.local_ota):
+            raise UnsupportedOtaPayloadError(f"Unsupported OTA payload format: {request.local_ota}") from error
         raise
-
-    return []
 
 
 def _split_and_symsort_dsc(input_dir: Path, request: OtaExtractionRequest) -> list[Path]:
@@ -669,25 +645,12 @@ def _split_and_symsort_dsc(input_dir: Path, request: OtaExtractionRequest) -> li
     return _symsort_split_results(split_dirs, request.platform, request.bundle_id, request.work_dir)
 
 
-def _process_cryptex_dmg(extracted_dmgs: dict[str, Path], request: OtaExtractionRequest) -> list[Path]:
-    mount = mount_dmg(extracted_dmgs["cryptex-system-arm64e"])
-
-    split_dirs = split_dsc(find_dsc(mount.point, request.version, request.build, request.work_dir))
-
-    detach_dev(mount.dev)
-
-    return _symsort_split_results(split_dirs, request.platform, request.bundle_id, request.work_dir)
-
-
 def _symsort_split_results(split_dirs: list[Path], platform: str, bundle_id: str, output_dir: Path) -> list[Path]:
-    symbol_output_dirs: list[Path] = []
-    for split_dir in split_dirs:
-        symbols_output_dir = output_dir / "symbols" / bundle_id
-        symsort(
-            split_dir,
-            symbols_output_dir,
-            platform,
-            bundle_id,
-        )
-        symbol_output_dirs.append(symbols_output_dir)
-    return symbol_output_dirs
+    symbols_output_dir = output_dir / "symbols" / bundle_id
+    symsort(
+        split_dirs,
+        symbols_output_dir,
+        platform,
+        bundle_id,
+    )
+    return [symbols_output_dir]
