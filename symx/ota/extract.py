@@ -382,6 +382,7 @@ def _validate_reported_files(
             raise OtaDscProtocolError(f"ipsw report contains duplicate path: {entry.path!r}")
         seen_paths.add(resolved_artifact)
 
+        # Deliberately reject a reported leaf symlink: ipsw must materialize an actual regular file.
         try:
             mode = artifact.stat(follow_symlinks=False).st_mode
         except OSError as error:

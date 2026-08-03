@@ -1328,6 +1328,24 @@ def test_extract_ota_rejects_reported_directory(tmp_path: Path, monkeypatch: pyt
         extract_ota(request)
 
 
+def test_extract_ota_rejects_reported_symlink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    request = _ota_materialization_request(tmp_path)
+    symlink_path = "24G720__MacOS/System/Library/dyld/dyld_shared_cache_arm64e"
+    target = _touch_reported_file(request.output_root, f"{symlink_path}.target")
+    (request.output_root / symlink_path).symlink_to(target.name)
+    report = _ota_dsc_report(
+        complete=True,
+        files=[{"path": symlink_path, "arch": "arm64e", "source": "ota-asset"}],
+    )
+    monkeypatch.setattr(
+        "symx.ota.extract.subprocess.run",
+        lambda args, *, stdin, capture_output: CompletedProcess(args=args, returncode=0, stdout=report, stderr=b""),
+    )
+
+    with pytest.raises(OtaDscProtocolError, match="not a regular file"):
+        extract_ota(request)
+
+
 def test_extract_ota_rejects_duplicate_report_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     request = _ota_materialization_request(tmp_path)
     primary_path = "24G720__MacOS/System/Library/dyld/dyld_shared_cache_arm64e"
