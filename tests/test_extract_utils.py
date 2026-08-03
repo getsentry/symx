@@ -45,12 +45,11 @@ from symx.ota.model import (
     DSCSearchResult,
     OtaExtractError,
     OtaExtractionRequest,
-    UnsupportedOtaPayloadError,
 )
 from symx.tools import symsort as tool_symsort
 from symx.ota.extract import (
     _dsc_entries_from_ipsw_listing,
-    _probe_unsupported_payload_format,
+    _probe_payload_dsc_inventory,
     _symsort_split_results,
     extract_ota,
     extract_symbols,
@@ -1418,7 +1417,7 @@ def test_extract_symbols_splits_only_validated_report_sources(tmp_path: Path, mo
     assert captured_search_results[0].split_dir == request.work_dir / "split_symbols/15.7.7_24G720_arm64e"
 
 
-def test_probe_unsupported_payload_format_uses_zip_inventory_without_materializing(
+def test_probe_payload_dsc_inventory_uses_zip_inventory_without_materializing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = Path("/tmp/test.zip")
@@ -1437,10 +1436,10 @@ def test_probe_unsupported_payload_format_uses_zip_inventory_without_materializi
         lambda *args, **kwargs: pytest.fail("the failure probe must not materialize payload files"),
     )
 
-    assert _probe_unsupported_payload_format(artifact) is True
+    assert _probe_payload_dsc_inventory(artifact) is True
 
 
-def test_probe_unsupported_payload_format_returns_false_without_payload_members(
+def test_probe_payload_dsc_inventory_returns_false_without_payload_members(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = Path("/tmp/test.zip")
@@ -1452,7 +1451,7 @@ def test_probe_unsupported_payload_format_returns_false_without_payload_members(
     )
     monkeypatch.setattr("symx.ota.extract._payload_entry_names", lambda artifact: [])
 
-    assert _probe_unsupported_payload_format(artifact) is False
+    assert _probe_payload_dsc_inventory(artifact) is False
 
 
 def test_dsc_entries_from_ipsw_listing_parses_payload_and_bom_listing() -> None:
@@ -1479,7 +1478,7 @@ def test_dsc_entries_from_ipsw_listing_parses_payload_and_bom_listing() -> None:
     ]
 
 
-def test_probe_unsupported_payload_format_returns_true_for_aea_with_dsc_listing(
+def test_probe_payload_dsc_inventory_returns_true_for_aea_with_dsc_listing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = Path("/tmp/test.aea")
@@ -1496,10 +1495,10 @@ def test_probe_unsupported_payload_format_returns_true_for_aea_with_dsc_listing(
         },
     )
 
-    assert _probe_unsupported_payload_format(artifact) is True
+    assert _probe_payload_dsc_inventory(artifact) is True
 
 
-def test_probe_unsupported_payload_format_returns_true_for_aea_with_bom_dsc_references(
+def test_probe_payload_dsc_inventory_returns_true_for_aea_with_bom_dsc_references(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = Path("/tmp/test.aea")
@@ -1525,10 +1524,10 @@ def test_probe_unsupported_payload_format_returns_true_for_aea_with_bom_dsc_refe
         },
     )
 
-    assert _probe_unsupported_payload_format(artifact) is True
+    assert _probe_payload_dsc_inventory(artifact) is True
 
 
-def test_probe_unsupported_payload_format_returns_false_for_aea_without_dsc_references(
+def test_probe_payload_dsc_inventory_returns_false_for_aea_without_dsc_references(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = Path("/tmp/test.aea")
@@ -1554,10 +1553,10 @@ def test_probe_unsupported_payload_format_returns_false_for_aea_without_dsc_refe
         },
     )
 
-    assert _probe_unsupported_payload_format(artifact) is False
+    assert _probe_payload_dsc_inventory(artifact) is False
 
 
-def test_extract_symbols_classifies_aea_dsc_listing_extracting_no_dsc_as_unsupported(
+def test_extract_symbols_keeps_payload_extract_failure_as_materialization_error_when_dsc_is_referenced(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     artifact = tmp_path / "test.aea"
@@ -1575,17 +1574,23 @@ def test_extract_symbols_classifies_aea_dsc_listing_extracting_no_dsc_as_unsuppo
         _ota_dsc_report(
             complete=False,
             files=[],
-            errors=[{"phase": "payload-extract", "source": "payloadv2", "message": "unsupported"}],
+            errors=[{"phase": "payload-extract", "source": "payloadv2", "message": "transient I/O failure"}],
         )
     )
+    materialization_error = OtaDscMaterializationError("OTA DSC materialization was incomplete", report)
     monkeypatch.setattr(
         "symx.ota.extract.extract_ota",
-        lambda materialization_request: (_ for _ in ()).throw(
-            OtaDscMaterializationError("OTA DSC materialization was incomplete", report)
-        ),
+        lambda materialization_request: (_ for _ in ()).throw(materialization_error),
     )
     monkeypatch.setattr("symx.ota.extract._classify_ota_failure", lambda artifact: None)
-    monkeypatch.setattr("symx.ota.extract._probe_unsupported_payload_format", lambda artifact: True)
+    inventory_probes: list[Path] = []
+    monkeypatch.setattr(
+        "symx.ota.extract._probe_payload_dsc_inventory",
+        lambda artifact: inventory_probes.append(artifact) or True,
+    )
 
-    with pytest.raises(UnsupportedOtaPayloadError):
+    with pytest.raises(OtaDscMaterializationError) as exc_info:
         extract_symbols(request)
+
+    assert exc_info.value is materialization_error
+    assert inventory_probes == [artifact]

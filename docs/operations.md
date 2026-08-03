@@ -589,7 +589,7 @@ What Symx does:
 
 Likely causes:
 
-- `ipsw` extraction failure
+- `ipsw` extraction failure, including an incomplete `payload-extract` report that may be transient
 - `dyld_split` failure
 - `symsorter` failure
 - unexpected artifact layout differences
@@ -608,11 +608,11 @@ They mean the OTA does not contain a full DSC that Symx can process.
 
 ### `unsupported_ota_payload`
 
-This is also usually a terminal skip state rather than an operator emergency.
+Existing rows are terminal skip states rather than operator emergencies. They record OTAs previously classified as referencing a DSC that the payloadv2 / Apple Archive tooling could not materialize or verify.
 
-It means the OTA references a DSC in payload listings or BOM/post-state metadata, but the current payloadv2 / Apple Archive tooling cannot materialize or verify it. In AEA BOM-only cases, this does not prove that every DSC byte is present in the OTA; it separates known payload tooling limitations from unknown extraction failures.
+The structured adapter does not create this state from a `payload-extract` phase plus payload/BOM inventory alone because that evidence can also accompany transient failures. Those failures now remain `symbol_extraction_failed` and visible in the default failure view until Phase 4 introduces a trusted classifier.
 
-After a runner, macOS, `ipsw`, or AppleArchive tooling change, these rows can be included in a curated admin extract rerun and reset to `mirrored`. They are still outside the default failure view, so include `unsupported_ota_payload` in the admin state filter when reviewing them.
+After a runner, macOS, `ipsw`, or AppleArchive tooling change, existing rows can be included in a curated admin extract rerun and reset to `mirrored`. They are outside the default failure view, so include `unsupported_ota_payload` in the admin state filter when reviewing them.
 
 ## 5. Current recovery mechanisms
 

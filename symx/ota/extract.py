@@ -38,7 +38,6 @@ from symx.ota.model import (
     OtaExtractError,
     OtaExtractionRequest,
     RecoveryOtaError,
-    UnsupportedOtaPayloadError,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,7 +63,7 @@ class PayloadListingProbeResult(TypedDict):
     dsc_entries: list[str]
 
 
-def _should_probe_unsupported_payload(error: OtaExtractError) -> bool:
+def _should_probe_payload_inventory(error: OtaExtractError) -> bool:
     return isinstance(error, OtaDscMaterializationError) and any(
         report_error.phase == "payload-extract" for report_error in error.report.errors
     )
@@ -150,9 +149,9 @@ def _probe_aea_payload_listing_for_dsc(artifact: Path) -> PayloadListingProbeRes
     }
 
 
-def _probe_unsupported_payload_format(artifact: Path) -> bool:
-    """Inspect OTA inventory after a structured payload-extract failure without materializing files."""
-    with sentry_sdk.start_span(op="ota.extract.payload_probe", name="Probe unsupported OTA payload") as span:
+def _probe_payload_dsc_inventory(artifact: Path) -> bool:
+    """Inspect DSC inventory after a structured payload-extract failure without materializing files."""
+    with sentry_sdk.start_span(op="ota.extract.payload_probe", name="Inspect OTA payload DSC inventory") as span:
         span.set_data("artifact", str(artifact))
 
         try:
@@ -176,7 +175,7 @@ def _probe_unsupported_payload_format(artifact: Path) -> bool:
                     },
                 )
                 if payload_listing["returncode"] == 0 and payload_dsc_entries:
-                    span.set_data("unsupported_payload_format", True)
+                    span.set_data("dsc_referenced", True)
                     return True
 
                 # `ipsw ota ls --bom` can describe post-state files for partial OTAs, so BOM matches are
@@ -193,9 +192,9 @@ def _probe_unsupported_payload_format(artifact: Path) -> bool:
                         "dsc_entries_sample": bom_dsc_entries[:10],
                     },
                 )
-                unsupported = bom_listing["returncode"] == 0 and bool(bom_dsc_entries)
-                span.set_data("unsupported_payload_format", unsupported)
-                return unsupported
+                dsc_referenced = bom_listing["returncode"] == 0 and bool(bom_dsc_entries)
+                span.set_data("dsc_referenced", dsc_referenced)
+                return dsc_referenced
 
             span.set_data("is_zip_archive", True)
             span.set_data("is_aea_archive", False)
@@ -208,9 +207,9 @@ def _probe_unsupported_payload_format(artifact: Path) -> bool:
             payload_names = _payload_entry_names(artifact)
             span.set_data("payload_member_count", len(payload_names))
             span.set_data("payload_members_sample", payload_names[:10])
-            unsupported = bool(payload_names)
-            span.set_data("unsupported_payload_format", unsupported)
-            return unsupported
+            dsc_referenced = bool(payload_names)
+            span.set_data("dsc_referenced", dsc_referenced)
+            return dsc_referenced
         except (FileNotFoundError, OSError, ValueError, zipfile.BadZipFile) as exc:
             span.set_data("payload_probe_error", str(exc))
             return False
@@ -580,8 +579,8 @@ def _process_ota(request: OtaExtractionRequest) -> list[Path]:
         error_cls = _classify_ota_failure(request.local_ota)
         if error_cls is not None:
             raise error_cls(f"{error_cls.__name__}: {request.local_ota}") from error
-        if _should_probe_unsupported_payload(error) and _probe_unsupported_payload_format(request.local_ota):
-            raise UnsupportedOtaPayloadError(f"Unsupported OTA payload format: {request.local_ota}") from error
+        if _should_probe_payload_inventory(error):
+            _probe_payload_dsc_inventory(request.local_ota)
         raise
 
 

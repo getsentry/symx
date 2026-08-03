@@ -160,7 +160,10 @@ Special OTA-only exits:
 
 - `delta_ota` – the payload is a delta/patch OTA and does not contain a full DSC.
 - `recovery_ota` – the payload is a recovery OTA and does not contain a usable DSC.
-- `unsupported_ota_payload` – the OTA references a DSC in payload listings or BOM metadata, but the current payloadv2/Apple Archive tooling cannot materialize it. For BOM-only AEA evidence, this is a tooling-limitation classification rather than proof that the OTA contains every DSC byte.
+
+Existing metadata may also contain `unsupported_ota_payload`. The structured adapter does not assign that state
+from `payload-extract` phase failures alone because the phase can include transient failures; ambiguous failures
+remain `symbol_extraction_failed` until a trusted classifier can distinguish them.
 
 If the mirrored OTA is missing when extraction starts, Symx resets it back to `indexed` and clears `download_path` so a later mirror run can fetch it again.
 
@@ -364,20 +367,20 @@ The shared enum lives in [`symx/model.py`](../symx/model.py).
 
 Not all states are emitted by current automation. The table below reflects current code behavior.
 
-| State                      | Meaning                                                                                          | Current automated emitters                   | Notes                                                                                             |
-|----------------------------|--------------------------------------------------------------------------------------------------|----------------------------------------------|---------------------------------------------------------------------------------------------------|
-| `indexed`                  | Known to Symx and eligible for processing                                                        | IPSW sync, OTA merge, OTA extract reset path | Starting point for new work                                                                       |
-| `indexed_duplicate`        | Equivalent payload already represented elsewhere; skip duplicate processing                      | OTA merge                                    | Current OTA-only duplicate suppression path                                                       |
-| `indexed_invalid`          | Metadata exists, but the artifact could not be mirrored reliably                                 | OTA mirror                                   | Defined generically, but current IPSW mirror uses `mirroring_failed` instead                      |
-| `mirrored`                 | Artifact payload is present in GCS mirror storage                                                | IPSW mirror, OTA mirror                      | Input state for extraction                                                                        |
-| `mirroring_failed`         | Apple download or verification failed during IPSW mirroring                                      | IPSW mirror                                  | Current IPSW failure state for mirror-stage problems                                              |
-| `mirror_corrupt`           | Metadata points at a mirror object that cannot be downloaded or verified                         | IPSW extract                                 | Current IPSW-only emitted state                                                                   |
-| `delta_ota`                | OTA is a delta/patch update and has no full DSC                                                  | OTA extract                                  | Expected terminal-ish skip state, not an error                                                    |
-| `recovery_ota`             | OTA is a recovery image and has no usable DSC                                                    | OTA extract                                  | Expected terminal-ish skip state, not an error                                                    |
-| `unsupported_ota_payload`  | OTA references a DSC in payload/BOM metadata, but current tooling cannot materialize the payload | OTA extract                                  | Terminal for current automation; BOM-only evidence may describe post-state files for partial OTAs |
-| `symbols_extracted`        | Symbols were uploaded successfully                                                               | IPSW extract, OTA extract                    | Desired success state                                                                             |
-| `symbol_extraction_failed` | Extraction, splitting, symsort, or symbol upload failed                                          | IPSW extract, OTA extract                    | Current main recovery state                                                                       |
-| `ignored`                  | Manually excluded from processing                                                                | none                                         | Manual/operator-only concept; current automation does not assign it                               |
+| State                      | Meaning                                                                                          | Current automated emitters                   | Notes                                                                        |
+|----------------------------|--------------------------------------------------------------------------------------------------|----------------------------------------------|------------------------------------------------------------------------------|
+| `indexed`                  | Known to Symx and eligible for processing                                                        | IPSW sync, OTA merge, OTA extract reset path | Starting point for new work                                                  |
+| `indexed_duplicate`        | Equivalent payload already represented elsewhere; skip duplicate processing                      | OTA merge                                    | Current OTA-only duplicate suppression path                                  |
+| `indexed_invalid`          | Metadata exists, but the artifact could not be mirrored reliably                                 | OTA mirror                                   | Defined generically, but current IPSW mirror uses `mirroring_failed` instead |
+| `mirrored`                 | Artifact payload is present in GCS mirror storage                                                | IPSW mirror, OTA mirror                      | Input state for extraction                                                   |
+| `mirroring_failed`         | Apple download or verification failed during IPSW mirroring                                      | IPSW mirror                                  | Current IPSW failure state for mirror-stage problems                         |
+| `mirror_corrupt`           | Metadata points at a mirror object that cannot be downloaded or verified                         | IPSW extract                                 | Current IPSW-only emitted state                                              |
+| `delta_ota`                | OTA is a delta/patch update and has no full DSC                                                  | OTA extract                                  | Expected terminal-ish skip state, not an error                               |
+| `recovery_ota`             | OTA is a recovery image and has no usable DSC                                                    | OTA extract                                  | Expected terminal-ish skip state, not an error                               |
+| `unsupported_ota_payload`  | OTA references a DSC in payload/BOM metadata, but current tooling cannot materialize the payload | none in the default extractor                | Retained for existing rows and a future trusted classifier                   |
+| `symbols_extracted`        | Symbols were uploaded successfully                                                               | IPSW extract, OTA extract                    | Desired success state                                                        |
+| `symbol_extraction_failed` | Extraction, splitting, symsort, or symbol upload failed                                          | IPSW extract, OTA extract                    | Current main recovery state                                                  |
+| `ignored`                  | Manually excluded from processing                                                                | none                                         | Manual/operator-only concept; current automation does not assign it          |
 
 ## 5.1 IPSW source state diagram
 
@@ -419,7 +422,6 @@ stateDiagram-v2
     mirrored --> symbol_extraction_failed: extract/symsort/upload failed
     mirrored --> delta_ota: payload is a delta OTA
     mirrored --> recovery_ota: payload is a recovery OTA
-    mirrored --> unsupported_ota_payload: DSC referenced but current payload tooling cannot extract it
     mirrored --> indexed: mirrored zip missing
 
     symbol_extraction_failed --> mirrored: migrate-storage / manual retry
@@ -431,7 +433,7 @@ stateDiagram-v2
 - The persisted state lives directly on each **`OtaArtifact`**.
 - OTA metadata merge preserves `processing_state` and `download_path` for already-known artifacts.
 - `iter_mirror()` always reloads metadata and prefers the newest mirrored OTA first.
-- `unsupported_ota_payload` is a terminal skip state distinct from `delta_ota` / `recovery_ota`: the OTA references a DSC in payload/BOM metadata, but current tooling cannot materialize it. BOM-only evidence may describe post-state files rather than proving every DSC byte is present in the OTA. Admin curated reruns may reset it to `mirrored` after a runner/tooling change.
+- Existing `unsupported_ota_payload` rows remain terminal and may be reset to `mirrored` through an admin curated rerun. The default extractor no longer creates new rows from a `payload-extract` phase plus payload/BOM inventory alone; that evidence does not distinguish unsupported data from transient failures.
 - The current `ota migrate-storage` path resets **all** OTAs in `symbol_extraction_failed` back to `mirrored`.
 
 ## 5.3 Manual-only and domain-specific nuances

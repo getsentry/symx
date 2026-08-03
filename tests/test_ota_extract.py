@@ -9,6 +9,8 @@ from datetime import timedelta
 from pathlib import Path
 
 from symx.model import ArtifactProcessingState
+from symx.ota.model.ipsw_report import OtaDscReport, OtaDscReportError
+from symx.ota.model.materialization import OtaDscMaterializationError
 from symx.ota.model import (
     DeltaOtaError,
     OtaArtifact,
@@ -138,6 +140,30 @@ def test_extract_marks_failed_extraction(tmp_path: Path) -> None:
     storage.load_ota_returns = ota_file
 
     extractor = FakeOtaExtractor(error=OtaExtractError("test"))
+
+    OtaExtract(storage, extractor=extractor).extract(FakeTimeout(timedelta(minutes=5)))
+
+    assert storage.artifacts["key1"].processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
+
+
+def test_payload_extract_materialization_failure_is_marked_symbol_extraction_failed(tmp_path: Path) -> None:
+    storage = MockStorage({"key1": make_ota_artifact(id="key1")})
+    ota_file = tmp_path / "test.zip"
+    ota_file.touch()
+    storage.load_ota_returns = ota_file
+    report = OtaDscReport(
+        schema_version=1,
+        complete=False,
+        files=[],
+        errors=[
+            OtaDscReportError(
+                phase="payload-extract",
+                source="payloadv2",
+                message="transient I/O failure",
+            )
+        ],
+    )
+    extractor = FakeOtaExtractor(error=OtaDscMaterializationError("incomplete materialization", report))
 
     OtaExtract(storage, extractor=extractor).extract(FakeTimeout(timedelta(minutes=5)))
 
