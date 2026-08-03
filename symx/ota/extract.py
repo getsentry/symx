@@ -1,28 +1,35 @@
 """OTA extraction pipeline: DSC materialization, splitting, and symsort."""
 
 import logging
-import os
 import re
-import shutil
+import stat
 import subprocess
 import tempfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TypedDict
 
 import sentry_sdk
+import sentry_sdk.metrics
+from pydantic import ValidationError
+from sentry_sdk.tracing import Span
 
 from symx.diagnostics import (
-    DEFAULT_DIRECTORY_SAMPLE_ENTRIES,
-    decode_subprocess_output,
-    directory_data,
     format_command,
     subprocess_result_data,
     truncate_text,
 )
 from symx.model import Arch
-from symx.fs import list_dirs_in, rmdir_if_exists
+from symx.fs import rmdir_if_exists
 from symx.tools import dyld_split, symsort as common_symsort
+from symx.ota.model.ipsw_report import OtaDscReport, OtaDscReportFile
+from symx.ota.model.materialization import (
+    OtaDscMaterializationError,
+    OtaDscMaterializationRequest,
+    OtaDscMaterializationResult,
+    OtaDscProtocolError,
+    OtaDscSource,
+)
 from symx.ota.model import (
     DYLD_SHARED_CACHE,
     DSCSearchResult,
@@ -43,37 +50,11 @@ DYLD_BOM_ENTRY_RE = re.compile(
 DYLD_LISTING_ENTRY_RE = re.compile(
     r"(?:\./)?(?:System/DriverKit/)?System/Library/(?:dyld|Caches/com\.apple\.dyld)/dyld_shared_cache_[^\s/]+"
 )
-DYLD_AA_INCLUDE_REGEX = r"(System/DriverKit/)?System/Library/(dyld|Caches/com\.apple\.dyld)/dyld_shared_cache_"
-UNSUPPORTED_AA_ERROR_MARKERS = (
-    "invalid/non-supported archive stream",
-    "archive stream read error (header)",
-)
-MAX_AA_PROBE_OUTPUT_CHARS = 500
 MAX_IPSW_LISTING_PROBE_OUTPUT_CHARS = 1000
 AEA_MAGIC = b"AEA1"
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 _LEADING_IPSW_GLYPH_RE = re.compile(r"^\s*[•⨯]\s*")
-_OTA_ERROR_SUMMARY_MARKERS = (
-    "error",
-    "failed",
-    "invalid",
-    "not found",
-    "unable",
-    "unsupported",
-)
-
-
-class _DyldMaterializationCommandError(OtaExtractError):
-    """Raised when the primary ipsw OTA DSC operation returns non-zero."""
-
-
-class PayloadAaProbeResult(TypedDict):
-    payload: str
-    returncode: int
-    stdout: str | None
-    stderr: str | None
-    extracted_count: int
-    unsupported_error: bool
+IPSW_OTA_DSC_JSON_CONTRACT_RELEASE = "3.1.707"
 
 
 class PayloadListingProbeResult(TypedDict):
@@ -83,38 +64,9 @@ class PayloadListingProbeResult(TypedDict):
     dsc_entries: list[str]
 
 
-def _list_extract_dirs(output_dir: Path) -> list[Path]:
-    if not output_dir.exists() or not output_dir.is_dir():
-        return []
-    return list_dirs_in(output_dir)
-
-
-def _extract_dirs_data(output_dir: Path) -> list[dict[str, object]]:
-    extract_dirs = _list_extract_dirs(output_dir)
-    results: list[dict[str, object]] = []
-    for extract_dir in extract_dirs:
-        dsc_paths = _find_dsc_files(extract_dir)
-        supported_dsc_paths = _find_supported_dsc_files(extract_dir)
-        data = directory_data(extract_dir, max_entries=DEFAULT_DIRECTORY_SAMPLE_ENTRIES)
-        data["contains_dsc"] = bool(dsc_paths)
-        data["dsc_path_count"] = len(dsc_paths)
-        data["dsc_paths_sample"] = _relative_path_sample(extract_dir, dsc_paths)
-        data["supported_dsc_paths"] = _relative_path_sample(extract_dir, supported_dsc_paths)
-        results.append(data)
-    return results
-
-
 def _should_probe_unsupported_payload(error: OtaExtractError) -> bool:
-    message = str(error)
-    return any(
-        marker in message
-        for marker in (
-            f"Could not find {DYLD_SHARED_CACHE}",
-            f"OTA extraction produced no {DYLD_SHARED_CACHE} files",
-            f"OTA extraction produced no supported {DYLD_SHARED_CACHE} files",
-            f"Couldn't find any {DYLD_SHARED_CACHE} paths",
-            "payloadv2 pattern DSC extraction failed",
-        )
+    return isinstance(error, OtaDscMaterializationError) and any(
+        report_error.phase == "payload-extract" for report_error in error.report.errors
     )
 
 
@@ -160,41 +112,6 @@ def _read_post_bom_dsc_matches(artifact: Path) -> list[str]:
         return matches
 
 
-def _aa_result_indicates_unsupported_payload(stdout: str | bytes | None, stderr: str | bytes | None) -> bool:
-    combined = "\n".join(
-        part for part in (decode_subprocess_output(stdout), decode_subprocess_output(stderr)) if part
-    ).lower()
-    return any(marker in combined for marker in UNSUPPORTED_AA_ERROR_MARKERS)
-
-
-def _probe_payload_with_aa(artifact: Path, payload_name: str, pattern: str) -> PayloadAaProbeResult:
-    with tempfile.TemporaryDirectory(suffix="_ota_aa_probe") as aa_probe_dir:
-        output_dir = Path(aa_probe_dir) / "out"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        payload_input_path = Path(aa_probe_dir) / "payload_input.bin"
-
-        with zipfile.ZipFile(artifact) as archive:
-            with archive.open(payload_name) as payload_stream, payload_input_path.open("wb") as payload_input_file:
-                shutil.copyfileobj(payload_stream, payload_input_file)
-
-        with payload_input_path.open("rb") as payload_input_file:
-            result = subprocess.run(
-                ["aa", "extract", "-d", str(output_dir), "-include-regex", pattern],
-                stdin=payload_input_file,
-                capture_output=True,
-            )
-
-        extracted_count = sum(1 for path in output_dir.rglob("*") if path.is_file())
-        return {
-            "payload": payload_name,
-            "returncode": result.returncode,
-            "stdout": truncate_text(result.stdout, max_chars=MAX_AA_PROBE_OUTPUT_CHARS),
-            "stderr": truncate_text(result.stderr, max_chars=MAX_AA_PROBE_OUTPUT_CHARS),
-            "extracted_count": extracted_count,
-            "unsupported_error": _aa_result_indicates_unsupported_payload(result.stdout, result.stderr),
-        }
-
-
 def _dsc_entries_from_ipsw_listing(output: str) -> list[str]:
     entries: list[str] = []
     for raw_line in _strip_ansi(output).splitlines():
@@ -234,6 +151,7 @@ def _probe_aea_payload_listing_for_dsc(artifact: Path) -> PayloadListingProbeRes
 
 
 def _probe_unsupported_payload_format(artifact: Path) -> bool:
+    """Inspect OTA inventory after a structured payload-extract failure without materializing files."""
     with sentry_sdk.start_span(op="ota.extract.payload_probe", name="Probe unsupported OTA payload") as span:
         span.set_data("artifact", str(artifact))
 
@@ -288,28 +206,9 @@ def _probe_unsupported_payload_format(artifact: Path) -> bool:
                 return False
 
             payload_names = _payload_entry_names(artifact)
-            span.set_data("payload_probe_count", len(payload_names))
-            if not payload_names:
-                return False
-
-            results = [
-                _probe_payload_with_aa(artifact, payload_name, DYLD_AA_INCLUDE_REGEX) for payload_name in payload_names
-            ]
-            extracted_total = sum(result["extracted_count"] for result in results)
-            unsupported_errors = sum(1 for result in results if result["unsupported_error"])
-            other_errors = sum(1 for result in results if result["returncode"] != 0 and not result["unsupported_error"])
-            span.set_data(
-                "payload_probe_summary",
-                {
-                    "payloads_probed": len(results),
-                    "extracted_total": extracted_total,
-                    "unsupported_errors": unsupported_errors,
-                    "other_errors": other_errors,
-                },
-            )
-            span.set_data("payload_probe_results", results[:10])
-
-            unsupported = extracted_total == 0 and unsupported_errors > 0 and other_errors == 0
+            span.set_data("payload_member_count", len(payload_names))
+            span.set_data("payload_members_sample", payload_names[:10])
+            unsupported = bool(payload_names)
             span.set_data("unsupported_payload_format", unsupported)
             return unsupported
         except (FileNotFoundError, OSError, ValueError, zipfile.BadZipFile) as exc:
@@ -323,52 +222,6 @@ def _strip_ansi(text: str) -> str:
 
 def _normalize_ipsw_output_line(line: str) -> str:
     return _LEADING_IPSW_GLYPH_RE.sub("", line).strip()
-
-
-def _summarize_subprocess_failure(result: subprocess.CompletedProcess[bytes] | None) -> str | None:
-    if result is None:
-        return None
-
-    output = "\n".join(
-        part for part in (decode_subprocess_output(result.stderr), decode_subprocess_output(result.stdout)) if part
-    )
-    if not output:
-        return None
-
-    lines = [_normalize_ipsw_output_line(line) for line in _strip_ansi(output).splitlines() if line.strip()]
-    for line in reversed(lines):
-        if any(marker in line.lower() for marker in _OTA_ERROR_SUMMARY_MARKERS):
-            return line
-
-    return lines[-1] if lines else None
-
-
-def _find_dsc_files(directory: Path) -> list[Path]:
-    if not directory.is_dir():
-        return []
-    return sorted(path for path in directory.rglob(f"{DYLD_SHARED_CACHE}*") if path.is_file())
-
-
-def _supported_dsc_path_options(input_dir: Path) -> list[Path]:
-    return [input_dir / f"System/Library/dyld/{DYLD_SHARED_CACHE}_{arch}" for arch in Arch] + [
-        input_dir / f"System/Library/Caches/com.apple.dyld/{DYLD_SHARED_CACHE}_{arch}" for arch in Arch
-    ]
-
-
-def _find_supported_dsc_files(directory: Path) -> list[Path]:
-    return [dsc_path for dsc_path in _supported_dsc_path_options(directory) if dsc_path.is_file()]
-
-
-def _relative_path_sample(
-    root: Path, paths: list[Path], max_entries: int = DEFAULT_DIRECTORY_SAMPLE_ENTRIES
-) -> list[str]:
-    sample: list[str] = []
-    for path in paths[:max_entries]:
-        try:
-            sample.append(str(path.relative_to(root)))
-        except ValueError:
-            sample.append(str(path))
-    return sample
 
 
 def split_dsc(
@@ -416,41 +269,6 @@ def split_dsc(
     return split_dirs
 
 
-def find_dsc(input_dir: Path, version: str, build: str, output_dir: Path) -> list[DSCSearchResult]:
-    # TODO: are we also interested in the DriverKit dyld_shared_cache?
-    #  System/DriverKit/System/Library/dyld/
-    dsc_path_prefix_options = [
-        "System/Library/dyld/",
-        "System/Library/Caches/com.apple.dyld/",
-    ]
-
-    counter = 1
-    dsc_search_results: list[DSCSearchResult] = []
-    for path_prefix in dsc_path_prefix_options:
-        for arch in Arch:
-            dsc_path = input_dir / (path_prefix + DYLD_SHARED_CACHE + "_" + arch)
-            if os.path.isfile(dsc_path):
-                split_dir = output_dir / "split_symbols" / f"{version}_{build}_{arch}"
-
-                if any(split_dir == r.split_dir for r in dsc_search_results):
-                    split_dir = split_dir.parent / f"{split_dir.name}_{counter}"
-                    counter = counter + 1
-
-                dsc_search_results.append(DSCSearchResult(arch=Arch(arch), artifact=dsc_path, split_dir=split_dir))
-
-    if not dsc_search_results:
-        discovered_dsc_paths = _find_dsc_files(input_dir)
-        detail = ""
-        if discovered_dsc_paths:
-            detail = (
-                f"; found {len(discovered_dsc_paths)} {DYLD_SHARED_CACHE}-like files outside supported roots; "
-                f"sample={_relative_path_sample(input_dir, discovered_dsc_paths)}"
-            )
-        raise OtaExtractError(f"Couldn't find any {DYLD_SHARED_CACHE} paths in {input_dir}{detail}")
-
-    return dsc_search_results
-
-
 def symsort(dsc_split_dirs: list[Path], output_dir: Path, prefix: str, bundle_id: str) -> None:
     logger.info("Symsorting %d DSC split directories -> %s", len(dsc_split_dirs), output_dir)
 
@@ -496,126 +314,246 @@ def _classify_ota_failure(artifact: Path) -> type[Exception] | None:
     return None
 
 
-def _supported_dsc_count(output_dir: Path) -> int:
-    return sum(len(_find_supported_dsc_files(extract_dir)) for extract_dir in _list_extract_dirs(output_dir))
+def _parse_ota_dsc_report(
+    request: OtaDscMaterializationRequest,
+    result: subprocess.CompletedProcess[bytes],
+) -> OtaDscReport:
+    try:
+        return OtaDscReport.model_validate_json(result.stdout or b"")
+    except ValidationError as error:
+        raise OtaDscProtocolError(
+            f"ipsw did not return a valid schema-1 JSON report for {request.local_ota} "
+            f"(exit code {result.returncode}): {error.errors(include_url=False)[0]['msg']}"
+        ) from error
 
 
-def _validate_extract_output(artifact: Path, output_dir: Path) -> Path:
-    extract_dirs = _list_extract_dirs(output_dir)
-    if not extract_dirs:
-        raise OtaExtractError(f"Could not find {DYLD_SHARED_CACHE} in {artifact}")
-    if len(extract_dirs) > 1:
-        raise OtaExtractError(f"Found more than one image directory in {artifact}")
-    if not _find_supported_dsc_files(extract_dirs[0]):
-        raise OtaExtractError(f"OTA extraction produced no supported {DYLD_SHARED_CACHE} files for {artifact}")
-    return extract_dirs[0]
+def _validate_report_process_contract(
+    request: OtaDscMaterializationRequest,
+    result: subprocess.CompletedProcess[bytes],
+    report: OtaDscReport,
+) -> None:
+    if report.complete and report.errors:
+        raise OtaDscProtocolError(f"ipsw returned complete=true with structured errors for {request.local_ota}")
+    if not report.complete and not report.errors:
+        raise OtaDscProtocolError(f"ipsw returned complete=false without structured errors for {request.local_ota}")
+    if report.complete != (result.returncode == 0):
+        raise OtaDscProtocolError(
+            f"ipsw report completeness disagrees with exit code {result.returncode} for {request.local_ota}"
+        )
+    if report.complete and not report.files:
+        raise OtaDscProtocolError(f"ipsw returned a complete report with no DSC files for {request.local_ota}")
 
 
-def extract_ota(artifact: Path, output_dir: Path) -> Path:
-    """Materialize supported OTA DSCs behind the tactical ``ipsw`` compatibility seam."""
-    with sentry_sdk.start_span(op="subprocess.ipsw_ota_extract", name="Extract OTA DSC") as span:
-        span.set_data("artifact", str(artifact))
+def _reported_dsc_arch(path: PurePosixPath) -> str:
+    name = path.name
+    if name.startswith("aot_shared_cache."):
+        return "aot"
+    if not name.startswith(f"{DYLD_SHARED_CACHE}_"):
+        return ""
+    return name.removeprefix(f"{DYLD_SHARED_CACHE}_").split(".", 1)[0]
 
-        dyld_command = [
+
+def _validate_reported_files(
+    request: OtaDscMaterializationRequest,
+    report: OtaDscReport,
+) -> list[tuple[OtaDscReportFile, PurePosixPath, Path]]:
+    output_root = request.output_root.resolve(strict=False)
+    seen_paths: set[Path] = set()
+    validated: list[tuple[OtaDscReportFile, PurePosixPath, Path]] = []
+
+    for entry in report.files:
+        relative_path = PurePosixPath(entry.path)
+        if not relative_path.parts or relative_path.is_absolute() or ".." in relative_path.parts or "\\" in entry.path:
+            raise OtaDscProtocolError(
+                f"ipsw report path must be a relative path beneath {request.output_root}: {entry.path!r}"
+            )
+
+        artifact = request.output_root.joinpath(*relative_path.parts)
+        try:
+            resolved_artifact = artifact.resolve(strict=True)
+        except OSError as error:
+            raise OtaDscProtocolError(f"ipsw reported DSC is not an existing regular file: {entry.path!r}") from error
+
+        if not resolved_artifact.is_relative_to(output_root):
+            raise OtaDscProtocolError(
+                f"ipsw report path must be a relative path beneath {request.output_root}: {entry.path!r}"
+            )
+        if resolved_artifact in seen_paths:
+            raise OtaDscProtocolError(f"ipsw report contains duplicate path: {entry.path!r}")
+        seen_paths.add(resolved_artifact)
+
+        try:
+            mode = artifact.stat(follow_symlinks=False).st_mode
+        except OSError as error:
+            raise OtaDscProtocolError(f"ipsw reported DSC is not an existing regular file: {entry.path!r}") from error
+        if not stat.S_ISREG(mode):
+            raise OtaDscProtocolError(f"ipsw reported DSC is not a regular file: {entry.path!r}")
+
+        reported_arch = _reported_dsc_arch(relative_path)
+        if reported_arch != entry.arch:
+            raise OtaDscProtocolError(f"ipsw report architecture {entry.arch!r} does not match path {entry.path!r}")
+
+        validated.append((entry, relative_path, artifact))
+
+    return validated
+
+
+def _path_contains_sequence(parts: tuple[str, ...], sequence: tuple[str, ...]) -> bool:
+    width = len(sequence)
+    return any(parts[index : index + width] == sequence for index in range(len(parts) - width + 1))
+
+
+def _supported_dsc_source(
+    entry: OtaDscReportFile,
+    relative_path: PurePosixPath,
+    artifact: Path,
+) -> OtaDscSource | None:
+    try:
+        arch = Arch(entry.arch)
+    except ValueError:
+        return None
+
+    if relative_path.name != f"{DYLD_SHARED_CACHE}_{arch}":
+        return None
+
+    parts = relative_path.parts
+    if _path_contains_sequence(parts, ("System", "DriverKit", "System", "Library")):
+        return None
+    if _path_contains_sequence(parts, ("System", "x86Support", "System", "Library")):
+        return None
+
+    parent_parts = relative_path.parent.parts
+    supported_parent = parent_parts[-3:] == ("System", "Library", "dyld") or parent_parts[-4:] == (
+        "System",
+        "Library",
+        "Caches",
+        "com.apple.dyld",
+    )
+    if not supported_parent:
+        return None
+
+    return OtaDscSource(arch=arch, artifact=artifact)
+
+
+def _source_kind(source: str) -> str:
+    if source in {"ota-asset", "payloadv2"}:
+        return source
+    if source.startswith("cryptex-"):
+        return "cryptex"
+    return "unknown"
+
+
+def _set_materialization_report_data(span: Span, report: OtaDscReport) -> None:
+    span.set_data(
+        "report",
+        {
+            "schema_version": report.schema_version,
+            "complete": report.complete,
+            "reported_dsc_count": len(report.files),
+            "architectures": sorted({entry.arch for entry in report.files}),
+            "source_kinds": sorted({_source_kind(entry.source) for entry in report.files}),
+            "errors": [
+                {
+                    "phase": error.phase,
+                    "source": error.source,
+                    "message": truncate_text(error.message, max_chars=500),
+                }
+                for error in report.errors
+            ],
+        },
+    )
+
+
+def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationResult:
+    """Materialize and validate OTA DSCs through the single structured ipsw operation."""
+    with sentry_sdk.start_span(op="ota.extract.materialize_dsc", name="Materialize OTA DSCs") as span:
+        span.set_data("artifact", str(request.local_ota))
+        span.set_data("output_root", str(request.output_root))
+        span.set_data("platform", request.platform)
+        span.set_data("version", request.version)
+        span.set_data("build", request.build)
+        span.set_data("source_identity", request.bundle_id)
+        span.set_data("ipsw_contract_release", IPSW_OTA_DSC_JSON_CONTRACT_RELEASE)
+
+        command = [
             "ipsw",
             "--no-color",
             "ota",
             "extract",
-            str(artifact),
+            str(request.local_ota),
             "--dyld",
+            "--json",
             "--output",
-            str(output_dir),
+            str(request.output_root),
         ]
-        logger.info("Materializing OTA DSCs: %s", format_command(dyld_command))
-        # Let ipsw write directly to the workflow log while preventing an interactive payload prompt.
-        dyld_result = subprocess.run(dyld_command, stdin=subprocess.DEVNULL)
+        logger.info("Materializing OTA DSCs: %s", format_command(command))
+        try:
+            result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True)
+        except OSError as error:
+            span.set_status("internal_error")
+            span.set_data("failure_reason", str(error))
+            sentry_sdk.metrics.count("ota.extract.materialization.failed", 1, attributes={"platform": request.platform})
+            raise OtaDscProtocolError(f"Could not invoke OTA DSC materializer: {format_command(command)}") from error
+
         span.set_data(
-            "dyld_extract",
+            "subprocess",
             {
-                "command": format_command(dyld_command),
-                **subprocess_result_data(dyld_result),
+                "command": format_command(command),
+                **subprocess_result_data(result),
             },
         )
-        span.set_data("dyld_extract_dirs", _extract_dirs_data(output_dir))
-
-        if dyld_result.returncode != 0:
-            span.set_status("internal_error")
-            failure_reason = (
-                f"OTA DSC materialization failed for {artifact} with exit code {dyld_result.returncode}: "
-                f"{format_command(dyld_command)}"
-            )
-            span.set_data("extract_failure_reason", failure_reason)
-            raise _DyldMaterializationCommandError(failure_reason)
-
-        literal_result: subprocess.CompletedProcess[bytes] | None = None
-        pattern_result: subprocess.CompletedProcess[bytes] | None = None
-        if _supported_dsc_count(output_dir) == 0:
-            # ipsw 3.1.702 can return zero from --dyld without executing its payload fallback. Keep the
-            # pre-existing literal/pattern sequence temporarily, but only for that exact zero-result case.
-            logger.info(
-                "ipsw --dyld produced no supported DSC for %s; trying the temporary compatibility fallback",
-                artifact.name,
-            )
-            rmdir_if_exists(output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-            literal_result = subprocess.run(
-                [
-                    "ipsw",
-                    "ota",
-                    "extract",
-                    str(artifact),
-                    DYLD_SHARED_CACHE,
-                    "-o",
-                    str(output_dir),
-                ],
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-            )
-            if _supported_dsc_count(output_dir) == 0:
-                # Modern payloadv2 OTAs (for example watchOS) can store the DSC in numbered payload chunks.
-                # Note: -d -y should work but is buggy in ipsw <=3.1.655.
-                logger.info("Literal DSC extraction failed, trying payloadv2 pattern search for %s", artifact.name)
-                pattern_result = subprocess.run(
-                    [
-                        "ipsw",
-                        "ota",
-                        "extract",
-                        str(artifact),
-                        "-p",
-                        DYLD_SHARED_CACHE,
-                        "-y",
-                        "-o",
-                        str(output_dir),
-                    ],
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                )
-
-        span.set_data("literal_extract", subprocess_result_data(literal_result))
-        span.set_data("payloadv2_pattern_extract", subprocess_result_data(pattern_result))
-        span.set_data("extract_dirs", _extract_dirs_data(output_dir))
-
-        if pattern_result is not None and pattern_result.returncode != 0:
-            span.set_status("internal_error")
-            summary = _summarize_subprocess_failure(pattern_result)
-            detail = f": {summary}" if summary else ""
-            failure_reason = (
-                f"payloadv2 pattern DSC extraction failed for {artifact} "
-                f"with exit code {pattern_result.returncode}{detail}"
-            )
-            span.set_data("extract_failure_reason", failure_reason)
-            raise OtaExtractError(failure_reason)
+        stderr = truncate_text(result.stderr)
+        if stderr is not None:
+            logger.info("ipsw OTA DSC diagnostics for %s:\n%s", request.local_ota.name, stderr)
 
         try:
-            extract_dir = _validate_extract_output(artifact, output_dir)
+            report = _parse_ota_dsc_report(request, result)
+            _set_materialization_report_data(span, report)
+            _validate_report_process_contract(request, result, report)
+            validated_files = _validate_reported_files(request, report)
+            dscs = tuple(
+                dsc
+                for entry, relative_path, artifact in validated_files
+                if (dsc := _supported_dsc_source(entry, relative_path, artifact)) is not None
+            )
+            span.set_data(
+                "report_validation",
+                {
+                    "validated_dsc_count": len(validated_files),
+                    "supported_primary_dsc_count": len(dscs),
+                },
+            )
+
+            if not report.complete:
+                phases = ", ".join(sorted({error.phase for error in report.errors}))
+                raise OtaDscMaterializationError(
+                    f"OTA DSC materialization was incomplete for {request.local_ota} "
+                    f"with exit code {result.returncode}; phases={phases}",
+                    report,
+                )
+            if not dscs:
+                architectures = ", ".join(sorted({entry.arch for entry in report.files}))
+                raise OtaDscMaterializationError(
+                    f"OTA DSC materialization produced no supported primary {DYLD_SHARED_CACHE} files "
+                    f"for {request.local_ota}; reported architectures={architectures}",
+                    report,
+                )
         except OtaExtractError as error:
             span.set_status("internal_error")
-            span.set_data("extract_failure_reason", str(error))
+            span.set_data("failure_reason", str(error))
+            sentry_sdk.metrics.count("ota.extract.materialization.failed", 1, attributes={"platform": request.platform})
+            if isinstance(error, OtaDscMaterializationError) and not error.report.complete:
+                sentry_sdk.metrics.count(
+                    "ota.extract.materialization.incomplete", 1, attributes={"platform": request.platform}
+                )
             raise
 
-        logger.info("Successfully extracted DSC from %s", artifact.name)
-        return extract_dir
+        sentry_sdk.metrics.count("ota.extract.materialization.succeeded", 1, attributes={"platform": request.platform})
+        sentry_sdk.metrics.distribution(
+            "ota.extract.materialized_dscs", len(validated_files), attributes={"platform": request.platform}
+        )
+        logger.info("Materialized %d supported DSC(s) from %s", len(dscs), request.local_ota.name)
+        return OtaDscMaterializationResult(dscs=dscs)
 
 
 def extract_symbols(request: OtaExtractionRequest) -> list[Path]:
@@ -626,10 +564,16 @@ def extract_symbols(request: OtaExtractionRequest) -> list[Path]:
 def _process_ota(request: OtaExtractionRequest) -> list[Path]:
     try:
         with tempfile.TemporaryDirectory(suffix="_dsc_extract") as extract_dsc_tmp_dir:
-            extracted_dsc_dir = extract_ota(request.local_ota, Path(extract_dsc_tmp_dir))
+            materialization_request = OtaDscMaterializationRequest.from_extraction_request(
+                request,
+                output_root=Path(extract_dsc_tmp_dir),
+            )
+            materialized = extract_ota(materialization_request)
             logger.info("Splitting & symsorting DSC for %s", request.local_ota.name)
-            return _split_and_symsort_dsc(extracted_dsc_dir, request)
-    except _DyldMaterializationCommandError:
+            search_results = _dsc_search_results(materialized.dscs, request)
+            split_dirs = split_dsc(search_results)
+            return _symsort_split_results(split_dirs, request.platform, request.bundle_id, request.work_dir)
+    except OtaDscProtocolError:
         raise
     except OtaExtractError as error:
         error_cls = _classify_ota_failure(request.local_ota)
@@ -640,9 +584,20 @@ def _process_ota(request: OtaExtractionRequest) -> list[Path]:
         raise
 
 
-def _split_and_symsort_dsc(input_dir: Path, request: OtaExtractionRequest) -> list[Path]:
-    split_dirs = split_dsc(find_dsc(input_dir, request.version, request.build, request.work_dir))
-    return _symsort_split_results(split_dirs, request.platform, request.bundle_id, request.work_dir)
+def _dsc_search_results(
+    dscs: tuple[OtaDscSource, ...],
+    request: OtaExtractionRequest,
+) -> list[DSCSearchResult]:
+    arch_counts: dict[Arch, int] = {}
+    search_results: list[DSCSearchResult] = []
+    for dsc in dscs:
+        occurrence = arch_counts.get(dsc.arch, 0)
+        arch_counts[dsc.arch] = occurrence + 1
+        split_dir = request.work_dir / "split_symbols" / f"{request.version}_{request.build}_{dsc.arch}"
+        if occurrence:
+            split_dir = split_dir.parent / f"{split_dir.name}_{occurrence}"
+        search_results.append(DSCSearchResult(arch=dsc.arch, artifact=dsc.artifact, split_dir=split_dir))
+    return search_results
 
 
 def _symsort_split_results(split_dirs: list[Path], platform: str, bundle_id: str, output_dir: Path) -> list[Path]:

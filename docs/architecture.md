@@ -139,20 +139,22 @@ Workflow: [`symx-ota-extract.yml`](../.github/workflows/symx-ota-extract.yml)
 2. The job runs `symx ota extract -t 330 -s $SYMX_STORE`.
 3. `iter_mirror()` continuously reloads OTA metadata from GCS and always yields the newest mirrored OTA first.
 4. For each mirrored OTA:
-   - download the mirrored zip from GCS,
-   - invoke `ipsw --no-color ota extract <OTA> --dyld --output <dir>` so `ipsw` owns direct,
-     payload, and cryptex DSC materialization and any temporary mounts,
-   - validate that the command materialized a DSC in a supported location,
+   - download the mirrored OTA from GCS,
+   - invoke `ipsw --no-color ota extract <OTA> --dyld --json --output <dir>` exactly once so `ipsw` owns
+     direct, payload, and cryptex DSC materialization and any temporary mounts,
+   - parse the schema-1 report into strict typed models,
+   - require a complete, exit-zero report and independently validate every reported path as a regular file
+     beneath the operation output root,
+   - pass the supported primary DSCs named by the report to the split stage without scanning the output tree,
    - split each supported DSC into an architecture-specific directory,
    - symsort all split directories together so one architecture cannot replace another's output,
    - upload symbol files,
    - update the OTA state.
 
-The pinned `ipsw` 3.1.702 can exit zero from `--dyld` without running its payload search. As a temporary
-compatibility bridge, and only for that zero-result/no-supported-DSC case, Symx retries the previous literal
-filename and confirmed payload-pattern extraction sequence. A non-zero `--dyld` result is an extraction failure
-and does not select another materialization command. Symx no longer invokes the removed top-level `ipsw ota patch`
-interface or owns OTA cryptex mount lifecycle.
+Production pins `ipsw` 3.1.707, the first release with the required structured operation. There is no literal,
+payload-pattern, or other materialization fallback after the JSON operation. Incomplete reports and partial files
+are rejected before split, symsort, or upload. Human stderr is retained only as bounded diagnostic data and does
+not drive control flow. Symx does not own OTA cryptex mount lifecycle.
 
 Special OTA-only exits:
 

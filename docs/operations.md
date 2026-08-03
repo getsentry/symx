@@ -77,7 +77,7 @@ Requirements:
 
 For IPSW extraction, Symx also ships a vendored AEA PEM DB snapshot at `symx/ipsw/data/fcs-keys.json` and passes it to `ipsw` via `--pem-db` before `ipsw` falls back to live Apple FCS-key lookup. Refresh that file from upstream `ipsw/pkg/aea/data/fcs-keys.gz` when newly mirrored IPSWs start failing with AEA/FCS-key 403s on GitHub macOS runners. Before the high-level `ipsw mount sys` / `ipsw extract --dyld` steps, Symx also does a small AEA preflight against the selected DMG member so failures can be classified as key-resolution problems earlier.
 
-In practice, the extraction paths are run on **macOS** in production because they rely on the `ipsw` toolchain, DMG mount flows, and the platform-specific `symsorter` binary. For OTA DSC materialization, Symx invokes `ipsw ota extract --dyld`; `ipsw` owns any cryptex patching and temporary mount lifecycle.
+In practice, the extraction paths are run on **macOS** in production because they rely on the `ipsw` toolchain, DMG mount flows, and the platform-specific `symsorter` binary. For OTA DSC materialization, Symx requires the structured `ipsw ota extract --dyld --json` contract delivered in `ipsw` 3.1.707; `ipsw` owns any cryptex patching and temporary mount lifecycle.
 
 ### Simulator extraction
 
@@ -131,13 +131,16 @@ uv run symx ota extract-file /path/to/file.zip -p ios -V 18.2 -b 22C152 -o /tmp/
 What it does:
 
 - validates `ipsw` and `./symsorter`,
-- first runs non-interactive `ipsw --no-color ota extract <OTA> --dyld --output <dir>`,
-- accepts that operation only when it materializes a supported DSC,
-- temporarily uses the pinned-version literal/payload compatibility fallback only when `--dyld` exits zero without a supported DSC,
+- runs non-interactive `ipsw --no-color ota extract <OTA> --dyld --json --output <dir>` exactly once,
+- strictly parses the schema-1 report and requires it to be complete and consistent with the process exit code,
+- verifies every reported path remains beneath the temporary output root and names an existing regular file,
+- passes only supported primary DSCs from the validated report to split,
+- rejects partial or incomplete materialization before split, symsort, or upload,
 - splits the materialized caches and symsorts all supported architectures in one invocation,
 - prints the output directories containing the symsorter result.
 
-A non-zero `--dyld` result is surfaced immediately and does not trigger the compatibility fallback.
+There is no second materialization syntax or human-log-based fallback. Structured errors and bounded stderr are
+retained for diagnostics; post-failure OTA probes do not materialize symbols.
 
 ## 2.2 GCS-backed runs from your machine
 
@@ -448,7 +451,7 @@ Common child span ops include:
 - `subprocess.dyld_split`
 - `subprocess.symsort`
 - `subprocess.ipsw_extract`
-- `subprocess.ipsw_ota_extract`
+- `ota.extract.materialize_dsc`
 - `ota.extract.payload_probe`
 
 ### High-value tags
@@ -488,6 +491,10 @@ Representative counters/distributions/gauges emitted by the current code:
 - `ota.mirror.failed`
 - `ota.extract.succeeded`
 - `ota.extract.failed`
+- `ota.extract.materialization.succeeded`
+- `ota.extract.materialization.failed`
+- `ota.extract.materialization.incomplete`
+- `ota.extract.materialized_dscs`
 - `ota.extract.skipped_delta`
 - `ota.extract.skipped_recovery`
 - `ota.extract.skipped_unsupported_payload`
