@@ -220,8 +220,7 @@ def _probe_payload_dsc_inventory(artifact: Path) -> None:
             payload_names = _payload_entry_names(artifact)
             span.set_data("payload_member_count", len(payload_names))
             span.set_data("payload_members_sample", payload_names[:10])
-            dsc_referenced = bool(payload_names)
-            span.set_data("dsc_referenced", dsc_referenced)
+            span.set_data("dsc_referenced", True)
         except (FileNotFoundError, OSError, ValueError, zipfile.BadZipFile) as exc:
             span.set_data("payload_probe_error", str(exc))
 

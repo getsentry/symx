@@ -1440,11 +1440,21 @@ def test_probe_payload_dsc_inventory_uses_zip_inventory_without_materializing(
     assert _probe_payload_dsc_inventory(artifact) is None
 
 
-def test_probe_payload_dsc_inventory_handles_zip_without_payload_members(
+def test_probe_payload_dsc_inventory_keeps_zip_bom_evidence_without_payload_members(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = Path("/tmp/test.zip")
+    span_data: dict[str, object] = {}
 
+    class RecordingSpan:
+        def set_data(self, key: str, value: object) -> None:
+            span_data[key] = value
+
+    @contextmanager
+    def recording_span(*args: object, **kwargs: object) -> Generator[RecordingSpan]:
+        yield RecordingSpan()
+
+    monkeypatch.setattr("symx.ota.extract.sentry_sdk.start_span", recording_span)
     monkeypatch.setattr("symx.ota.extract._ota_is_zip_archive", lambda artifact: True)
     monkeypatch.setattr(
         "symx.ota.extract._read_post_bom_dsc_matches",
@@ -1453,6 +1463,8 @@ def test_probe_payload_dsc_inventory_handles_zip_without_payload_members(
     monkeypatch.setattr("symx.ota.extract._payload_entry_names", lambda artifact: [])
 
     assert _probe_payload_dsc_inventory(artifact) is None
+    assert span_data["dsc_referenced"] is True
+    assert span_data["payload_member_count"] == 0
 
 
 def test_dsc_entries_from_ipsw_listing_parses_payload_and_bom_listing() -> None:
