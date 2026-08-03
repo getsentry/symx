@@ -45,6 +45,7 @@ from symx.ota.model import (
     DSCSearchResult,
     OtaExtractError,
     OtaExtractionRequest,
+    RecoveryOtaError,
 )
 from symx.tools import symsort as tool_symsort
 from symx.ota.extract import (
@@ -1436,10 +1437,10 @@ def test_probe_payload_dsc_inventory_uses_zip_inventory_without_materializing(
         lambda *args, **kwargs: pytest.fail("the failure probe must not materialize payload files"),
     )
 
-    assert _probe_payload_dsc_inventory(artifact) is True
+    assert _probe_payload_dsc_inventory(artifact) is None
 
 
-def test_probe_payload_dsc_inventory_returns_false_without_payload_members(
+def test_probe_payload_dsc_inventory_handles_zip_without_payload_members(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = Path("/tmp/test.zip")
@@ -1451,7 +1452,7 @@ def test_probe_payload_dsc_inventory_returns_false_without_payload_members(
     )
     monkeypatch.setattr("symx.ota.extract._payload_entry_names", lambda artifact: [])
 
-    assert _probe_payload_dsc_inventory(artifact) is False
+    assert _probe_payload_dsc_inventory(artifact) is None
 
 
 def test_dsc_entries_from_ipsw_listing_parses_payload_and_bom_listing() -> None:
@@ -1478,7 +1479,7 @@ def test_dsc_entries_from_ipsw_listing_parses_payload_and_bom_listing() -> None:
     ]
 
 
-def test_probe_payload_dsc_inventory_returns_true_for_aea_with_dsc_listing(
+def test_probe_payload_dsc_inventory_records_aea_dsc_listing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = Path("/tmp/test.aea")
@@ -1495,10 +1496,10 @@ def test_probe_payload_dsc_inventory_returns_true_for_aea_with_dsc_listing(
         },
     )
 
-    assert _probe_payload_dsc_inventory(artifact) is True
+    assert _probe_payload_dsc_inventory(artifact) is None
 
 
-def test_probe_payload_dsc_inventory_returns_true_for_aea_with_bom_dsc_references(
+def test_probe_payload_dsc_inventory_records_aea_bom_dsc_references(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = Path("/tmp/test.aea")
@@ -1524,10 +1525,10 @@ def test_probe_payload_dsc_inventory_returns_true_for_aea_with_bom_dsc_reference
         },
     )
 
-    assert _probe_payload_dsc_inventory(artifact) is True
+    assert _probe_payload_dsc_inventory(artifact) is None
 
 
-def test_probe_payload_dsc_inventory_returns_false_for_aea_without_dsc_references(
+def test_probe_payload_dsc_inventory_handles_aea_without_dsc_references(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = Path("/tmp/test.aea")
@@ -1553,7 +1554,7 @@ def test_probe_payload_dsc_inventory_returns_false_for_aea_without_dsc_reference
         },
     )
 
-    assert _probe_payload_dsc_inventory(artifact) is False
+    assert _probe_payload_dsc_inventory(artifact) is None
 
 
 def test_extract_symbols_keeps_payload_extract_failure_as_materialization_error_when_dsc_is_referenced(
@@ -1582,11 +1583,14 @@ def test_extract_symbols_keeps_payload_extract_failure_as_materialization_error_
         "symx.ota.extract.extract_ota",
         lambda materialization_request: (_ for _ in ()).throw(materialization_error),
     )
-    monkeypatch.setattr("symx.ota.extract._classify_ota_failure", lambda artifact: None)
+    monkeypatch.setattr(
+        "symx.ota.extract._classify_ota_failure",
+        lambda artifact: pytest.fail("materialization-phase failures must not be reclassified"),
+    )
     inventory_probes: list[Path] = []
     monkeypatch.setattr(
         "symx.ota.extract._probe_payload_dsc_inventory",
-        lambda artifact: inventory_probes.append(artifact) or True,
+        lambda artifact: inventory_probes.append(artifact),
     )
 
     with pytest.raises(OtaDscMaterializationError) as exc_info:
@@ -1594,3 +1598,47 @@ def test_extract_symbols_keeps_payload_extract_failure_as_materialization_error_
 
     assert exc_info.value is materialization_error
     assert inventory_probes == [artifact]
+
+
+def test_extract_symbols_classifies_plain_no_dsc_materialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "test.ota"
+    artifact.touch()
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="recovery",
+        version="27.0",
+        build="24A1",
+        bundle_id="ota_test",
+    )
+    report = OtaDscReport.model_validate_json(
+        _ota_dsc_report(
+            complete=False,
+            files=[],
+            errors=[{"phase": "dsc-discovery", "source": "", "message": "no caches"}],
+        )
+    )
+    materialization_error = OtaDscMaterializationError("no DSC materialized", report)
+    monkeypatch.setattr(
+        "symx.ota.extract.extract_ota",
+        lambda materialization_request: (_ for _ in ()).throw(materialization_error),
+    )
+    classified_artifacts: list[Path] = []
+
+    def classify(artifact: Path) -> type[Exception] | None:
+        classified_artifacts.append(artifact)
+        return RecoveryOtaError
+
+    monkeypatch.setattr("symx.ota.extract._classify_ota_failure", classify)
+    monkeypatch.setattr(
+        "symx.ota.extract._probe_payload_dsc_inventory",
+        lambda artifact: pytest.fail("plain no-DSC reports do not need payload inventory diagnostics"),
+    )
+
+    with pytest.raises(RecoveryOtaError) as exc_info:
+        extract_symbols(request)
+
+    assert exc_info.value.__cause__ is materialization_error
+    assert classified_artifacts == [artifact]

@@ -69,6 +69,17 @@ def _should_probe_payload_inventory(error: OtaExtractError) -> bool:
     )
 
 
+def _is_plain_no_dsc_materialization(error: OtaExtractError) -> bool:
+    """Distinguish a no-file result from source-phase or downstream failures."""
+    if not isinstance(error, OtaDscMaterializationError):
+        return False
+    return (
+        not error.report.files
+        and bool(error.report.errors)
+        and all(report_error.phase == "dsc-discovery" for report_error in error.report.errors)
+    )
+
+
 def _ota_is_zip_archive(artifact: Path) -> bool:
     try:
         return zipfile.is_zipfile(artifact)
@@ -149,8 +160,8 @@ def _probe_aea_payload_listing_for_dsc(artifact: Path) -> PayloadListingProbeRes
     }
 
 
-def _probe_payload_dsc_inventory(artifact: Path) -> bool:
-    """Inspect DSC inventory after a structured payload-extract failure without materializing files."""
+def _probe_payload_dsc_inventory(artifact: Path) -> None:
+    """Record DSC inventory after a payload-extract failure without materializing files."""
     with sentry_sdk.start_span(op="ota.extract.payload_probe", name="Inspect OTA payload DSC inventory") as span:
         span.set_data("artifact", str(artifact))
 
@@ -160,7 +171,8 @@ def _probe_payload_dsc_inventory(artifact: Path) -> bool:
                 is_aea_archive = _ota_is_aea_archive(artifact)
                 span.set_data("is_aea_archive", is_aea_archive)
                 if not is_aea_archive:
-                    return False
+                    span.set_data("dsc_referenced", False)
+                    return
 
                 payload_listing = _probe_aea_payload_listing_for_dsc(artifact)
                 payload_dsc_entries = payload_listing["dsc_entries"]
@@ -176,7 +188,7 @@ def _probe_payload_dsc_inventory(artifact: Path) -> bool:
                 )
                 if payload_listing["returncode"] == 0 and payload_dsc_entries:
                     span.set_data("dsc_referenced", True)
-                    return True
+                    return
 
                 # `ipsw ota ls --bom` can describe post-state files for partial OTAs, so BOM matches are
                 # evidence that the OTA references a DSC, not proof that every DSC byte is present.
@@ -194,7 +206,7 @@ def _probe_payload_dsc_inventory(artifact: Path) -> bool:
                 )
                 dsc_referenced = bom_listing["returncode"] == 0 and bool(bom_dsc_entries)
                 span.set_data("dsc_referenced", dsc_referenced)
-                return dsc_referenced
+                return
 
             span.set_data("is_zip_archive", True)
             span.set_data("is_aea_archive", False)
@@ -202,17 +214,16 @@ def _probe_payload_dsc_inventory(artifact: Path) -> bool:
             span.set_data("post_bom_dsc_match_count", len(bom_matches))
             span.set_data("post_bom_dsc_matches", bom_matches[:10])
             if not bom_matches:
-                return False
+                span.set_data("dsc_referenced", False)
+                return
 
             payload_names = _payload_entry_names(artifact)
             span.set_data("payload_member_count", len(payload_names))
             span.set_data("payload_members_sample", payload_names[:10])
             dsc_referenced = bool(payload_names)
             span.set_data("dsc_referenced", dsc_referenced)
-            return dsc_referenced
         except (FileNotFoundError, OSError, ValueError, zipfile.BadZipFile) as exc:
             span.set_data("payload_probe_error", str(exc))
-            return False
 
 
 def _strip_ansi(text: str) -> str:
@@ -576,9 +587,10 @@ def _process_ota(request: OtaExtractionRequest) -> list[Path]:
     except OtaDscProtocolError:
         raise
     except OtaExtractError as error:
-        error_cls = _classify_ota_failure(request.local_ota)
-        if error_cls is not None:
-            raise error_cls(f"{error_cls.__name__}: {request.local_ota}") from error
+        if _is_plain_no_dsc_materialization(error):
+            error_cls = _classify_ota_failure(request.local_ota)
+            if error_cls is not None:
+                raise error_cls(f"{error_cls.__name__}: {request.local_ota}") from error
         if _should_probe_payload_inventory(error):
             _probe_payload_dsc_inventory(request.local_ota)
         raise

@@ -154,7 +154,9 @@ Workflow: [`symx-ota-extract.yml`](../.github/workflows/symx-ota-extract.yml)
 Production pins `ipsw` 3.1.707, the first release with the required structured operation. There is no literal,
 payload-pattern, or other materialization fallback after the JSON operation. Incomplete reports and partial files
 are rejected before split, symsort, or upload. Human stderr is retained only as bounded diagnostic data and does
-not drive control flow. Symx does not own OTA cryptex mount lifecycle.
+not drive control flow. Only plain no-file reports containing exclusively `dsc-discovery` errors are eligible for
+delta/recovery classification; source-phase and downstream failures remain `symbol_extraction_failed`. Symx does
+not own OTA cryptex mount lifecycle.
 
 Special OTA-only exits:
 
