@@ -1,4 +1,9 @@
-"""OTA data models, constants, protocols, exceptions, and type aliases."""
+"""Core OTA domain models, interfaces, and shared errors.
+
+Persisted ``OtaArtifact`` data uses Pydantic validation; trusted runtime values
+use dataclasses. The external ipsw schema and its adapter values live in
+the ``ipsw_report`` and ``materialization`` submodules respectively.
+"""
 
 import logging
 from collections.abc import Callable
@@ -95,9 +100,8 @@ class OtaExtractionRequest:
         )
 
 
-class DSCSearchResult(BaseModel):
-    model_config = {"frozen": True}
-
+@dataclass(frozen=True)
+class DSCSearchResult:
     arch: Arch
     artifact: Path
     split_dir: Path

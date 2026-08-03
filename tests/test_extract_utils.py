@@ -15,7 +15,6 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 from subprocess import CompletedProcess
-from typing import BinaryIO, cast
 
 import pytest
 
@@ -36,17 +35,25 @@ from symx.ipsw.extract import (
     inspect_ipsw_product_metadata,
     map_platform_to_prefix,
 )
-from symx.ota.model import DSCSearchResult, OtaExtractError, OtaExtractionRequest, UnsupportedOtaPayloadError
+from symx.ota.model.ipsw_report import OtaDscReport
+from symx.ota.model.materialization import (
+    OtaDscMaterializationError,
+    OtaDscMaterializationRequest,
+    OtaDscProtocolError,
+)
+from symx.ota.model import (
+    DSCSearchResult,
+    OtaExtractError,
+    OtaExtractionRequest,
+    RecoveryOtaError,
+)
 from symx.tools import symsort as tool_symsort
 from symx.ota.extract import (
-    DYLD_AA_INCLUDE_REGEX,
     _dsc_entries_from_ipsw_listing,
-    _probe_payload_with_aa,
-    _probe_unsupported_payload_format,
+    _probe_payload_dsc_inventory,
     _symsort_split_results,
     extract_ota,
     extract_symbols,
-    find_dsc,
     split_dsc,
 )
 
@@ -1033,109 +1040,6 @@ def test_split_dsc_empty_input_raises() -> None:
         split_dsc([], splitter=make_splitter([]))
 
 
-# --- find_dsc tests ---
-
-
-def test_find_dsc_standard_path() -> None:
-    """Find DSC in System/Library/dyld/ location."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_dir = Path(tmpdir) / "input"
-        output_dir = Path(tmpdir) / "output"
-
-        # Create DSC file in standard location
-        dsc_dir = input_dir / "System/Library/dyld"
-        dsc_dir.mkdir(parents=True)
-        (dsc_dir / "dyld_shared_cache_arm64e").touch()
-
-        results = find_dsc(input_dir, "17.0", "21A100", output_dir)
-
-        assert len(results) == 1
-        assert results[0].arch == Arch.ARM64E
-        assert results[0].artifact == dsc_dir / "dyld_shared_cache_arm64e"
-
-
-def test_find_dsc_cache_path() -> None:
-    """Find DSC in com.apple.dyld cache location."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_dir = Path(tmpdir) / "input"
-        output_dir = Path(tmpdir) / "output"
-
-        dsc_dir = input_dir / "System/Library/Caches/com.apple.dyld"
-        dsc_dir.mkdir(parents=True)
-        (dsc_dir / "dyld_shared_cache_arm64").touch()
-
-        results = find_dsc(input_dir, "17.0", "21A100", output_dir)
-
-        assert len(results) == 1
-        assert results[0].arch == Arch.ARM64
-
-
-def test_find_dsc_multiple_architectures() -> None:
-    """Find multiple DSC files for different architectures."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_dir = Path(tmpdir) / "input"
-        output_dir = Path(tmpdir) / "output"
-
-        dsc_dir = input_dir / "System/Library/dyld"
-        dsc_dir.mkdir(parents=True)
-        (dsc_dir / "dyld_shared_cache_arm64e").touch()
-        (dsc_dir / "dyld_shared_cache_arm64").touch()
-
-        results = find_dsc(input_dir, "17.0", "21A100", output_dir)
-
-        assert len(results) == 2
-        arches = {r.arch for r in results}
-        assert arches == {Arch.ARM64E, Arch.ARM64}
-
-
-def test_find_dsc_no_dsc_raises_error() -> None:
-    """Should raise OtaExtractError if no DSC found."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_dir = Path(tmpdir) / "input"
-        input_dir.mkdir()
-        output_dir = Path(tmpdir) / "output"
-
-        with pytest.raises(OtaExtractError, match="Couldn't find any dyld_shared_cache"):
-            find_dsc(input_dir, "17.0", "21A100", output_dir)
-
-
-def test_find_dsc_error_includes_sample_for_unsupported_dsc_layout() -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_dir = Path(tmpdir) / "input"
-        output_dir = Path(tmpdir) / "output"
-        driverkit_dsc_dir = input_dir / "System/DriverKit/System/Library/dyld"
-        driverkit_dsc_dir.mkdir(parents=True)
-        (driverkit_dsc_dir / "dyld_shared_cache_arm64e").touch()
-
-        with pytest.raises(OtaExtractError, match="outside supported roots") as exc_info:
-            find_dsc(input_dir, "17.0", "21A100", output_dir)
-
-        assert "System/DriverKit/System/Library/dyld/dyld_shared_cache_arm64e" in str(exc_info.value)
-
-
-def test_find_dsc_generates_unique_split_dirs() -> None:
-    """Split dirs should be unique even if same arch found in multiple locations."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_dir = Path(tmpdir) / "input"
-        output_dir = Path(tmpdir) / "output"
-
-        # Create same arch in two different locations
-        loc1 = input_dir / "System/Library/dyld"
-        loc1.mkdir(parents=True)
-        (loc1 / "dyld_shared_cache_arm64e").touch()
-
-        loc2 = input_dir / "System/Library/Caches/com.apple.dyld"
-        loc2.mkdir(parents=True)
-        (loc2 / "dyld_shared_cache_arm64e").touch()
-
-        results = find_dsc(input_dir, "17.0", "21A100", output_dir)
-
-        # Should find both, with unique split_dirs
-        assert len(results) == 2
-        split_dirs = [r.split_dir for r in results]
-        assert len(set(split_dirs)) == 2  # All unique
-
-
 # --- OTA symsort tests ---
 
 
@@ -1193,64 +1097,288 @@ def test_symsort_split_results_processes_all_architectures_together(
 # --- extract_ota tests ---
 
 
-def test_extract_ota_uses_primary_dyld_materialization(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    artifact = Path("/tmp/test.ota")
-    output_dir = tmp_path / "output"
-    image_dir = output_dir / "21A100__Device1,1"
+def _ota_materialization_request(tmp_path: Path) -> OtaDscMaterializationRequest:
+    artifact = tmp_path / "test.ota"
+    artifact.touch()
+    return OtaDscMaterializationRequest(
+        local_ota=artifact,
+        output_root=tmp_path / "materialized",
+        platform="macos",
+        version="15.7.7",
+        build="24G720",
+        bundle_id="ota_test",
+    )
+
+
+def _ota_dsc_report(
+    *,
+    complete: bool,
+    files: list[dict[str, str]],
+    errors: list[dict[str, str]] | None = None,
+    schema_version: int = 1,
+) -> bytes:
+    return json.dumps(
+        {
+            "schema_version": schema_version,
+            "complete": complete,
+            "files": files,
+            "errors": errors or [],
+        }
+    ).encode()
+
+
+def _touch_reported_file(output_root: Path, relative_path: str) -> Path:
+    path = output_root / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch()
+    return path
+
+
+def test_ota_dsc_report_retains_additive_failure_phases() -> None:
+    report = OtaDscReport.model_validate_json(
+        _ota_dsc_report(
+            complete=False,
+            files=[],
+            errors=[{"phase": "future-phase", "source": "payloadv2", "message": "diagnostic only"}],
+        )
+    )
+
+    assert report.errors[0].phase == "future-phase"
+
+
+def test_extract_ota_uses_one_structured_dyld_materialization(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    request = _ota_materialization_request(tmp_path)
+    primary_path = "24G720__MacOS/System/Library/dyld/dyld_shared_cache_arm64e"
+    subcache_path = f"{primary_path}.01"
+    driverkit_path = "24G720__MacOS/System/DriverKit/System/Library/dyld/dyld_shared_cache_arm64e"
+    for path in (primary_path, subcache_path, driverkit_path):
+        _touch_reported_file(request.output_root, path)
+
+    files = [
+        {"path": primary_path, "arch": "arm64e", "source": "cryptex-system-arm64e"},
+        {"path": subcache_path, "arch": "arm64e", "source": "cryptex-system-arm64e"},
+        {"path": driverkit_path, "arch": "arm64e", "source": "cryptex-system-arm64e"},
+    ]
     calls: list[list[str]] = []
 
-    def fake_run(args: list[str], *, stdin: int | None = None, capture_output: bool = False) -> CompletedProcess[bytes]:
+    def fake_run(args: list[str], *, stdin: int, capture_output: bool) -> CompletedProcess[bytes]:
         calls.append(args)
         assert stdin == subprocess.DEVNULL
-        assert capture_output is False
-        dsc_dir = image_dir / "System/Library/dyld"
-        dsc_dir.mkdir(parents=True)
-        (dsc_dir / "dyld_shared_cache_arm64e").touch()
-        return CompletedProcess(args=args, returncode=0, stdout=None, stderr=None)
+        assert capture_output is True
+        return CompletedProcess(args=args, returncode=0, stdout=_ota_dsc_report(complete=True, files=files), stderr=b"")
 
     monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
 
-    assert extract_ota(artifact, output_dir) == image_dir
+    result = extract_ota(request)
+
+    assert [(dsc.arch, dsc.artifact) for dsc in result.dscs] == [(Arch.ARM64E, request.output_root / primary_path)]
     assert calls == [
         [
             "ipsw",
             "--no-color",
             "ota",
             "extract",
-            str(artifact),
+            str(request.local_ota),
             "--dyld",
+            "--json",
             "--output",
-            str(output_dir),
+            str(request.output_root),
         ]
     ]
 
 
-def test_extract_ota_dyld_failure_is_diagnostic_and_does_not_fall_back(
+def test_extract_ota_rejects_incomplete_report_without_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    artifact = Path("/tmp/test.ota")
-    output_dir = tmp_path / "output"
+    request = _ota_materialization_request(tmp_path)
     calls: list[list[str]] = []
+    report = _ota_dsc_report(
+        complete=False,
+        files=[],
+        errors=[{"phase": "dsc-discovery", "source": "", "message": "no caches"}],
+    )
 
-    def fake_run(args: list[str], *, stdin: int | None = None) -> CompletedProcess[bytes]:
+    def fake_run(args: list[str], *, stdin: int, capture_output: bool) -> CompletedProcess[bytes]:
         calls.append(args)
-        assert stdin == subprocess.DEVNULL
-        return CompletedProcess(args=args, returncode=2, stdout=None, stderr=None)
+        return CompletedProcess(args=args, returncode=1, stdout=report, stderr=b"human diagnostic")
 
     monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
 
-    with pytest.raises(OtaExtractError, match="OTA DSC materialization failed") as exc_info:
-        extract_ota(artifact, output_dir)
+    with pytest.raises(OtaDscMaterializationError, match="incomplete.*exit code 1") as exc_info:
+        extract_ota(request)
 
+    assert exc_info.value.report.errors[0].phase == "dsc-discovery"
     assert len(calls) == 1
-    assert calls[0][5] == "--dyld"
-    assert "with exit code 2" in str(exc_info.value)
-    assert "ipsw --no-color ota extract /tmp/test.ota --dyld --output" in str(exc_info.value)
+    assert "--json" in calls[0]
 
 
-def test_extract_symbols_does_not_reclassify_dyld_command_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_extract_ota_rejects_partial_report_before_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    request = _ota_materialization_request(tmp_path)
+    primary_path = "24G720__MacOS/System/Library/dyld/dyld_shared_cache_arm64e"
+    _touch_reported_file(request.output_root, primary_path)
+    report = _ota_dsc_report(
+        complete=False,
+        files=[{"path": primary_path, "arch": "arm64e", "source": "payloadv2"}],
+        errors=[{"phase": "payload-extract", "source": "payloadv2", "message": "one source failed"}],
+    )
+
+    monkeypatch.setattr(
+        "symx.ota.extract.subprocess.run",
+        lambda args, *, stdin, capture_output: CompletedProcess(args=args, returncode=1, stdout=report, stderr=b""),
+    )
+
+    with pytest.raises(OtaDscMaterializationError, match="incomplete"):
+        extract_ota(request)
+
+
+@pytest.mark.parametrize(
+    ("report", "error_match"),
+    [
+        (_ota_dsc_report(complete=True, files=[], schema_version=2), "schema-1 JSON report"),
+        (
+            json.dumps({"schema_version": 1, "complete": True, "files": [], "errors": [], "unexpected": True}).encode(),
+            "schema-1 JSON report",
+        ),
+        (b"not json", "schema-1 JSON report"),
+    ],
+)
+def test_extract_ota_rejects_invalid_report_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    report: bytes,
+    error_match: str,
 ) -> None:
+    request = _ota_materialization_request(tmp_path)
+    monkeypatch.setattr(
+        "symx.ota.extract.subprocess.run",
+        lambda args, *, stdin, capture_output: CompletedProcess(args=args, returncode=1, stdout=report, stderr=b"bad"),
+    )
+
+    with pytest.raises(OtaDscProtocolError, match=error_match):
+        extract_ota(request)
+
+
+def test_extract_ota_rejects_report_process_disagreement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    request = _ota_materialization_request(tmp_path)
+    primary_path = "24G720__MacOS/System/Library/dyld/dyld_shared_cache_arm64e"
+    _touch_reported_file(request.output_root, primary_path)
+    report = _ota_dsc_report(
+        complete=True,
+        files=[{"path": primary_path, "arch": "arm64e", "source": "ota-asset"}],
+    )
+    monkeypatch.setattr(
+        "symx.ota.extract.subprocess.run",
+        lambda args, *, stdin, capture_output: CompletedProcess(args=args, returncode=1, stdout=report, stderr=b""),
+    )
+
+    with pytest.raises(OtaDscProtocolError, match="completeness disagrees with exit code 1"):
+        extract_ota(request)
+
+
+@pytest.mark.parametrize("reported_path", ["../outside/dyld_shared_cache_arm64e", "/tmp/dyld_shared_cache_arm64e"])
+def test_extract_ota_rejects_report_paths_outside_output_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reported_path: str,
+) -> None:
+    request = _ota_materialization_request(tmp_path)
+    report = _ota_dsc_report(
+        complete=True,
+        files=[{"path": reported_path, "arch": "arm64e", "source": "ota-asset"}],
+    )
+    monkeypatch.setattr(
+        "symx.ota.extract.subprocess.run",
+        lambda args, *, stdin, capture_output: CompletedProcess(args=args, returncode=0, stdout=report, stderr=b""),
+    )
+
+    with pytest.raises(OtaDscProtocolError, match="relative path beneath"):
+        extract_ota(request)
+
+
+def test_extract_ota_rejects_missing_reported_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    request = _ota_materialization_request(tmp_path)
+    missing_path = "24G720__MacOS/System/Library/dyld/dyld_shared_cache_arm64e"
+    report = _ota_dsc_report(
+        complete=True,
+        files=[{"path": missing_path, "arch": "arm64e", "source": "ota-asset"}],
+    )
+    monkeypatch.setattr(
+        "symx.ota.extract.subprocess.run",
+        lambda args, *, stdin, capture_output: CompletedProcess(args=args, returncode=0, stdout=report, stderr=b""),
+    )
+
+    with pytest.raises(OtaDscProtocolError, match="regular file"):
+        extract_ota(request)
+
+
+def test_extract_ota_rejects_reported_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    request = _ota_materialization_request(tmp_path)
+    directory_path = "24G720__MacOS/System/Library/dyld/dyld_shared_cache_arm64e"
+    (request.output_root / directory_path).mkdir(parents=True)
+    report = _ota_dsc_report(
+        complete=True,
+        files=[{"path": directory_path, "arch": "arm64e", "source": "ota-asset"}],
+    )
+    monkeypatch.setattr(
+        "symx.ota.extract.subprocess.run",
+        lambda args, *, stdin, capture_output: CompletedProcess(args=args, returncode=0, stdout=report, stderr=b""),
+    )
+
+    with pytest.raises(OtaDscProtocolError, match="not a regular file"):
+        extract_ota(request)
+
+
+def test_extract_ota_rejects_reported_symlink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    request = _ota_materialization_request(tmp_path)
+    symlink_path = "24G720__MacOS/System/Library/dyld/dyld_shared_cache_arm64e"
+    target = _touch_reported_file(request.output_root, f"{symlink_path}.target")
+    (request.output_root / symlink_path).symlink_to(target.name)
+    report = _ota_dsc_report(
+        complete=True,
+        files=[{"path": symlink_path, "arch": "arm64e", "source": "ota-asset"}],
+    )
+    monkeypatch.setattr(
+        "symx.ota.extract.subprocess.run",
+        lambda args, *, stdin, capture_output: CompletedProcess(args=args, returncode=0, stdout=report, stderr=b""),
+    )
+
+    with pytest.raises(OtaDscProtocolError, match="not a regular file"):
+        extract_ota(request)
+
+
+def test_extract_ota_rejects_duplicate_report_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    request = _ota_materialization_request(tmp_path)
+    primary_path = "24G720__MacOS/System/Library/dyld/dyld_shared_cache_arm64e"
+    _touch_reported_file(request.output_root, primary_path)
+    entry = {"path": primary_path, "arch": "arm64e", "source": "ota-asset"}
+    report = _ota_dsc_report(complete=True, files=[entry, entry])
+    monkeypatch.setattr(
+        "symx.ota.extract.subprocess.run",
+        lambda args, *, stdin, capture_output: CompletedProcess(args=args, returncode=0, stdout=report, stderr=b""),
+    )
+
+    with pytest.raises(OtaDscProtocolError, match="duplicate path"):
+        extract_ota(request)
+
+
+def test_extract_ota_requires_a_supported_primary_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    request = _ota_materialization_request(tmp_path)
+    x86_64h_path = "24G720__MacOS/System/Library/dyld/dyld_shared_cache_x86_64h"
+    _touch_reported_file(request.output_root, x86_64h_path)
+    report = _ota_dsc_report(
+        complete=True,
+        files=[{"path": x86_64h_path, "arch": "x86_64h", "source": "cryptex-system-x86_64"}],
+    )
+    monkeypatch.setattr(
+        "symx.ota.extract.subprocess.run",
+        lambda args, *, stdin, capture_output: CompletedProcess(args=args, returncode=0, stdout=report, stderr=b""),
+    )
+
+    with pytest.raises(OtaDscMaterializationError, match="no supported primary"):
+        extract_ota(request)
+
+
+def test_extract_symbols_splits_only_validated_report_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     request = OtaExtractionRequest(
         local_ota=tmp_path / "test.ota",
         work_dir=tmp_path / "work",
@@ -1259,130 +1387,38 @@ def test_extract_symbols_does_not_reclassify_dyld_command_failure(
         build="24G720",
         bundle_id="ota_test",
     )
+    request.local_ota.touch()
+    captured_search_results: list[DSCSearchResult] = []
 
-    def fake_run(args: list[str], *, stdin: int | None = None) -> CompletedProcess[bytes]:
-        return CompletedProcess(args=args, returncode=2, stdout=None, stderr=None)
+    def fake_run(args: list[str], *, stdin: int, capture_output: bool) -> CompletedProcess[bytes]:
+        output_root = Path(args[args.index("--output") + 1])
+        primary_path = "24G720__MacOS/System/Library/dyld/dyld_shared_cache_arm64e"
+        _touch_reported_file(output_root, primary_path)
+        report = _ota_dsc_report(
+            complete=True,
+            files=[{"path": primary_path, "arch": "arm64e", "source": "cryptex-system-arm64e"}],
+        )
+        return CompletedProcess(args=args, returncode=0, stdout=report, stderr=b"")
 
-    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
-
-    def fail_classification(artifact: Path) -> type[Exception] | None:
-        pytest.fail("a dyld command failure must not be reclassified")
-
-    monkeypatch.setattr("symx.ota.extract._classify_ota_failure", fail_classification)
-
-    with pytest.raises(OtaExtractError, match="OTA DSC materialization failed .* with exit code 2"):
-        extract_symbols(request)
-
-
-def test_extract_ota_rejects_zero_result_without_supported_dsc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    output_dir = tmp_path / "output"
-    image_dir = output_dir / "21A100__Device1,1"
-    calls: list[list[str]] = []
-
-    def fake_run(args: list[str], *, stdin: int | None = None, capture_output: bool = False) -> CompletedProcess[bytes]:
-        calls.append(args)
-        assert stdin == subprocess.DEVNULL
-        image_dir.mkdir(parents=True, exist_ok=True)
-        if "-p" in args:
-            dsc_dir = image_dir / "System/Library/Caches/com.apple.dyld"
-            dsc_dir.mkdir(parents=True)
-            (dsc_dir / "dyld_shared_cache_arm64e.01").touch()
-        return CompletedProcess(args=args, returncode=0, stdout=b"", stderr=b"")
+    def fake_split(search_results: list[DSCSearchResult]) -> list[Path]:
+        captured_search_results.extend(search_results)
+        return [tmp_path / "split"]
 
     monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+    monkeypatch.setattr("symx.ota.extract.split_dsc", fake_split)
+    monkeypatch.setattr(
+        "symx.ota.extract._symsort_split_results",
+        lambda split_dirs, platform, bundle_id, output_dir: [tmp_path / "symbols"],
+    )
 
-    with pytest.raises(OtaExtractError, match="no supported dyld_shared_cache files"):
-        extract_ota(Path("/tmp/test.ota"), output_dir)
-
-    assert len(calls) == 3
-    assert "--dyld" in calls[0]
-    assert calls[1][4] == "dyld_shared_cache"
-    assert "-p" in calls[2]
-
-
-def test_extract_ota_fails_when_payloadv2_pattern_extract_returns_nonzero(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    output_dir = tmp_path / "output"
-    image_dir = output_dir / "21A100__Device1,1"
-
-    def fake_run(args: list[str], *, stdin: int | None = None, capture_output: bool = False) -> CompletedProcess[bytes]:
-        assert stdin == subprocess.DEVNULL
-        image_dir.mkdir(parents=True, exist_ok=True)
-        if "-p" in args:
-            dsc_dir = image_dir / "System/Library/Caches/com.apple.dyld"
-            dsc_dir.mkdir(parents=True, exist_ok=True)
-            (dsc_dir / "dyld_shared_cache_arm64e.01").touch()
-            return CompletedProcess(
-                args=args,
-                returncode=2,
-                stdout=b"pattern stdout",
-                stderr=b"\xe2\xa8\xaf failed to extract payload.039\n",
-            )
-        return CompletedProcess(args=args, returncode=0, stdout=b"literal stdout", stderr=b"literal stderr")
-
-    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
-
-    with pytest.raises(OtaExtractError, match="payloadv2 pattern DSC extraction failed") as exc_info:
-        extract_ota(Path("/tmp/test.ota"), output_dir)
-
-    message = str(exc_info.value)
-    assert "with exit code 2" in message
-    assert "failed to extract payload.039" in message
+    assert extract_symbols(request) == [tmp_path / "symbols"]
+    assert len(captured_search_results) == 1
+    assert captured_search_results[0].arch == Arch.ARM64E
+    assert captured_search_results[0].artifact.name == "dyld_shared_cache_arm64e"
+    assert captured_search_results[0].split_dir == request.work_dir / "split_symbols/15.7.7_24G720_arm64e"
 
 
-def test_extract_ota_falls_back_after_zero_output_dyld_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    output_dir = tmp_path / "output"
-    image_dir = output_dir / "21A100__Device1,1"
-    calls: list[list[str]] = []
-
-    def fake_run(args: list[str], *, stdin: int | None = None, capture_output: bool = False) -> CompletedProcess[bytes]:
-        calls.append(args)
-        assert stdin == subprocess.DEVNULL
-        image_dir.mkdir(parents=True, exist_ok=True)
-        if "-p" in args:
-            dsc_dir = image_dir / "System/Library/Caches/com.apple.dyld"
-            dsc_dir.mkdir(parents=True)
-            (dsc_dir / "dyld_shared_cache_arm64e").touch()
-        return CompletedProcess(args=args, returncode=0, stdout=b"", stderr=b"")
-
-    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
-
-    assert extract_ota(Path("/tmp/test.ota"), output_dir) == image_dir
-    assert len(calls) == 3
-    assert "--dyld" in calls[0]
-    assert calls[1][4] == "dyld_shared_cache"
-    assert "-p" in calls[2]
-
-
-def test_probe_payload_with_aa_materializes_zip_member_for_subprocess_stdin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    artifact = tmp_path / "test.zip"
-    payload_name = "AssetData/payloadv2/payload.000"
-    payload_bytes = b"payloadv2 bytes"
-
-    with zipfile.ZipFile(artifact, "w") as archive:
-        archive.writestr(payload_name, payload_bytes)
-
-    def fake_run(args: list[str], stdin: object | None = None, capture_output: bool = False) -> CompletedProcess[bytes]:
-        assert stdin is not None
-        stdin_file = cast(BinaryIO, stdin)
-        stdin_file.fileno()
-        assert stdin_file.read() == payload_bytes
-        return CompletedProcess(args=args, returncode=1, stdout=b"", stderr=b"Invalid/non-supported archive stream")
-
-    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
-
-    result = _probe_payload_with_aa(artifact, payload_name, DYLD_AA_INCLUDE_REGEX)
-
-    assert result["payload"] == payload_name
-    assert result["returncode"] == 1
-    assert result["extracted_count"] == 0
-    assert result["unsupported_error"] is True
-
-
-def test_probe_unsupported_payload_format_returns_true_for_consistent_aa_legacy_failures(
+def test_probe_payload_dsc_inventory_uses_zip_inventory_without_materializing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = Path("/tmp/test.zip")
@@ -1396,46 +1432,39 @@ def test_probe_unsupported_payload_format_returns_true_for_consistent_aa_legacy_
         "symx.ota.extract._payload_entry_names",
         lambda artifact: ["AssetData/payloadv2/payload.000", "AssetData/payloadv2/payload.001"],
     )
+    monkeypatch.setattr(
+        "symx.ota.extract.subprocess.run",
+        lambda *args, **kwargs: pytest.fail("the failure probe must not materialize payload files"),
+    )
 
-    def fake_probe_payload_with_aa(artifact: Path, payload_name: str, pattern: str) -> dict[str, object]:
-        return {
-            "payload": payload_name,
-            "returncode": 1,
-            "stdout": None,
-            "stderr": "Invalid/non-supported archive stream",
-            "extracted_count": 0,
-            "unsupported_error": True,
-        }
-
-    monkeypatch.setattr("symx.ota.extract._probe_payload_with_aa", fake_probe_payload_with_aa)
-
-    assert _probe_unsupported_payload_format(artifact) is True
+    assert _probe_payload_dsc_inventory(artifact) is None
 
 
-def test_probe_unsupported_payload_format_returns_false_when_payload_extracts(
+def test_probe_payload_dsc_inventory_keeps_zip_bom_evidence_without_payload_members(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = Path("/tmp/test.zip")
+    span_data: dict[str, object] = {}
 
+    class RecordingSpan:
+        def set_data(self, key: str, value: object) -> None:
+            span_data[key] = value
+
+    @contextmanager
+    def recording_span(*args: object, **kwargs: object) -> Generator[RecordingSpan]:
+        yield RecordingSpan()
+
+    monkeypatch.setattr("symx.ota.extract.sentry_sdk.start_span", recording_span)
     monkeypatch.setattr("symx.ota.extract._ota_is_zip_archive", lambda artifact: True)
     monkeypatch.setattr(
         "symx.ota.extract._read_post_bom_dsc_matches",
         lambda artifact: ["System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e"],
     )
-    monkeypatch.setattr("symx.ota.extract._payload_entry_names", lambda artifact: ["AssetData/payloadv2/payload.003"])
-    monkeypatch.setattr(
-        "symx.ota.extract._probe_payload_with_aa",
-        lambda artifact, payload_name, pattern: {
-            "payload": payload_name,
-            "returncode": 0,
-            "stdout": None,
-            "stderr": None,
-            "extracted_count": 1,
-            "unsupported_error": False,
-        },
-    )
+    monkeypatch.setattr("symx.ota.extract._payload_entry_names", lambda artifact: [])
 
-    assert _probe_unsupported_payload_format(artifact) is False
+    assert _probe_payload_dsc_inventory(artifact) is None
+    assert span_data["dsc_referenced"] is True
+    assert span_data["payload_member_count"] == 0
 
 
 def test_dsc_entries_from_ipsw_listing_parses_payload_and_bom_listing() -> None:
@@ -1462,7 +1491,7 @@ def test_dsc_entries_from_ipsw_listing_parses_payload_and_bom_listing() -> None:
     ]
 
 
-def test_probe_unsupported_payload_format_returns_true_for_aea_with_dsc_listing(
+def test_probe_payload_dsc_inventory_records_aea_dsc_listing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = Path("/tmp/test.aea")
@@ -1479,10 +1508,10 @@ def test_probe_unsupported_payload_format_returns_true_for_aea_with_dsc_listing(
         },
     )
 
-    assert _probe_unsupported_payload_format(artifact) is True
+    assert _probe_payload_dsc_inventory(artifact) is None
 
 
-def test_probe_unsupported_payload_format_returns_true_for_aea_with_bom_dsc_references(
+def test_probe_payload_dsc_inventory_records_aea_bom_dsc_references(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = Path("/tmp/test.aea")
@@ -1508,10 +1537,10 @@ def test_probe_unsupported_payload_format_returns_true_for_aea_with_bom_dsc_refe
         },
     )
 
-    assert _probe_unsupported_payload_format(artifact) is True
+    assert _probe_payload_dsc_inventory(artifact) is None
 
 
-def test_probe_unsupported_payload_format_returns_false_for_aea_without_dsc_references(
+def test_probe_payload_dsc_inventory_handles_aea_without_dsc_references(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = Path("/tmp/test.aea")
@@ -1537,10 +1566,10 @@ def test_probe_unsupported_payload_format_returns_false_for_aea_without_dsc_refe
         },
     )
 
-    assert _probe_unsupported_payload_format(artifact) is False
+    assert _probe_payload_dsc_inventory(artifact) is None
 
 
-def test_extract_symbols_classifies_aea_dsc_listing_extracting_no_dsc_as_unsupported(
+def test_extract_symbols_keeps_payload_extract_failure_as_materialization_error_when_dsc_is_referenced(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     artifact = tmp_path / "test.aea"
@@ -1554,14 +1583,74 @@ def test_extract_symbols_classifies_aea_dsc_listing_extracting_no_dsc_as_unsuppo
         bundle_id="ota_test",
     )
 
+    report = OtaDscReport.model_validate_json(
+        _ota_dsc_report(
+            complete=False,
+            files=[],
+            errors=[{"phase": "payload-extract", "source": "payloadv2", "message": "transient I/O failure"}],
+        )
+    )
+    materialization_error = OtaDscMaterializationError("OTA DSC materialization was incomplete", report)
     monkeypatch.setattr(
         "symx.ota.extract.extract_ota",
-        lambda artifact, output_dir: (_ for _ in ()).throw(
-            OtaExtractError(f"OTA extraction produced no dyld_shared_cache files for {artifact}")
-        ),
+        lambda materialization_request: (_ for _ in ()).throw(materialization_error),
     )
-    monkeypatch.setattr("symx.ota.extract._classify_ota_failure", lambda artifact: None)
-    monkeypatch.setattr("symx.ota.extract._probe_unsupported_payload_format", lambda artifact: True)
+    monkeypatch.setattr(
+        "symx.ota.extract._classify_ota_failure",
+        lambda artifact: pytest.fail("materialization-phase failures must not be reclassified"),
+    )
+    inventory_probes: list[Path] = []
+    monkeypatch.setattr(
+        "symx.ota.extract._probe_payload_dsc_inventory",
+        lambda artifact: inventory_probes.append(artifact),
+    )
 
-    with pytest.raises(UnsupportedOtaPayloadError):
+    with pytest.raises(OtaDscMaterializationError) as exc_info:
         extract_symbols(request)
+
+    assert exc_info.value is materialization_error
+    assert inventory_probes == [artifact]
+
+
+def test_extract_symbols_classifies_plain_no_dsc_materialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "test.ota"
+    artifact.touch()
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="recovery",
+        version="27.0",
+        build="24A1",
+        bundle_id="ota_test",
+    )
+    report = OtaDscReport.model_validate_json(
+        _ota_dsc_report(
+            complete=False,
+            files=[],
+            errors=[{"phase": "dsc-discovery", "source": "", "message": "no caches"}],
+        )
+    )
+    materialization_error = OtaDscMaterializationError("no DSC materialized", report)
+    monkeypatch.setattr(
+        "symx.ota.extract.extract_ota",
+        lambda materialization_request: (_ for _ in ()).throw(materialization_error),
+    )
+    classified_artifacts: list[Path] = []
+
+    def classify(artifact: Path) -> type[Exception] | None:
+        classified_artifacts.append(artifact)
+        return RecoveryOtaError
+
+    monkeypatch.setattr("symx.ota.extract._classify_ota_failure", classify)
+    monkeypatch.setattr(
+        "symx.ota.extract._probe_payload_dsc_inventory",
+        lambda artifact: pytest.fail("plain no-DSC reports do not need payload inventory diagnostics"),
+    )
+
+    with pytest.raises(RecoveryOtaError) as exc_info:
+        extract_symbols(request)
+
+    assert exc_info.value.__cause__ is materialization_error
+    assert classified_artifacts == [artifact]

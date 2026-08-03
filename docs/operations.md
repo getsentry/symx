@@ -77,7 +77,7 @@ Requirements:
 
 For IPSW extraction, Symx also ships a vendored AEA PEM DB snapshot at `symx/ipsw/data/fcs-keys.json` and passes it to `ipsw` via `--pem-db` before `ipsw` falls back to live Apple FCS-key lookup. Refresh that file from upstream `ipsw/pkg/aea/data/fcs-keys.gz` when newly mirrored IPSWs start failing with AEA/FCS-key 403s on GitHub macOS runners. Before the high-level `ipsw mount sys` / `ipsw extract --dyld` steps, Symx also does a small AEA preflight against the selected DMG member so failures can be classified as key-resolution problems earlier.
 
-In practice, the extraction paths are run on **macOS** in production because they rely on the `ipsw` toolchain, DMG mount flows, and the platform-specific `symsorter` binary. For OTA DSC materialization, Symx invokes `ipsw ota extract --dyld`; `ipsw` owns any cryptex patching and temporary mount lifecycle.
+In practice, the extraction paths are run on **macOS** in production because they rely on the `ipsw` toolchain, DMG mount flows, and the platform-specific `symsorter` binary. For OTA DSC materialization, Symx requires the structured `ipsw ota extract --dyld --json` contract delivered in `ipsw` 3.1.707; `ipsw` owns any cryptex patching and temporary mount lifecycle.
 
 ### Simulator extraction
 
@@ -131,13 +131,16 @@ uv run symx ota extract-file /path/to/file.zip -p ios -V 18.2 -b 22C152 -o /tmp/
 What it does:
 
 - validates `ipsw` and `./symsorter`,
-- first runs non-interactive `ipsw --no-color ota extract <OTA> --dyld --output <dir>`,
-- accepts that operation only when it materializes a supported DSC,
-- temporarily uses the pinned-version literal/payload compatibility fallback only when `--dyld` exits zero without a supported DSC,
+- runs non-interactive `ipsw --no-color ota extract <OTA> --dyld --json --output <dir>` exactly once,
+- strictly parses the schema-1 report and requires it to be complete and consistent with the process exit code,
+- verifies every reported path remains beneath the temporary output root and names an existing regular file,
+- passes only supported primary DSCs from the validated report to split,
+- rejects partial or incomplete materialization before split, symsort, or upload,
 - splits the materialized caches and symsorts all supported architectures in one invocation,
 - prints the output directories containing the symsorter result.
 
-A non-zero `--dyld` result is surfaced immediately and does not trigger the compatibility fallback.
+There is no second materialization syntax or human-log-based fallback. Structured errors and bounded stderr are
+retained for diagnostics; post-failure OTA probes do not materialize symbols.
 
 ## 2.2 GCS-backed runs from your machine
 
@@ -448,7 +451,7 @@ Common child span ops include:
 - `subprocess.dyld_split`
 - `subprocess.symsort`
 - `subprocess.ipsw_extract`
-- `subprocess.ipsw_ota_extract`
+- `ota.extract.materialize_dsc`
 - `ota.extract.payload_probe`
 
 ### High-value tags
@@ -488,6 +491,10 @@ Representative counters/distributions/gauges emitted by the current code:
 - `ota.mirror.failed`
 - `ota.extract.succeeded`
 - `ota.extract.failed`
+- `ota.extract.materialization.succeeded`
+- `ota.extract.materialization.failed`
+- `ota.extract.materialization.incomplete`
+- `ota.extract.materialized_dscs`
 - `ota.extract.skipped_delta`
 - `ota.extract.skipped_recovery`
 - `ota.extract.skipped_unsupported_payload`
@@ -582,7 +589,7 @@ What Symx does:
 
 Likely causes:
 
-- `ipsw` extraction failure
+- `ipsw` extraction failure, including an incomplete `payload-extract` report that may be transient
 - `dyld_split` failure
 - `symsorter` failure
 - unexpected artifact layout differences
@@ -601,11 +608,11 @@ They mean the OTA does not contain a full DSC that Symx can process.
 
 ### `unsupported_ota_payload`
 
-This is also usually a terminal skip state rather than an operator emergency.
+Existing rows are terminal skip states rather than operator emergencies. They record OTAs previously classified as referencing a DSC that the payloadv2 / Apple Archive tooling could not materialize or verify.
 
-It means the OTA references a DSC in payload listings or BOM/post-state metadata, but the current payloadv2 / Apple Archive tooling cannot materialize or verify it. In AEA BOM-only cases, this does not prove that every DSC byte is present in the OTA; it separates known payload tooling limitations from unknown extraction failures.
+The structured adapter does not create this state from a `payload-extract` phase plus payload/BOM inventory alone because that evidence can also accompany transient failures. Those failures now remain `symbol_extraction_failed` and visible in the default failure view until Phase 4 introduces a trusted classifier.
 
-After a runner, macOS, `ipsw`, or AppleArchive tooling change, these rows can be included in a curated admin extract rerun and reset to `mirrored`. They are still outside the default failure view, so include `unsupported_ota_payload` in the admin state filter when reviewing them.
+After a runner, macOS, `ipsw`, or AppleArchive tooling change, existing rows can be included in a curated admin extract rerun and reset to `mirrored`. They are outside the default failure view, so include `unsupported_ota_payload` in the admin state filter when reviewing them.
 
 ## 5. Current recovery mechanisms
 
