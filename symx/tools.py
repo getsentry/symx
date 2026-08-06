@@ -12,6 +12,9 @@ import sentry_sdk
 
 logger = logging.getLogger(__name__)
 
+MINIMUM_IPSW_VERSION = "3.1.707"
+_IPSW_RELEASE_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+
 
 def ipsw_version() -> str:
     result = subprocess.run(["ipsw", "version"], capture_output=True, check=True)
@@ -24,14 +27,27 @@ def ipsw_version() -> str:
     raise RuntimeError(f"Couldn't parse version from ipsw output: {output}")
 
 
+def _parse_ipsw_release_version(version: str) -> tuple[int, int, int]:
+    if _IPSW_RELEASE_VERSION_RE.fullmatch(version) is None:
+        raise ValueError(f"Unexpected ipsw version format: {version!r}")
+    major, minor, patch = version.split(".")
+    return int(major), int(minor), int(patch)
+
+
 def validate_shell_deps() -> None:
-    version = ipsw_version()
-    if version:
-        logger.info("Using ipsw %s" % version)
-        sentry_sdk.set_tag("ipsw.version", version)
-    else:
-        logger.error("ipsw not installed")
+    try:
+        version = ipsw_version()
+        parsed_version = _parse_ipsw_release_version(version)
+    except (OSError, subprocess.CalledProcessError, RuntimeError, UnicodeDecodeError, ValueError) as error:
+        logger.error("Cannot determine ipsw version: %s", error)
         sys.exit(1)
+
+    if parsed_version < _parse_ipsw_release_version(MINIMUM_IPSW_VERSION):
+        logger.error("ipsw %s is too old; version %s or newer is required", version, MINIMUM_IPSW_VERSION)
+        sys.exit(1)
+
+    logger.info("Using ipsw %s", version)
+    sentry_sdk.set_tag("ipsw.version", version)
 
     result = subprocess.run(["./symsorter", "--version"], capture_output=True)
     if result.returncode == 0:

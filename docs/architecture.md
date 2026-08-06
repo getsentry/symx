@@ -151,7 +151,9 @@ Workflow: [`symx-ota-extract.yml`](../.github/workflows/symx-ota-extract.yml)
    - upload symbol files,
    - update the OTA state.
 
-Production pins `ipsw` 3.1.707, the first release with the required structured operation. There is no literal,
+The minimum supported `ipsw` version is 3.1.707, the first release with the required structured operation. The
+extraction dependency preflight exits before processing artifacts if the installed version is older or cannot be
+parsed. There is no literal,
 payload-pattern, or other materialization fallback after the JSON operation. Incomplete reports and partial files
 are rejected before split, symsort, or upload. Human stderr is retained only as bounded diagnostic data and does
 not drive control flow. Only plain no-file reports containing exclusively `dsc-discovery` errors are eligible for
