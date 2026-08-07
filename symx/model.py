@@ -55,9 +55,9 @@ class ArtifactProcessingState(StrEnum):
     # beta and normal releases are often the exact same file and don't need to be stored or processed twice
     INDEXED_DUPLICATE = "indexed_duplicate"
 
-    # sometimes Apple releases an artifact that is faulty, but where they keep the meta-data available, or they remove
-    # it, but we already indexed the artifact. Download or validation will fail in this case but this shouldn't fail the
-    # mirroring workflow.
+    # sometimes Apple publishes metadata for an artifact whose downloaded content cannot be validated. This records
+    # that artifact-level invalidity without failing the entire mirroring workflow. Exhausted transport retries use
+    # MIRRORING_FAILED instead.
     INDEXED_INVALID = "indexed_invalid"
 
     # we mirrored that artifact, and it is ready for further processing
