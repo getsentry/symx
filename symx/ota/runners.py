@@ -8,6 +8,7 @@ from pathlib import Path
 import sentry_sdk
 import sentry_sdk.metrics
 
+from symx.download import DownloadError
 from symx.model import (
     ArtifactProcessingState,
     Timeout,
@@ -104,6 +105,14 @@ class OtaMirror:
                         ota_file.unlink()
                         artifacts_mirrored += 1
                         sentry_sdk.metrics.count("ota.mirror.succeeded", 1, attributes={"platform": ota.platform})
+                    except DownloadError as e:
+                        sentry_sdk.capture_exception(e)
+                        logger.exception(e)
+                        ota.processing_state = ArtifactProcessingState.MIRRORING_FAILED
+                        ota.update_last_run()
+                        self.storage.update_meta_item(key, ota)
+                        artifacts_failed += 1
+                        sentry_sdk.metrics.count("ota.mirror.failed", 1, attributes={"platform": ota.platform})
                     except Exception as e:
                         sentry_sdk.capture_exception(e)
                         logger.exception(e)

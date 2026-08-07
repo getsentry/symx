@@ -532,13 +532,13 @@ These are useful for ad-hoc inspection of the bucket through GitHub Actions.
 
 ## 4.5 Common failure modes and first checks
 
-### `mirroring_failed` (IPSW)
+### `mirroring_failed` (IPSW and OTA)
 
 Likely causes:
 
 - Apple CDN download failure
-- SHA-1/size verification mismatch
 - repeated transient download errors
+- IPSW SHA-1/size verification mismatch
 
 First checks:
 
@@ -550,8 +550,7 @@ First checks:
 
 Likely causes:
 
-- OTA download failure from Apple
-- SHA-1 verification mismatch
+- OTA SHA-1 verification mismatch
 - mirror/upload failure
 
 First checks:

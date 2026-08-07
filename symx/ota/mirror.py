@@ -6,7 +6,7 @@ from pathlib import Path
 import sentry_sdk
 import sentry_sdk.metrics
 
-from symx.download import DownloadError, try_download_url_to_file
+from symx.download import try_download_url_to_file
 from symx.fs import check_sha1
 from symx.ota.model import OtaArtifact
 
@@ -32,10 +32,7 @@ def download_ota_from_apple(ota_meta: OtaArtifact, download_dir: Path) -> Path:
         logger.info("Downloading OTA %s %s %s from Apple", ota_meta.platform, ota_meta.version, ota_meta.build)
 
         filepath = download_dir / f"{ota_meta.platform}_{ota_meta.version}_{ota_meta.build}_{ota_meta.id}.zip"
-        try:
-            try_download_url_to_file(ota_meta.url, filepath)
-        except DownloadError as e:
-            raise RuntimeError(f"Failed to download {ota_meta.url}") from e
+        try_download_url_to_file(ota_meta.url, filepath)
 
         if not check_ota_hash(ota_meta, filepath):
             raise RuntimeError(f"Downloaded OTA failed hash verification: {ota_meta.url}")
