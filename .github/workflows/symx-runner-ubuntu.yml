@@ -115,6 +115,8 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SYMX_RUN: ${{ inputs.symx_run }}
+          # Avoid the optional bucket-level metadata probe used only for GCS telemetry enrichment.
+          DISABLE_GCS_PYTHON_CLIENT_OTEL_BUCKET_METADATA: "true"
 
       - name: Notify on failure
         id: notify_failure
