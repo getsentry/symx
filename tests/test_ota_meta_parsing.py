@@ -3,13 +3,17 @@ Tests for OTA metadata parsing from ipsw command output.
 """
 
 import json
+import logging
 import subprocess
 import threading
 import time
+from collections.abc import Generator
+from contextlib import contextmanager
 
+from symx.diagnostics import MAX_SUBPROCESS_OUTPUT_CHARS
 from symx.model import ArtifactProcessingState
 from symx.ota.model import OtaMetaData
-from symx.ota.meta import parse_download_meta_output, retrieve_current_meta
+from symx.ota.meta import _download_meta_job, parse_download_meta_output, retrieve_current_meta
 
 
 def make_completed_process(
@@ -126,25 +130,32 @@ def test_parse_download_meta_output_sha256_id() -> None:
     assert sha256_id in meta
 
 
-def test_parse_download_meta_output_failure_ignored() -> None:
-    """Non-zero return code doesn't crash, just logs."""
-    result = make_completed_process(returncode=1, stderr=b"some error")
+def test_parse_download_meta_output_failure_logs_bounded_diagnostics(caplog) -> None:
+    """Non-zero return codes log enough bounded output to investigate the failure."""
+    stderr = b"failure-start\n" + (b"x" * MAX_SUBPROCESS_OUTPUT_CHARS) + b"\nfailure-end"
+    result = make_completed_process(returncode=7, stderr=stderr)
     meta: OtaMetaData = {}
 
-    parse_download_meta_output("ios", result, meta, beta=False)
+    with caplog.at_level(logging.ERROR, logger="symx.ota.meta"):
+        parse_download_meta_output("tvos", result, meta, beta=True)
 
     assert len(meta) == 0
+    assert "Download OTA meta failed for tvos (beta) (exit 7)" in caplog.text
+    assert "failure-start" in caplog.text
+    assert "[truncated" in caplog.text
+    assert "failure-end" not in caplog.text
 
 
-def test_parse_download_meta_output_403_silently_ignored() -> None:
-    """403 errors are common and shouldn't be logged as errors."""
+def test_parse_download_meta_output_403_silently_ignored(caplog) -> None:
+    """Known intermittent Apple 403 errors shouldn't be logged as errors."""
     result = make_completed_process(returncode=1, stderr=b"api returned status: 403 Forbidden")
     meta: OtaMetaData = {}
 
-    # Should not raise, should not log error (we can't easily test logging here)
-    parse_download_meta_output("ios", result, meta, beta=False)
+    with caplog.at_level(logging.ERROR, logger="symx.ota.meta"):
+        parse_download_meta_output("ios", result, meta, beta=False)
 
     assert len(meta) == 0
+    assert not caplog.records
 
 
 def test_parse_download_meta_output_multiple_artifacts() -> None:
@@ -173,6 +184,42 @@ def test_parse_download_meta_output_multiple_artifacts() -> None:
     assert len(meta) == 2
     assert "a" * 40 in meta
     assert "b" * 40 in meta
+
+
+def test_download_meta_job_records_bounded_subprocess_diagnostics(monkeypatch) -> None:
+    span_data: dict[str, object] = {}
+
+    class RecordingSpan:
+        def set_data(self, key: str, value: object) -> None:
+            span_data[key] = value
+
+    @contextmanager
+    def recording_span(*args: object, **kwargs: object) -> Generator[RecordingSpan]:
+        assert kwargs == {
+            "op": "subprocess.ipsw_download_meta",
+            "name": "Fetch OTA meta for tvos (beta)",
+        }
+        yield RecordingSpan()
+
+    stderr = b"failure-start\n" + (b"x" * MAX_SUBPROCESS_OUTPUT_CHARS) + b"\nfailure-end"
+
+    def fake_run(cmd: list[str], capture_output: bool = False) -> subprocess.CompletedProcess[bytes]:
+        assert cmd == ["ipsw", "download", "ota", "--platform", "tvos", "--urls", "--json", "--beta"]
+        assert capture_output is True
+        return make_completed_process(returncode=7, stderr=stderr)
+
+    monkeypatch.setattr("symx.ota.meta.sentry_sdk.start_span", recording_span)
+    monkeypatch.setattr("symx.ota.meta.subprocess.run", fake_run)
+
+    assert _download_meta_job(("tvos", True)) == {}
+    assert span_data["platform"] == "tvos"
+    assert span_data["beta"] is True
+    assert span_data["command"] == "ipsw download ota --platform tvos --urls --json --beta"
+    assert span_data["returncode"] == 7
+    assert isinstance(span_data["stderr"], str)
+    assert "failure-start" in span_data["stderr"]
+    assert "[truncated" in span_data["stderr"]
+    assert "failure-end" not in span_data["stderr"]
 
 
 def test_retrieve_current_meta_fetches_all_platform_variants_in_parallel_and_preserves_order(monkeypatch) -> None:
