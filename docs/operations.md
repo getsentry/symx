@@ -603,7 +603,9 @@ Best next step:
 
 These are usually **expected skip states**, not operator emergencies.
 
-They mean the OTA does not contain a full DSC that Symx can process.
+They mean the OTA does not contain a full DSC that Symx can process. If an extractor or classifier bug incorrectly
+created a `delta_ota` row, an operator can explicitly include that state in the admin filter and queue a curated
+extract retry, provided the mirrored artifact is still present. `recovery_ota` remains excluded from curated reruns.
 
 ### `unsupported_ota_payload`
 
@@ -611,7 +613,7 @@ Existing rows are terminal skip states rather than operator emergencies. They re
 
 The structured adapter does not create this state from a `payload-extract` phase plus payload/BOM inventory alone because that evidence can also accompany transient failures. Those failures now remain `symbol_extraction_failed` and visible in the default failure view until Phase 4 introduces a trusted classifier.
 
-After a runner, macOS, `ipsw`, or AppleArchive tooling change, existing rows can be included in a curated admin extract rerun and reset to `mirrored`. They are outside the default failure view, so include `unsupported_ota_payload` in the admin state filter when reviewing them.
+After a runner, macOS, `ipsw`, or AppleArchive tooling change, existing rows can be included in a curated admin extract rerun and reset to `mirrored`. They are outside the default failure view, so include `unsupported_ota_payload` in the admin state filter when reviewing them. The same explicit-filter requirement applies when retrying a misclassified `delta_ota` row.
 
 ## 5. Current recovery mechanisms
 

@@ -431,6 +431,7 @@ stateDiagram-v2
     mirrored --> indexed: mirrored zip missing
 
     symbol_extraction_failed --> mirrored: migrate-storage / manual retry
+    delta_ota --> mirrored: curated retry after classifier/tooling correction
     unsupported_ota_payload --> mirrored: manual retry after tooling change
 ```
 
@@ -440,6 +441,7 @@ stateDiagram-v2
 - OTA metadata merge preserves `processing_state` and `download_path` for already-known artifacts.
 - `iter_mirror()` always reloads metadata and prefers the newest mirrored OTA first.
 - Existing `unsupported_ota_payload` rows remain terminal and may be reset to `mirrored` through an admin curated rerun. The default extractor no longer creates new rows from a `payload-extract` phase plus payload/BOM inventory alone; that evidence does not distinguish unsupported data from transient failures.
+- A `delta_ota` row may be reset to `mirrored` only through an explicitly filtered curated extract rerun, for example after correcting a false delta classification. `recovery_ota` remains excluded.
 - The current `ota migrate-storage` path resets **all** OTAs in `symbol_extraction_failed` back to `mirrored`.
 
 ## 5.3 Manual-only and domain-specific nuances
