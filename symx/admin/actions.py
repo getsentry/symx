@@ -242,7 +242,7 @@ def preview_action(
     processing_state: ArtifactProcessingState,
     has_required_path: bool,
 ) -> ActionPreview:
-    if processing_state in _excluded_states(store):
+    if processing_state in _excluded_states(store, action):
         return ActionPreview(False, None, f"state {processing_state.value} is excluded from curated reruns")
 
     if action == AdminActionKind.QUEUE_EXTRACT:
@@ -388,17 +388,21 @@ def batch_summary(batch: PendingBatch | None) -> str:
     return "\n".join(lines)
 
 
-def _excluded_states(store: AdminStore) -> frozenset[ArtifactProcessingState]:
+def _excluded_states(
+    store: AdminStore,
+    action: AdminActionKind,
+) -> frozenset[ArtifactProcessingState]:
     if store == AdminStore.IPSW:
         return frozenset({ArtifactProcessingState.IGNORED})
-    return frozenset(
-        {
-            ArtifactProcessingState.IGNORED,
-            ArtifactProcessingState.INDEXED_DUPLICATE,
-            ArtifactProcessingState.DELTA_OTA,
-            ArtifactProcessingState.RECOVERY_OTA,
-        }
-    )
+
+    excluded = {
+        ArtifactProcessingState.IGNORED,
+        ArtifactProcessingState.INDEXED_DUPLICATE,
+        ArtifactProcessingState.RECOVERY_OTA,
+    }
+    if action != AdminActionKind.QUEUE_EXTRACT:
+        excluded.add(ArtifactProcessingState.DELTA_OTA)
+    return frozenset(excluded)
 
 
 def _ipsw_target_row_key(target: IpswTarget) -> str:
