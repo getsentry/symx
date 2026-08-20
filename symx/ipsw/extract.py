@@ -27,6 +27,11 @@ from symx.diagnostics import (
     subprocess_result_data,
     truncate_text,
 )
+from symx.directory_archive import (
+    DirectoryArchiveError,
+    compress_directory,
+    decompress_archive,
+)
 from symx.model import Arch
 from symx.tools import dyld_split, symsort
 from symx.ipsw.model import IpswPlatform
@@ -538,55 +543,17 @@ def _is_transient_fcs_key_error(stderr: str | bytes | None) -> bool:
 
 
 def _compress_directory(directory: Path) -> Path:
-    archive_path = directory.parent / f"{directory.name}.tar.zst"
-
-    with subprocess.Popen(
-        ["tar", "-cf", "-", "-C", str(directory.parent), str(directory.name)], stdout=subprocess.PIPE
-    ) as tar_proc:
-        with subprocess.Popen(
-            ["zstd", "-", "-o", str(archive_path)],
-            stdin=tar_proc.stdout,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        ) as zstd_proc:
-            if tar_proc.stdout:
-                tar_proc.stdout.close()  # Allow tar_proc to receive SIGPIPE if zstd_proc exits
-            _, stderr = zstd_proc.communicate()
-
-            if zstd_proc.returncode != 0:
-                error_msg = stderr.decode("utf-8") if stderr else "Unknown error"
-                raise IpswExtractError(f"zstd compression failed: {error_msg}")
-
-    if tar_proc.returncode != 0:
-        raise IpswExtractError(f"tar archiving failed with return code {tar_proc.returncode}")
-
-    # Remove the original directory after compression
-    shutil.rmtree(directory)
-
-    return archive_path
+    try:
+        return compress_directory(directory)
+    except DirectoryArchiveError as error:
+        raise IpswExtractError(str(error)) from error
 
 
 def _decompress_archive(archive_path: Path, target_dir: Path) -> None:
-    target_dir.parent.mkdir(parents=True, exist_ok=True)
-
-    # Use subprocess to pipe zstd output to tar for decompression
-    with subprocess.Popen(["zstd", "-d", str(archive_path), "-c"], stdout=subprocess.PIPE) as zstd_proc:
-        with subprocess.Popen(
-            ["tar", "-xf", "-", "-C", str(target_dir.parent)],
-            stdin=zstd_proc.stdout,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        ) as tar_proc:
-            if zstd_proc.stdout:
-                zstd_proc.stdout.close()
-            _, stderr = tar_proc.communicate()
-
-            if tar_proc.returncode != 0:
-                error_msg = stderr.decode("utf-8") if stderr else "Unknown error"
-                raise IpswExtractError(f"tar extraction failed: {error_msg}")
-
-    if zstd_proc.returncode != 0:
-        raise IpswExtractError(f"zstd decompression failed with return code {zstd_proc.returncode}")
+    try:
+        decompress_archive(archive_path, target_dir)
+    except DirectoryArchiveError as error:
+        raise IpswExtractError(str(error)) from error
 
 
 def extract_ipsw(request: IpswExtractionRequest) -> Path:

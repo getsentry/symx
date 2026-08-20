@@ -36,6 +36,7 @@ class Arch(StrEnum):
     ARMV7K = "armv7k"
     ARMV7S = "armv7s"
     X86_64 = "x86_64"
+    X86_64H = "x86_64h"
 
 
 class ArtifactProcessingState(StrEnum):

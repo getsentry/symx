@@ -19,14 +19,21 @@ from symx.diagnostics import (
     subprocess_result_data,
     truncate_text,
 )
+from symx.directory_archive import (
+    DirectoryArchiveError,
+    compress_directory,
+    decompress_archive,
+)
 from symx.model import Arch
 from symx.fs import rmdir_if_exists
 from symx.tools import dyld_split, symsort as common_symsort
 from symx.ota.model.ipsw_report import OtaDscReport, OtaDscReportFile
 from symx.ota.model.materialization import (
+    OtaDscMaterializationAttempt,
     OtaDscMaterializationError,
     OtaDscMaterializationRequest,
     OtaDscMaterializationResult,
+    OtaDscNotPresent,
     OtaDscProtocolError,
     OtaDscSource,
 )
@@ -54,6 +61,7 @@ AEA_MAGIC = b"AEA1"
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 _LEADING_IPSW_GLYPH_RE = re.compile(r"^\s*[•⨯]\s*")
 IPSW_OTA_DSC_JSON_CONTRACT_RELEASE = "3.1.707"
+MACOS_OTA_DSC_ARCHITECTURES = (Arch.ARM64E, Arch.X86_64, Arch.X86_64H)
 
 
 class PayloadListingProbeResult(TypedDict):
@@ -76,7 +84,18 @@ def _is_plain_no_dsc_materialization(error: OtaExtractError) -> bool:
     return (
         not error.report.files
         and bool(error.report.errors)
-        and all(report_error.phase == "dsc-discovery" for report_error in error.report.errors)
+        and all(
+            report_error.phase == "dsc-discovery" and report_error.source == "" for report_error in error.report.errors
+        )
+    )
+
+
+def _is_clean_requested_arch_absence(report: OtaDscReport) -> bool:
+    """Recognize ipsw's structured result for a requested architecture it did not find."""
+    return (
+        not report.files
+        and bool(report.errors)
+        and all(error.phase == "dsc-discovery" and error.source == "" for error in report.errors)
     )
 
 
@@ -474,8 +493,8 @@ def _set_materialization_report_data(span: Span, report: OtaDscReport) -> None:
     )
 
 
-def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationResult:
-    """Materialize and validate OTA DSCs through the single structured ipsw operation."""
+def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationAttempt:
+    """Materialize and validate one requested architecture, or the unfiltered non-macOS set."""
     with sentry_sdk.start_span(op="ota.extract.materialize_dsc", name="Materialize OTA DSCs") as span:
         span.set_data("artifact", str(request.local_ota))
         span.set_data("output_root", str(request.output_root))
@@ -483,6 +502,7 @@ def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationR
         span.set_data("version", request.version)
         span.set_data("build", request.build)
         span.set_data("source_identity", request.bundle_id)
+        span.set_data("requested_arch", str(request.requested_arch) if request.requested_arch is not None else None)
         span.set_data("ipsw_contract_release", IPSW_OTA_DSC_JSON_CONTRACT_RELEASE)
 
         command = [
@@ -492,10 +512,16 @@ def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationR
             "extract",
             str(request.local_ota),
             "--dyld",
-            "--json",
-            "--output",
-            str(request.output_root),
         ]
+        if request.requested_arch is not None:
+            command.extend(["--dyld-arch", str(request.requested_arch)])
+        command.extend(
+            [
+                "--json",
+                "--output",
+                str(request.output_root),
+            ]
+        )
         logger.info("Materializing OTA DSCs: %s", format_command(command))
         try:
             result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True)
@@ -521,6 +547,38 @@ def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationR
             _set_materialization_report_data(span, report)
             _validate_report_process_contract(request, result, report)
             validated_files = _validate_reported_files(request, report)
+
+            if request.requested_arch is not None and _is_clean_requested_arch_absence(report):
+                sentry_sdk.metrics.count(
+                    "ota.extract.materialization.not_present",
+                    1,
+                    attributes={"platform": request.platform, "arch": str(request.requested_arch)},
+                )
+                logger.info(
+                    "OTA %s does not contain a %s DSC",
+                    request.local_ota.name,
+                    request.requested_arch,
+                )
+                return OtaDscNotPresent(arch=request.requested_arch, report=report)
+
+            if not report.complete:
+                phases = ", ".join(sorted({error.phase for error in report.errors}))
+                raise OtaDscMaterializationError(
+                    f"OTA DSC materialization was incomplete for {request.local_ota} "
+                    f"with exit code {result.returncode}; phases={phases}",
+                    report,
+                )
+
+            if request.requested_arch is not None:
+                mismatched_arches = sorted(
+                    {entry.arch for entry, _, _ in validated_files if entry.arch != request.requested_arch}
+                )
+                if mismatched_arches:
+                    raise OtaDscProtocolError(
+                        f"ipsw reported architecture(s) {', '.join(mismatched_arches)} for "
+                        f"requested architecture {request.requested_arch}"
+                    )
+
             dscs = tuple(
                 dsc
                 for entry, relative_path, artifact in validated_files
@@ -534,19 +592,17 @@ def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationR
                 },
             )
 
-            if not report.complete:
-                phases = ", ".join(sorted({error.phase for error in report.errors}))
-                raise OtaDscMaterializationError(
-                    f"OTA DSC materialization was incomplete for {request.local_ota} "
-                    f"with exit code {result.returncode}; phases={phases}",
-                    report,
-                )
             if not dscs:
                 architectures = ", ".join(sorted({entry.arch for entry in report.files}))
                 raise OtaDscMaterializationError(
                     f"OTA DSC materialization produced no supported primary {DYLD_SHARED_CACHE} files "
                     f"for {request.local_ota}; reported architectures={architectures}",
                     report,
+                )
+            if request.requested_arch is not None and (len(dscs) != 1 or dscs[0].arch != request.requested_arch):
+                raise OtaDscProtocolError(
+                    f"ipsw reported {len(dscs)} supported primary DSCs for requested architecture "
+                    f"{request.requested_arch}; expected exactly one"
                 )
         except OtaExtractError as error:
             span.set_status("internal_error")
@@ -573,12 +629,17 @@ def extract_symbols(request: OtaExtractionRequest) -> list[Path]:
 
 def _process_ota(request: OtaExtractionRequest) -> list[Path]:
     try:
+        if request.platform == "macos":
+            return _process_macos_ota(request)
+
         with tempfile.TemporaryDirectory(suffix="_dsc_extract") as extract_dsc_tmp_dir:
             materialization_request = OtaDscMaterializationRequest.from_extraction_request(
                 request,
                 output_root=Path(extract_dsc_tmp_dir),
             )
             materialized = extract_ota(materialization_request)
+            if isinstance(materialized, OtaDscNotPresent):
+                raise OtaDscProtocolError("unfiltered OTA materialization returned an architecture absence")
             logger.info("Splitting & symsorting DSC for %s", request.local_ota.name)
             search_results = _dsc_search_results(materialized.dscs, request)
             split_dirs = split_dsc(search_results)
@@ -593,6 +654,107 @@ def _process_ota(request: OtaExtractionRequest) -> list[Path]:
         if _should_probe_payload_inventory(error):
             _probe_payload_dsc_inventory(request.local_ota)
         raise
+
+
+def _process_macos_ota(request: OtaExtractionRequest) -> list[Path]:
+    archives: list[tuple[Path, Path]] = []
+    split_dirs_to_clean: list[Path] = []
+    absent: list[OtaDscNotPresent] = []
+    primary_error = False
+
+    try:
+        for arch in MACOS_OTA_DSC_ARCHITECTURES:
+            with sentry_sdk.start_span(
+                op="ota.extract.dsc_arch",
+                name=f"Materialize+split OTA DSC {arch}",
+            ) as span:
+                span.set_data("arch", str(arch))
+                with tempfile.TemporaryDirectory(suffix=f"_{arch}_dsc_extract") as materialization_dir:
+                    materialization_request = OtaDscMaterializationRequest.from_extraction_request(
+                        request,
+                        output_root=Path(materialization_dir),
+                        requested_arch=arch,
+                    )
+                    attempt = extract_ota(materialization_request)
+                    if isinstance(attempt, OtaDscNotPresent):
+                        absent.append(attempt)
+                        continue
+
+                    search_results = _dsc_search_results(attempt.dscs, request)
+                    split_dirs_to_clean.extend(result.split_dir for result in search_results)
+                    split_dirs = split_dsc(search_results)
+                    if len(split_dirs) != 1:
+                        raise OtaExtractError(
+                            f"Expected one split directory for macOS OTA architecture {arch}, got {len(split_dirs)}"
+                        )
+
+                    split_dir = split_dirs[0]
+                    archive_path = split_dir.parent / f"{split_dir.name}.tar.zst"
+                    archives.append((archive_path, split_dir))
+                    try:
+                        compressed = compress_directory(split_dir)
+                    except (DirectoryArchiveError, OSError) as error:
+                        raise OtaExtractError(f"Could not compress macOS OTA {arch} split: {error}") from error
+                    if compressed != archive_path:
+                        raise OtaExtractError(
+                            f"Unexpected macOS OTA split archive path {compressed}; expected {archive_path}"
+                        )
+
+        if not archives:
+            if not absent:
+                raise OtaDscProtocolError("macOS OTA architecture search produced no result")
+            raise OtaDscMaterializationError(
+                f"OTA DSC materialization found none of the requested macOS architectures: "
+                f"{', '.join(str(arch) for arch in MACOS_OTA_DSC_ARCHITECTURES)}",
+                absent[-1].report,
+            )
+
+        if request.owns_local_ota and request.local_ota.exists():
+            logger.info("Deleting workflow-owned OTA after materialization: %s", request.local_ota)
+            try:
+                request.local_ota.unlink()
+            except OSError as error:
+                raise OtaExtractError(f"Could not remove workflow-owned OTA {request.local_ota}: {error}") from error
+
+        restored_split_dirs: list[Path] = []
+        for archive_path, split_dir in archives:
+            try:
+                decompress_archive(archive_path, split_dir)
+                archive_path.unlink()
+            except (DirectoryArchiveError, OSError) as error:
+                raise OtaExtractError(f"Could not restore macOS OTA split {archive_path}: {error}") from error
+            restored_split_dirs.append(split_dir)
+
+        return _symsort_split_results(
+            restored_split_dirs,
+            request.platform,
+            request.bundle_id,
+            request.work_dir,
+        )
+    except BaseException:
+        primary_error = True
+        raise
+    finally:
+        cleanup_errors: list[OSError] = []
+        for archive_path, _ in archives:
+            try:
+                archive_path.unlink(missing_ok=True)
+            except OSError as error:
+                cleanup_errors.append(error)
+        for split_dir in split_dirs_to_clean:
+            try:
+                rmdir_if_exists(split_dir)
+            except OSError as error:
+                cleanup_errors.append(error)
+        if cleanup_errors:
+            cleanup_error = OtaExtractError(
+                "Could not clean macOS OTA split intermediates: " + "; ".join(str(error) for error in cleanup_errors)
+            )
+            if primary_error:
+                sentry_sdk.capture_exception(cleanup_error)
+                logger.error("%s", cleanup_error)
+            else:
+                raise cleanup_error
 
 
 def _dsc_search_results(
