@@ -77,17 +77,11 @@ def _should_probe_payload_inventory(error: OtaExtractError) -> bool:
     )
 
 
-def _is_plain_no_dsc_materialization(error: OtaExtractError) -> bool:
-    """Distinguish a no-file result from source-phase or downstream failures."""
-    if not isinstance(error, OtaDscMaterializationError):
+def _is_no_dsc_materialization(error: OtaExtractError) -> bool:
+    """Return whether materialization exhausted its sources without producing a DSC."""
+    if not isinstance(error, OtaDscMaterializationError) or error.report.files:
         return False
-    return (
-        not error.report.files
-        and bool(error.report.errors)
-        and all(
-            report_error.phase == "dsc-discovery" and report_error.source == "" for report_error in error.report.errors
-        )
-    )
+    return any(report_error.phase == "dsc-discovery" for report_error in error.report.errors)
 
 
 def _is_clean_requested_arch_absence(report: OtaDscReport) -> bool:
@@ -647,7 +641,7 @@ def _process_ota(request: OtaExtractionRequest) -> list[Path]:
     except OtaDscProtocolError:
         raise
     except OtaExtractError as error:
-        if _is_plain_no_dsc_materialization(error):
+        if _is_no_dsc_materialization(error):
             error_cls = _classify_ota_failure(request.local_ota)
             if error_cls is not None:
                 raise error_cls(f"{error_cls.__name__}: {request.local_ota}") from error
