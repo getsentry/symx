@@ -72,13 +72,12 @@ Needed for:
 
 Requirements:
 
-- the checksum-pinned `ipsw` release installed and on `PATH`; the pending sequential macOS OTA path requires a
-  release containing upstream commits `d54200a66` and `3845de0a6`
+- checksum-pinned `ipsw` 3.1.711 or newer installed and on `PATH`
 - executable `./symsorter` at the repository root
 
 For IPSW extraction, Symx also ships a vendored AEA PEM DB snapshot at `symx/ipsw/data/fcs-keys.json` and passes it to `ipsw` via `--pem-db` before `ipsw` falls back to live Apple FCS-key lookup. Refresh that file from upstream `ipsw/pkg/aea/data/fcs-keys.gz` when newly mirrored IPSWs start failing with AEA/FCS-key 403s on GitHub macOS runners. Before the high-level `ipsw mount sys` / `ipsw extract --dyld` steps, Symx also does a small AEA preflight against the selected DMG member so failures can be classified as key-resolution problems earlier.
 
-In practice, the extraction paths are run on **macOS** in production because they rely on the `ipsw` toolchain, DMG mount flows, and the platform-specific `symsorter` binary. For OTA DSC materialization, Symx requires the structured `ipsw ota extract --dyld --json` contract introduced in `ipsw` 3.1.707. Sequential macOS attempts also require the newer cryptex architecture search noted above; update `MINIMUM_IPSW_VERSION` with the dependency pin before deployment. `ipsw` owns any cryptex patching and temporary mount lifecycle.
+In practice, the extraction paths are run on **macOS** in production because they rely on the `ipsw` toolchain, DMG mount flows, and the platform-specific `symsorter` binary. For OTA DSC materialization, Symx requires `ipsw` 3.1.711 or newer. That release includes both the structured `ipsw ota extract --dyld --json` contract and the cryptex architecture search required by sequential macOS attempts. `ipsw` owns any cryptex patching and temporary mount lifecycle.
 
 ### Simulator extraction
 

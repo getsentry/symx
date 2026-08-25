@@ -153,11 +153,11 @@ Workflow: [`symx-ota-extract.yml`](../.github/workflows/symx-ota-extract.yml)
    - upload symbol files once,
    - update the OTA state once.
 
-The structured report contract was introduced in `ipsw` 3.1.707. Sequential macOS extraction additionally depends
-on the cryptex-search behavior merged in upstream commits `d54200a66` and `3845de0a6`; this code must not deploy
-until a release containing both commits is checksum-pinned. There is no literal, payload-pattern, or other
-materialization fallback after a JSON operation. At least one requested macOS architecture must be present, and
-one successful architecture never hides another architecture's materialization or split failure. Human stderr is
+The structured report contract was introduced in `ipsw` 3.1.707. Sequential macOS extraction requires `ipsw`
+3.1.711 or newer, the first release containing the required cryptex architecture-search behavior. There is no
+literal, payload-pattern, or other materialization fallback after a JSON operation. At least one requested macOS
+architecture must be present, and one successful architecture never hides another architecture's materialization or
+split failure. Human stderr is
 retained only as bounded diagnostic data and does not drive control flow. If all macOS candidates are absent, the
 existing delta/recovery classifier runs once. Symx does not own OTA cryptex mount lifecycle.
 
