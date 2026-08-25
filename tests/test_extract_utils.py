@@ -46,6 +46,7 @@ from symx.ota.model.materialization import (
 )
 from symx.ota.model import (
     DSCSearchResult,
+    DeltaOtaError,
     OtaExtractError,
     OtaExtractionRequest,
     RecoveryOtaError,
@@ -53,6 +54,7 @@ from symx.ota.model import (
 from symx.tools import symsort as tool_symsort
 from symx.ota.extract import (
     MACOS_OTA_DSC_ARCHITECTURES,
+    _classify_ota_failure,
     _dsc_entries_from_ipsw_listing,
     _probe_payload_dsc_inventory,
     _symsort_split_results,
@@ -1983,6 +1985,85 @@ def test_extract_symbols_keeps_payload_extract_failure_as_materialization_error_
 
     assert exc_info.value is materialization_error
     assert inventory_probes == [artifact]
+
+
+def test_classify_ota_failure_recognizes_payloadv2_dsc_patch_tree(monkeypatch: pytest.MonkeyPatch) -> None:
+    artifact = Path("/tmp/test.zip")
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], *, capture_output: bool, text: bool) -> CompletedProcess[str]:
+        calls.append(args)
+        if args[2] == "info":
+            return CompletedProcess(args=args, returncode=0, stdout="Version = 27.0", stderr="")
+        return CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout=("AssetData/payloadv2/patches/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e"),
+            stderr="",
+        )
+
+    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+
+    assert _classify_ota_failure(artifact) is DeltaOtaError
+    assert calls == [
+        ["ipsw", "ota", "info", str(artifact)],
+        ["ipsw", "ota", "ls", str(artifact)],
+    ]
+
+
+def test_extract_symbols_classifies_delta_after_reconstruction_inputs_are_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "test.zip"
+    artifact.touch()
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="tvos",
+        version="27.0",
+        build="24J5353b",
+        bundle_id="ota_test",
+    )
+    report = OtaDscReport.model_validate_json(
+        _ota_dsc_report(
+            complete=False,
+            files=[],
+            errors=[
+                {
+                    "phase": "payload-extract",
+                    "source": "payload.000",
+                    "message": "Invalid/non-supported archive stream",
+                },
+                {
+                    "phase": "dsc-discovery",
+                    "source": "",
+                    "message": "no dyld_shared_cache files were materialized",
+                },
+            ],
+        )
+    )
+    materialization_error = OtaDscMaterializationError("OTA DSC materialization was incomplete", report)
+    monkeypatch.setattr(
+        "symx.ota.extract.extract_ota",
+        lambda materialization_request: (_ for _ in ()).throw(materialization_error),
+    )
+    classified_artifacts: list[Path] = []
+
+    def classify(artifact: Path) -> type[Exception] | None:
+        classified_artifacts.append(artifact)
+        return DeltaOtaError
+
+    monkeypatch.setattr("symx.ota.extract._classify_ota_failure", classify)
+    monkeypatch.setattr(
+        "symx.ota.extract._probe_payload_dsc_inventory",
+        lambda artifact: pytest.fail("a classified delta does not need payload inventory diagnostics"),
+    )
+
+    with pytest.raises(DeltaOtaError) as exc_info:
+        extract_symbols(request)
+
+    assert exc_info.value.__cause__ is materialization_error
+    assert classified_artifacts == [artifact]
 
 
 def test_extract_symbols_classifies_plain_no_dsc_materialization(
