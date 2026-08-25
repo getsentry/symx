@@ -72,12 +72,12 @@ Needed for:
 
 Requirements:
 
-- `ipsw` 3.1.707 or newer installed and on `PATH`
+- checksum-pinned `ipsw` 3.1.711 or newer installed and on `PATH`
 - executable `./symsorter` at the repository root
 
 For IPSW extraction, Symx also ships a vendored AEA PEM DB snapshot at `symx/ipsw/data/fcs-keys.json` and passes it to `ipsw` via `--pem-db` before `ipsw` falls back to live Apple FCS-key lookup. Refresh that file from upstream `ipsw/pkg/aea/data/fcs-keys.gz` when newly mirrored IPSWs start failing with AEA/FCS-key 403s on GitHub macOS runners. Before the high-level `ipsw mount sys` / `ipsw extract --dyld` steps, Symx also does a small AEA preflight against the selected DMG member so failures can be classified as key-resolution problems earlier.
 
-In practice, the extraction paths are run on **macOS** in production because they rely on the `ipsw` toolchain, DMG mount flows, and the platform-specific `symsorter` binary. For OTA DSC materialization, Symx requires the structured `ipsw ota extract --dyld --json` contract delivered in `ipsw` 3.1.707; the extraction dependency preflight exits before processing artifacts when `ipsw` is older or its version cannot be parsed. `ipsw` owns any cryptex patching and temporary mount lifecycle.
+In practice, the extraction paths are run on **macOS** in production because they rely on the `ipsw` toolchain, DMG mount flows, and the platform-specific `symsorter` binary. For OTA DSC materialization, Symx requires `ipsw` 3.1.711 or newer. That release includes both the structured `ipsw ota extract --dyld --json` contract and the cryptex architecture search required by sequential macOS attempts. `ipsw` owns any cryptex patching and temporary mount lifecycle.
 
 ### Simulator extraction
 
@@ -131,16 +131,19 @@ uv run symx ota extract-file /path/to/file.zip -p ios -V 18.2 -b 22C152 -o /tmp/
 What it does:
 
 - validates `ipsw` and `./symsorter`,
-- runs non-interactive `ipsw --no-color ota extract <OTA> --dyld --json --output <dir>` exactly once,
-- strictly parses the schema-1 report and requires it to be complete and consistent with the process exit code,
-- verifies every reported path remains beneath the temporary output root and names an existing regular file,
-- passes only supported primary DSCs from the validated report to split,
-- rejects partial or incomplete materialization before split, symsort, or upload,
-- splits the materialized caches and symsorts all supported architectures in one invocation,
+- for macOS, requests `arm64e`, `x86_64`, and `x86_64h` sequentially with exactly one `--dyld-arch` per operation;
+  other platforms use the existing unfiltered operation,
+- strictly parses each schema-1 report and validates every reported regular file beneath that attempt's temporary
+  output root,
+- distinguishes a requested architecture that is absent from any source-attributed, partial, or other real failure,
+- splits and compresses each successful macOS architecture before removing its materialization directory,
+- restores all successful split archives and symsorts them in one invocation,
+- preserves the caller-owned OTA file on both success and failure,
 - prints the output directories containing the symsorter result.
 
-There is no second materialization syntax or human-log-based fallback. Structured errors and bounded stderr are
-retained for diagnostics; post-failure OTA probes do not materialize symbols.
+There is no second materialization syntax or human-log-based fallback. A real failure from any architecture stops
+the operation, even if an earlier architecture succeeded. Structured errors and bounded stderr are retained for
+diagnostics; post-failure OTA probes do not materialize symbols.
 
 ## 2.2 GCS-backed runs from your machine
 
@@ -452,6 +455,7 @@ Common child span ops include:
 - `subprocess.symsort`
 - `subprocess.ipsw_extract`
 - `ota.extract.materialize_dsc`
+- `ota.extract.dsc_arch`
 - `ota.extract.payload_probe`
 
 ### High-value tags
@@ -494,6 +498,7 @@ Representative counters/distributions/gauges emitted by the current code:
 - `ota.extract.materialization.succeeded`
 - `ota.extract.materialization.failed`
 - `ota.extract.materialization.incomplete`
+- `ota.extract.materialization.not_present`
 - `ota.extract.materialized_dscs`
 - `ota.extract.skipped_delta`
 - `ota.extract.skipped_recovery`

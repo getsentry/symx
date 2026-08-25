@@ -205,6 +205,7 @@ def test_successful_extraction(tmp_path: Path) -> None:
     assert request.version == "17.0"
     assert request.build == "21A100"
     assert request.bundle_id == "ota_key1"
+    assert request.owns_local_ota is True
     assert len(storage.uploaded_symbols) == 1
     assert storage.uploaded_symbols[0] == ("key1", "ota_key1")
 

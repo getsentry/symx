@@ -91,7 +91,7 @@ Symx uses `uv` for everything.
 Helpful install/download links:
 
 - [`uv`](https://docs.astral.sh/uv/)
-- [`ipsw` latest release](https://github.com/blacktop/ipsw/releases/latest) / [`ipsw` Homebrew formula](https://formulae.brew.sh/formula/ipsw) (at least version 3.1.707)
+- [`ipsw` latest release](https://github.com/blacktop/ipsw/releases/latest) / [`ipsw` Homebrew formula](https://formulae.brew.sh/formula/ipsw) (at least version 3.1.711)
 - [`gh` CLI](https://cli.github.com/)
 - [Google Cloud CLI / `gcloud`](https://cloud.google.com/sdk/docs/install)
 - [`symsorter` latest GitHub release](https://github.com/getsentry/symbolicator/releases/latest)
@@ -108,7 +108,7 @@ uv sync --dev
   - `gcloud` credentials available via ADC / `GOOGLE_APPLICATION_CREDENTIALS`
   - a storage URI such as `gs://my-bucket` or `gs://my-project@my-bucket`
 - **Extraction commands**
-  - `ipsw` **3.1.707 or newer** installed and on `PATH`
+  - `ipsw` **3.1.711 or newer** installed and on `PATH`
   - executable `./symsorter` in the repo root
   - in practice, extraction is run on **macOS** in production
 

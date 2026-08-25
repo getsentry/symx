@@ -141,25 +141,29 @@ Workflow: [`symx-ota-extract.yml`](../.github/workflows/symx-ota-extract.yml)
 3. `iter_mirror()` continuously reloads OTA metadata from GCS and always yields the newest mirrored OTA first.
 4. For each mirrored OTA:
    - download the mirrored OTA from GCS,
-   - invoke `ipsw --no-color ota extract <OTA> --dyld --json --output <dir>` exactly once so `ipsw` owns
-     direct, payload, and cryptex DSC materialization and any temporary mounts,
-   - parse the schema-1 report into strict typed models,
-   - require a complete, exit-zero report and independently validate every reported path as a regular file
-     beneath the operation output root,
-   - pass the supported primary DSCs named by the report to the split stage without scanning the output tree,
-   - split each supported DSC into an architecture-specific directory,
-   - symsort all split directories together so one architecture cannot replace another's output,
-   - upload symbol files,
-   - update the OTA state.
+   - for macOS, request `arm64e`, `x86_64`, and `x86_64h` from `ipsw` one at a time; other platforms retain one
+     unfiltered materialization operation,
+   - parse every schema-1 report into strict typed models and independently validate every reported path as a
+     regular file beneath that attempt's output root,
+   - treat an empty report containing only unattributed `dsc-discovery` errors as that requested architecture being
+     absent; any files plus errors or source-attributed error remains a failure,
+   - split each macOS architecture while its materialized cache and subcaches are present, compress the split
+     directory, and remove that attempt's materialization before starting the next architecture,
+   - after all macOS attempts, restore every successful split archive and symsort them together,
+   - upload symbol files once,
+   - update the OTA state once.
 
-The minimum supported `ipsw` version is 3.1.707, the first release with the required structured operation. The
-extraction dependency preflight exits before processing artifacts if the installed version is older or cannot be
-parsed. There is no literal,
-payload-pattern, or other materialization fallback after the JSON operation. Incomplete reports and partial files
-are rejected before split, symsort, or upload. Human stderr is retained only as bounded diagnostic data and does
-not drive control flow. Only plain no-file reports containing exclusively `dsc-discovery` errors are eligible for
-delta/recovery classification; source-phase and downstream failures remain `symbol_extraction_failed`. Symx does
-not own OTA cryptex mount lifecycle.
+The structured report contract was introduced in `ipsw` 3.1.707. Sequential macOS extraction requires `ipsw`
+3.1.711 or newer, the first release containing the required cryptex architecture-search behavior. There is no
+literal, payload-pattern, or other materialization fallback after a JSON operation. At least one requested macOS
+architecture must be present, and one successful architecture never hides another architecture's materialization or
+split failure. Human stderr is
+retained only as bounded diagnostic data and does not drive control flow. If all macOS candidates are absent, the
+existing delta/recovery classifier runs once. Symx does not own OTA cryptex mount lifecycle.
+
+A GCS extraction request owns its downloaded temporary OTA and removes it after the final macOS materialization
+attempt, before restoring split archives for symsort. `ota extract-file` does not own its input and always preserves
+the caller's OTA.
 
 Special OTA-only exits:
 

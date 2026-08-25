@@ -80,6 +80,7 @@ class OtaExtractionRequest:
     version: str
     build: str
     bundle_id: str
+    owns_local_ota: bool = False
 
     @classmethod
     def from_artifact(
@@ -97,6 +98,7 @@ class OtaExtractionRequest:
             version=artifact.version,
             build=artifact.build,
             bundle_id=f"ota_{meta_key}",
+            owns_local_ota=True,
         )
 
 

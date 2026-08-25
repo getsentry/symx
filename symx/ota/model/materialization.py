@@ -24,6 +24,7 @@ class OtaDscMaterializationRequest:
     version: str
     build: str
     bundle_id: str
+    requested_arch: Arch | None = None
 
     @classmethod
     def from_extraction_request(
@@ -31,6 +32,7 @@ class OtaDscMaterializationRequest:
         request: OtaExtractionRequest,
         *,
         output_root: Path,
+        requested_arch: Arch | None = None,
     ) -> "OtaDscMaterializationRequest":
         return cls(
             local_ota=request.local_ota,
@@ -39,6 +41,7 @@ class OtaDscMaterializationRequest:
             version=request.version,
             build=request.build,
             bundle_id=request.bundle_id,
+            requested_arch=requested_arch,
         )
 
 
@@ -53,6 +56,17 @@ class OtaDscSource:
 @dataclass(frozen=True)
 class OtaDscMaterializationResult:
     dscs: tuple[OtaDscSource, ...]
+
+
+@dataclass(frozen=True)
+class OtaDscNotPresent:
+    """A requested architecture was not found after a complete source search."""
+
+    arch: Arch
+    report: OtaDscReport
+
+
+OtaDscMaterializationAttempt = OtaDscMaterializationResult | OtaDscNotPresent
 
 
 class OtaDscProtocolError(OtaExtractError):
