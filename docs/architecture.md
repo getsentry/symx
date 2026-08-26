@@ -161,14 +161,33 @@ literal, payload-pattern, or other materialization fallback after a JSON operati
 architecture must be present, and one successful architecture never hides another architecture's materialization or
 split failure. Human stderr is retained only as bounded diagnostic data and does not drive control flow. Protocol and
 invocation violations remain exceptions; expected materialization availability is represented by typed outcomes
-instead of exceptions.
+instead of exceptions. `ipsw` owns the OTA cryptex mount lifecycle.
 
-Only after materialization exhausts its sources without a supported primary DSC does Symx collect `ipsw ota info/ls`
-evidence. A pure policy maps successful probe output to `delta`, `recovery`, or `unknown`. `delta` and `recovery`
-become typed extraction skip outcomes; `unknown` preserves the unavailable materialization as an extraction failure.
-If all macOS candidates are absent, this classifier runs once. The storage runner maps typed success/skip outcomes to
-persisted processing states, while exceptions are reserved for failed extraction. Symx does not own OTA cryptex mount
-lifecycle.
+### Classifying an OTA that has no usable DSC
+
+Symx classifies an OTA only after `ipsw` cannot provide a supported primary DSC. The classifier uses these sources,
+in order:
+
+1. **Request metadata:** an OTA requested for the `recovery` platform is a recovery OTA.
+2. **ZIP metadata:** Symx reads the root `Info.plist` and validates the fields it needs. A non-empty
+   `MobileAssetProperties.PrerequisiteBuild` identifies a delta OTA.
+3. **AEA metadata:** Symx asks `ipsw` to extract only `Info.plist` into a temporary directory. It accepts only small,
+   regular files that contain the expected typed metadata.
+
+`ipsw` 3.1.711 does not include `PrerequisiteBuild` in its JSON output. Some AppleArchive versions may also fail to
+reconstruct the plist from an AEA. In that case, an AEA-only compatibility fallback reads the single
+`PrereqBuild = ...` field from a successful `ipsw ota info` command. Logs record whether classification used an
+extracted plist or this fallback.
+
+The classifier follows two safety rules:
+
+- Paths such as `image_patches/` are not evidence that an OTA is a delta. Full cryptex OTAs can contain them.
+- Missing, malformed, conflicting, or unavailable metadata produces `unknown`; Symx does not guess from file names or
+  archive listings.
+
+`delta` and `recovery` are expected skip outcomes that the storage runner persists as terminal states. An `unknown`
+result preserves the original unavailable-materialization failure. For macOS, classification runs once only after all
+requested architectures are absent.
 
 A GCS extraction request owns its downloaded temporary OTA and removes it after the final macOS materialization
 attempt, before restoring split archives for symsort. `ota extract-file` does not own its input and always preserves

@@ -1,6 +1,7 @@
 """OTA extraction pipeline: DSC materialization, splitting, and symsort."""
 
 import logging
+import plistlib
 import re
 import stat
 import subprocess
@@ -27,6 +28,7 @@ from symx.directory_archive import (
 from symx.model import Arch
 from symx.fs import rmdir_if_exists
 from symx.tools import dyld_split, symsort as common_symsort
+from symx.ota.model.artifact_info import OtaArtifactInfo
 from symx.ota.model.ipsw_report import OtaDscReport, OtaDscReportFile
 from symx.ota.model.materialization import (
     OtaDscMaterializationAttempt,
@@ -63,9 +65,11 @@ DYLD_LISTING_ENTRY_RE = re.compile(
     r"(?:\./)?(?:System/DriverKit/)?System/Library/(?:dyld|Caches/com\.apple\.dyld)/dyld_shared_cache_[^\s/]+"
 )
 MAX_IPSW_LISTING_PROBE_OUTPUT_CHARS = 1000
+MAX_OTA_INFO_PLIST_BYTES = 4 * 1024 * 1024
 AEA_MAGIC = b"AEA1"
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 _LEADING_IPSW_GLYPH_RE = re.compile(r"^\s*[•⨯]\s*")
+_PREREQUISITE_BUILD_LINE_RE = re.compile(r"^PrereqBuild\s*=\s*(\S+)\s*$", re.MULTILINE)
 IPSW_OTA_DSC_JSON_CONTRACT_RELEASE = "3.1.707"
 MACOS_OTA_DSC_ARCHITECTURES = (Arch.ARM64E, Arch.X86_64, Arch.X86_64H)
 
@@ -293,55 +297,163 @@ def symsort(dsc_split_dirs: list[Path], output_dir: Path, prefix: str, bundle_id
         raise OtaExtractError(f"Symsorter failed with {result}")
 
 
-def _collect_ota_classification_evidence(artifact: Path) -> OtaClassificationEvidence:
-    """Collect best-effort evidence only after materialization finds no usable DSC."""
-    info_result = subprocess.run(
-        ["ipsw", "ota", "info", str(artifact)],
-        capture_output=True,
-        text=True,
-    )
-    ls_result = subprocess.run(
-        ["ipsw", "ota", "ls", str(artifact)],
-        capture_output=True,
-        text=True,
-    )
+def _unavailable_classification_evidence(platform: str) -> OtaClassificationEvidence:
     return OtaClassificationEvidence(
-        info_returncode=info_result.returncode,
-        info_output=info_result.stdout + info_result.stderr,
-        listing_returncode=ls_result.returncode,
-        listing_output=ls_result.stdout + ls_result.stderr,
+        platform=platform,
+        info_succeeded=False,
+        prerequisite_build=None,
+        metadata_source="unavailable",
     )
+
+
+def _parse_ota_info_plist(data: bytes) -> OtaArtifactInfo:
+    if len(data) > MAX_OTA_INFO_PLIST_BYTES:
+        raise ValueError(f"root Info.plist is too large: {len(data)} bytes")
+    return OtaArtifactInfo.model_validate(plistlib.loads(data))
+
+
+def _read_zip_ota_classification_evidence(request: OtaExtractionRequest) -> OtaClassificationEvidence:
+    try:
+        with zipfile.ZipFile(request.local_ota) as archive:
+            info_entry = archive.getinfo("Info.plist")
+            if info_entry.file_size > MAX_OTA_INFO_PLIST_BYTES:
+                raise ValueError(f"root Info.plist is too large: {info_entry.file_size} bytes")
+            info = _parse_ota_info_plist(archive.read(info_entry))
+    except (KeyError, OSError, ValueError, plistlib.InvalidFileException, ValidationError, zipfile.BadZipFile) as error:
+        logger.warning("Could not read trusted OTA metadata from %s: %s", request.local_ota, error)
+        return _unavailable_classification_evidence(request.platform)
+
+    return OtaClassificationEvidence(
+        platform=request.platform,
+        info_succeeded=True,
+        prerequisite_build=info.prerequisite_build,
+        metadata_source="zip-info-plist",
+    )
+
+
+def _extract_aea_ota_info(request: OtaExtractionRequest) -> OtaClassificationEvidence | None:
+    """Try to reconstruct a root Info.plist from an AEA without materializing symbols."""
+    with tempfile.TemporaryDirectory(suffix="_ota_info") as output_dir:
+        command = [
+            "ipsw",
+            "--no-color",
+            "ota",
+            "extract",
+            str(request.local_ota),
+            "--pattern",
+            r"^Info\.plist$",
+            "--confirm",
+            "--flat",
+            "--output",
+            output_dir,
+        ]
+        try:
+            result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True)
+        except OSError as error:
+            logger.warning("Could not invoke AEA OTA metadata extractor for %s: %s", request.local_ota, error)
+            return None
+
+        parsed: list[OtaArtifactInfo] = []
+        output_root = Path(output_dir).resolve()
+        for candidate in Path(output_dir).rglob("Info.plist"):
+            try:
+                resolved = candidate.resolve(strict=True)
+                if not resolved.is_relative_to(output_root):
+                    continue
+                mode = candidate.stat(follow_symlinks=False).st_mode
+                if not stat.S_ISREG(mode) or candidate.stat().st_size > MAX_OTA_INFO_PLIST_BYTES:
+                    continue
+                parsed.append(_parse_ota_info_plist(candidate.read_bytes()))
+            except (OSError, ValueError, plistlib.InvalidFileException, ValidationError):
+                continue
+
+        prerequisite_builds = {info.prerequisite_build for info in parsed}
+        if len(prerequisite_builds) == 1:
+            prerequisite_build = prerequisite_builds.pop()
+            logger.info(
+                "Read AEA OTA classification metadata from extracted Info.plist for %s (extract exit %d)",
+                request.local_ota,
+                result.returncode,
+            )
+            return OtaClassificationEvidence(
+                platform=request.platform,
+                info_succeeded=True,
+                prerequisite_build=prerequisite_build,
+                metadata_source="aea-extracted-info-plist",
+            )
+        if parsed:
+            logger.warning(
+                "AEA OTA metadata extraction returned conflicting Info.plist files for %s", request.local_ota
+            )
+        else:
+            logger.info(
+                "AEA OTA metadata extraction did not return a usable root Info.plist for %s (exit %d): %s",
+                request.local_ota,
+                result.returncode,
+                truncate_text(result.stderr) or "<empty stderr>",
+            )
+        return None
+
+
+def _read_aea_info_text_fallback(request: OtaExtractionRequest) -> OtaClassificationEvidence:
+    """Temporary fallback until structured ipsw AEA metadata includes PrerequisiteBuild."""
+    command = ["ipsw", "--no-color", "ota", "info", str(request.local_ota)]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True)
+    except OSError as error:
+        logger.warning("Could not invoke AEA OTA metadata fallback for %s: %s", request.local_ota, error)
+        return _unavailable_classification_evidence(request.platform)
+    if result.returncode != 0:
+        logger.warning(
+            "Could not inspect AEA OTA metadata for %s (exit %d): %s",
+            request.local_ota,
+            result.returncode,
+            truncate_text(result.stderr) or "<empty stderr>",
+        )
+        return _unavailable_classification_evidence(request.platform)
+
+    prerequisite_builds = set(_PREREQUISITE_BUILD_LINE_RE.findall(result.stdout + "\n" + result.stderr))
+    if len(prerequisite_builds) > 1:
+        logger.warning("AEA OTA metadata fallback returned conflicting prerequisite builds for %s", request.local_ota)
+        return _unavailable_classification_evidence(request.platform)
+
+    prerequisite_build = next(iter(prerequisite_builds), None)
+    logger.info("Read AEA OTA classification metadata from ipsw info text fallback for %s", request.local_ota)
+    return OtaClassificationEvidence(
+        platform=request.platform,
+        info_succeeded=True,
+        prerequisite_build=prerequisite_build,
+        metadata_source="ipsw-info-text-fallback",
+    )
+
+
+def _collect_ota_classification_evidence(request: OtaExtractionRequest) -> OtaClassificationEvidence:
+    """Read artifact metadata only after materialization finds no usable DSC."""
+    if request.platform == "recovery":
+        return OtaClassificationEvidence(
+            platform=request.platform,
+            info_succeeded=True,
+            prerequisite_build=None,
+            metadata_source="request-platform",
+        )
+    if zipfile.is_zipfile(request.local_ota):
+        return _read_zip_ota_classification_evidence(request)
+    if _ota_is_aea_archive(request.local_ota):
+        return _extract_aea_ota_info(request) or _read_aea_info_text_fallback(request)
+    return _unavailable_classification_evidence(request.platform)
 
 
 def _classify_ota_evidence(evidence: OtaClassificationEvidence) -> OtaClassification:
-    """Apply pure classification policy to collected OTA metadata and listing output."""
-    if evidence.info_returncode == 0 and (
-        "Darwin Recovery" in evidence.info_output or "RecoveryOSUpdate" in evidence.info_output
-    ):
+    """Apply pure policy to trusted request context and typed artifact metadata."""
+    if evidence.platform == "recovery":
         return OtaClassification.RECOVERY
-
-    # High-confidence delta indicators:
-    # - image_patches/: newer-style delta OTAs (e.g. iPad)
-    # - payloadv2/patches/System/Library/Caches/com.apple.dyld/: older-style deltas (e.g. Apple TV)
-    #   where the DSC itself is a binary diff
-    # Note: app_patches/ alone is not sufficient: full OTAs (e.g. watchOS, visionOS) can also
-    # contain app_patches/ alongside a full system image with a DSC.
-    if evidence.listing_returncode == 0 and (
-        "image_patches/" in evidence.listing_output
-        or "payloadv2/patches/System/Library/Caches/com.apple.dyld/" in evidence.listing_output
-    ):
+    if evidence.info_succeeded and evidence.prerequisite_build:
         return OtaClassification.DELTA
-
     return OtaClassification.UNKNOWN
 
 
-def _classify_ota(artifact: Path) -> OtaClassification:
-    try:
-        evidence = _collect_ota_classification_evidence(artifact)
-    except OSError as error:
-        logger.warning("Could not collect OTA classification evidence for %s: %s", artifact, error)
-        return OtaClassification.UNKNOWN
-    return _classify_ota_evidence(evidence)
+def _classify_ota(request: OtaExtractionRequest) -> OtaClassification:
+    return _classify_ota_evidence(_collect_ota_classification_evidence(request))
 
 
 def _parse_ota_dsc_report(
@@ -663,7 +775,7 @@ def _resolve_unavailable_materialization(
     unavailable: OtaDscUnavailable,
 ) -> OtaExtractionSkipped:
     if unavailable.exhausted_sources_without_primary:
-        classification = _classify_ota(request.local_ota)
+        classification = _classify_ota(request)
         if classification == OtaClassification.DELTA:
             return OtaExtractionSkipped(reason=OtaExtractionSkipReason.DELTA)
         if classification == OtaClassification.RECOVERY:

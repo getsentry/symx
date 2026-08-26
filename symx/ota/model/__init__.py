@@ -138,12 +138,12 @@ class OtaClassification(StrEnum):
 
 @dataclass(frozen=True)
 class OtaClassificationEvidence:
-    """Untrusted command results collected for pure OTA classification policy."""
+    """Trusted request context and typed artifact metadata used by classification policy."""
 
-    info_returncode: int
-    info_output: str
-    listing_returncode: int
-    listing_output: str
+    platform: str
+    info_succeeded: bool
+    prerequisite_build: str | None
+    metadata_source: str
 
 
 @dataclass(frozen=True)
