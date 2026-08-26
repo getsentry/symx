@@ -79,3 +79,7 @@ class OtaDscMaterializationError(OtaExtractError):
     def __init__(self, message: str, report: OtaDscReport) -> None:
         super().__init__(message)
         self.report = report
+
+
+class OtaDscUnsupportedPrimaryError(OtaDscMaterializationError):
+    """Raised when materialization produces files but no supported primary DSC."""

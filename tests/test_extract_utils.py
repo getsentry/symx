@@ -2066,6 +2066,61 @@ def test_extract_symbols_classifies_delta_after_reconstruction_inputs_are_skippe
     assert classified_artifacts == [artifact]
 
 
+def test_extract_symbols_classifies_delta_when_only_subcaches_are_materialized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "test.zip"
+    artifact.touch()
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="tvos",
+        version="27.0",
+        build="24J5346a",
+        bundle_id="ota_test",
+    )
+    files = [
+        {
+            "path": "24J5346a__AppleTV11,1/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e.symbols",
+            "arch": "arm64e",
+            "source": "payloadv2",
+        },
+        {
+            "path": "24J5346a__AppleTV11,1/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e.03",
+            "arch": "arm64e",
+            "source": "payloadv2",
+        },
+    ]
+
+    def fake_run(args: list[str], **kwargs: object) -> CompletedProcess[bytes] | CompletedProcess[str]:
+        if args[:4] == ["ipsw", "--no-color", "ota", "extract"]:
+            output_root = Path(args[args.index("--output") + 1])
+            for entry in files:
+                _touch_reported_file(output_root, entry["path"])
+            return CompletedProcess(
+                args=args,
+                returncode=0,
+                stdout=_ota_dsc_report(complete=True, files=files),
+                stderr=b"",
+            )
+        if args[2] == "info":
+            return CompletedProcess(args=args, returncode=0, stdout="Version = 27.0", stderr="")
+        return CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout="AssetData/payloadv2/patches/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e",
+            stderr="",
+        )
+
+    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+
+    with pytest.raises(DeltaOtaError) as exc_info:
+        extract_symbols(request)
+
+    assert isinstance(exc_info.value.__cause__, OtaDscMaterializationError)
+    assert "no supported primary" in str(exc_info.value.__cause__)
+
+
 def test_extract_symbols_classifies_plain_no_dsc_materialization(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
