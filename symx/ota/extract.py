@@ -297,12 +297,16 @@ def symsort(dsc_split_dirs: list[Path], output_dir: Path, prefix: str, bundle_id
         raise OtaExtractError(f"Symsorter failed with {result}")
 
 
-def _unavailable_classification_evidence(platform: str) -> OtaClassificationEvidence:
+def _unavailable_classification_evidence(
+    platform: str,
+    *,
+    metadata_source: str = "unavailable",
+) -> OtaClassificationEvidence:
     return OtaClassificationEvidence(
         platform=platform,
         info_succeeded=False,
         prerequisite_build=None,
-        metadata_source="unavailable",
+        metadata_source=metadata_source,
     )
 
 
@@ -343,7 +347,6 @@ def _extract_aea_ota_info(request: OtaExtractionRequest) -> OtaClassificationEvi
             "--pattern",
             r"^Info\.plist$",
             "--confirm",
-            "--flat",
             "--output",
             output_dir,
         ]
@@ -385,13 +388,17 @@ def _extract_aea_ota_info(request: OtaExtractionRequest) -> OtaClassificationEvi
             logger.warning(
                 "AEA OTA metadata extraction returned conflicting Info.plist files for %s", request.local_ota
             )
-        else:
-            logger.info(
-                "AEA OTA metadata extraction did not return a usable root Info.plist for %s (exit %d): %s",
-                request.local_ota,
-                result.returncode,
-                truncate_text(result.stderr) or "<empty stderr>",
+            return _unavailable_classification_evidence(
+                request.platform,
+                metadata_source="aea-extracted-info-plist-conflict",
             )
+
+        logger.info(
+            "AEA OTA metadata extraction did not return a usable root Info.plist for %s (exit %d): %s",
+            request.local_ota,
+            result.returncode,
+            truncate_text(result.stderr) or "<empty stderr>",
+        )
         return None
 
 

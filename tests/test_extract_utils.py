@@ -2113,10 +2113,15 @@ def test_classify_ota_reads_reconstructed_aea_info_plist(tmp_path: Path, monkeyp
 
     def fake_run(args: list[str], **kwargs: object) -> CompletedProcess[bytes]:
         assert "extract" in args
+        assert "--flat" not in args
         output_root = Path(args[args.index("--output") + 1])
-        info_path = output_root / "24J5353b__AppleTV14,1" / "Info.plist"
-        info_path.parent.mkdir(parents=True)
-        info_path.write_bytes(plistlib.dumps({"MobileAssetProperties": {"PrerequisiteBuild": "24J5346a"}}))
+        for relative_path in (
+            Path("24J5353b__AppleTV14,1/Info.plist"),
+            Path("payload.001/System/Library/CoreServices/Info.plist"),
+        ):
+            info_path = output_root / relative_path
+            info_path.parent.mkdir(parents=True)
+            info_path.write_bytes(plistlib.dumps({"MobileAssetProperties": {"PrerequisiteBuild": "24J5346a"}}))
         return CompletedProcess(args=args, returncode=1, stdout=b"", stderr=b"unrelated payload failure")
 
     monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
@@ -2126,6 +2131,43 @@ def test_classify_ota_reads_reconstructed_aea_info_plist(tmp_path: Path, monkeyp
     assert evidence.prerequisite_build == "24J5346a"
     assert evidence.metadata_source == "aea-extracted-info-plist"
     assert _classify_ota_evidence(evidence) == OtaClassification.DELTA
+
+
+def test_classify_ota_keeps_conflicting_aea_info_plists_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "test.aea"
+    artifact.write_bytes(b"AEA1")
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="tvos",
+        version="27.0",
+        build="24J5353b",
+        bundle_id="ota_test",
+    )
+
+    def fake_run(args: list[str], **kwargs: object) -> CompletedProcess[bytes]:
+        if "info" in args:
+            pytest.fail("conflicting extracted metadata must not select the text fallback")
+        output_root = Path(args[args.index("--output") + 1])
+        for relative_path, prerequisite_build in (
+            (Path("24J5353b__AppleTV14,1/Info.plist"), "24J5346a"),
+            (Path("payload.001/System/Library/CoreServices/Info.plist"), "23L5766a"),
+        ):
+            info_path = output_root / relative_path
+            info_path.parent.mkdir(parents=True)
+            info_path.write_bytes(plistlib.dumps({"MobileAssetProperties": {"PrerequisiteBuild": prerequisite_build}}))
+        return CompletedProcess(args=args, returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+
+    evidence = _collect_ota_classification_evidence(request)
+
+    assert evidence.info_succeeded is False
+    assert evidence.prerequisite_build is None
+    assert evidence.metadata_source == "aea-extracted-info-plist-conflict"
+    assert _classify_ota_evidence(evidence) == OtaClassification.UNKNOWN
 
 
 def test_classify_ota_falls_back_to_aea_info_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

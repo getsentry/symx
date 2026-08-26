@@ -171,8 +171,9 @@ in order:
 1. **Request metadata:** an OTA requested for the `recovery` platform is a recovery OTA.
 2. **ZIP metadata:** Symx reads the root `Info.plist` and validates the fields it needs. A non-empty
    `MobileAssetProperties.PrerequisiteBuild` identifies a delta OTA.
-3. **AEA metadata:** Symx asks `ipsw` to extract only `Info.plist` into a temporary directory. It accepts only small,
-   regular files that contain the expected typed metadata.
+3. **AEA metadata:** Symx asks `ipsw` to extract `Info.plist` candidates into a temporary directory while preserving
+   their paths. It accepts only small, regular files that contain the expected typed metadata, and all accepted
+   candidates must agree.
 
 `ipsw` 3.1.711 does not include `PrerequisiteBuild` in its JSON output. Some AppleArchive versions may also fail to
 reconstruct the plist from an AEA. In that case, an AEA-only compatibility fallback reads the single
