@@ -617,7 +617,7 @@ extract retry, provided the mirrored artifact is still present. `recovery_ota` r
 
 Existing rows are terminal skip states rather than operator emergencies. They record OTAs previously classified as referencing a DSC that the payloadv2 / Apple Archive tooling could not materialize or verify.
 
-The structured adapter does not create this state from a `payload-extract` phase plus payload/BOM inventory alone because that evidence can also accompany transient failures. Those failures now remain `symbol_extraction_failed` and visible in the default failure view until Phase 4 introduces a trusted classifier.
+The structured adapter does not create this state from a `payload-extract` phase plus payload/BOM inventory alone because that evidence can also accompany transient failures. Those failures remain `symbol_extraction_failed` and visible in the default failure view. The trusted classifier emits `delta_ota` only when it obtains a non-empty `MobileAssetProperties.PrerequisiteBuild`: directly from a ZIP root `Info.plist`, from a bounded typed `Info.plist` reconstructed from an AEA, or through the documented temporary AEA-only `PrereqBuild` text fallback required by `ipsw` 3.1.711. It does not infer delta status from `image_patches/` or other listing paths. Classification logs identify whether extracted plist metadata or the fallback was used.
 
 After a runner, macOS, `ipsw`, or AppleArchive tooling change, existing rows can be included in a curated admin extract rerun and reset to `mirrored`. They are outside the default failure view, so include `unsupported_ota_payload` in the admin state filter when reviewing them. The same explicit-filter requirement applies when retrying a misclassified `delta_ota` row.
 

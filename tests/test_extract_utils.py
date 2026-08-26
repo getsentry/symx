@@ -59,7 +59,9 @@ from symx.ota.model import (
 from symx.tools import symsort as tool_symsort
 from symx.ota.extract import (
     MACOS_OTA_DSC_ARCHITECTURES,
+    _classify_ota,
     _classify_ota_evidence,
+    _collect_ota_classification_evidence,
     _dsc_entries_from_ipsw_listing,
     _probe_payload_dsc_inventory,
     _symsort_split_results,
@@ -1736,7 +1738,7 @@ def test_extract_symbols_macos_classifies_once_when_all_architectures_are_absent
         bundle_id="ota_test",
     )
     attempts: list[Arch] = []
-    classified: list[Path] = []
+    classified: list[OtaExtractionRequest] = []
 
     def fake_extract(materialization_request: OtaDscMaterializationRequest) -> OtaDscNotPresent:
         arch = materialization_request.requested_arch
@@ -1744,8 +1746,8 @@ def test_extract_symbols_macos_classifies_once_when_all_architectures_are_absent
         attempts.append(arch)
         return _arch_not_present(arch)
 
-    def fake_classify(path: Path) -> OtaClassification:
-        classified.append(path)
+    def fake_classify(classification_request: OtaExtractionRequest) -> OtaClassification:
+        classified.append(classification_request)
         return OtaClassification.RECOVERY
 
     monkeypatch.setattr("symx.ota.extract.extract_ota", fake_extract)
@@ -1759,7 +1761,7 @@ def test_extract_symbols_macos_classifies_once_when_all_architectures_are_absent
 
     assert result == OtaExtractionSkipped(reason=OtaExtractionSkipReason.RECOVERY)
     assert attempts == list(MACOS_OTA_DSC_ARCHITECTURES)
-    assert classified == [artifact]
+    assert classified == [request]
     assert artifact.exists()
 
 
@@ -2013,26 +2015,206 @@ def test_extract_symbols_keeps_payload_extract_failure_as_materialization_error_
     assert inventory_probes == [artifact]
 
 
-def test_classify_ota_evidence_recognizes_payloadv2_dsc_patch_tree() -> None:
+def test_classify_ota_evidence_recognizes_prerequisite_delta() -> None:
     evidence = OtaClassificationEvidence(
-        info_returncode=0,
-        info_output="Version = 27.0",
-        listing_returncode=0,
-        listing_output=("AssetData/payloadv2/patches/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e"),
+        platform="tvos",
+        info_succeeded=True,
+        prerequisite_build="24J5346a",
+        metadata_source="test",
     )
 
     assert _classify_ota_evidence(evidence) == OtaClassification.DELTA
 
 
-def test_classify_ota_evidence_requires_successful_probes() -> None:
+def test_classify_ota_evidence_uses_trusted_recovery_platform() -> None:
     evidence = OtaClassificationEvidence(
-        info_returncode=1,
-        info_output="Darwin Recovery",
-        listing_returncode=1,
-        listing_output="AssetData/image_patches/System/image.patch",
+        platform="recovery",
+        info_succeeded=False,
+        prerequisite_build=None,
+        metadata_source="test",
+    )
+
+    assert _classify_ota_evidence(evidence) == OtaClassification.RECOVERY
+
+
+def test_classify_ota_evidence_requires_successful_typed_metadata() -> None:
+    evidence = OtaClassificationEvidence(
+        platform="ios",
+        info_succeeded=False,
+        prerequisite_build="22A1",
+        metadata_source="test",
     )
 
     assert _classify_ota_evidence(evidence) == OtaClassification.UNKNOWN
+
+
+def test_classify_ota_reads_prerequisite_build_from_root_info_plist(tmp_path: Path) -> None:
+    artifact = tmp_path / "delta.zip"
+    with zipfile.ZipFile(artifact, "w") as archive:
+        archive.writestr(
+            "Info.plist",
+            plistlib.dumps({"MobileAssetProperties": {"PrerequisiteBuild": "22A1"}}),
+        )
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="ios",
+        version="16.0.1",
+        build="20A1",
+        bundle_id="ota_test",
+    )
+
+    assert _classify_ota(request) == OtaClassification.DELTA
+
+
+def test_classify_ota_does_not_treat_full_cryptex_image_patches_as_delta(tmp_path: Path) -> None:
+    artifact = tmp_path / "full.zip"
+    with zipfile.ZipFile(artifact, "w") as archive:
+        archive.writestr("Info.plist", plistlib.dumps({"MobileAssetProperties": {}}))
+        archive.writestr("AssetData/payloadv2/image_patches/cryptex-system-arm64e", b"patch")
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="macos",
+        version="15.7.7",
+        build="24G720",
+        bundle_id="ota_test",
+    )
+
+    assert _classify_ota(request) == OtaClassification.UNKNOWN
+
+
+def test_classify_ota_keeps_non_zip_metadata_unknown(tmp_path: Path) -> None:
+    artifact = tmp_path / "test.ota"
+    artifact.write_bytes(b"unknown")
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="visionos",
+        version="27.0",
+        build="24M1",
+        bundle_id="ota_test",
+    )
+
+    assert _classify_ota(request) == OtaClassification.UNKNOWN
+
+
+def test_classify_ota_reads_reconstructed_aea_info_plist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    artifact = tmp_path / "test.aea"
+    artifact.write_bytes(b"AEA1")
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="tvos",
+        version="27.0",
+        build="24J5353b",
+        bundle_id="ota_test",
+    )
+
+    def fake_run(args: list[str], **kwargs: object) -> CompletedProcess[bytes]:
+        assert "extract" in args
+        assert "--flat" not in args
+        output_root = Path(args[args.index("--output") + 1])
+        for relative_path in (
+            Path("24J5353b__AppleTV14,1/Info.plist"),
+            Path("payload.001/System/Library/CoreServices/Info.plist"),
+        ):
+            info_path = output_root / relative_path
+            info_path.parent.mkdir(parents=True)
+            info_path.write_bytes(plistlib.dumps({"MobileAssetProperties": {"PrerequisiteBuild": "24J5346a"}}))
+        return CompletedProcess(args=args, returncode=1, stdout=b"", stderr=b"unrelated payload failure")
+
+    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+
+    evidence = _collect_ota_classification_evidence(request)
+
+    assert evidence.prerequisite_build == "24J5346a"
+    assert evidence.metadata_source == "aea-extracted-info-plist"
+    assert _classify_ota_evidence(evidence) == OtaClassification.DELTA
+
+
+def test_classify_ota_keeps_conflicting_aea_info_plists_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "test.aea"
+    artifact.write_bytes(b"AEA1")
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="tvos",
+        version="27.0",
+        build="24J5353b",
+        bundle_id="ota_test",
+    )
+
+    def fake_run(args: list[str], **kwargs: object) -> CompletedProcess[bytes]:
+        if "info" in args:
+            pytest.fail("conflicting extracted metadata must not select the text fallback")
+        output_root = Path(args[args.index("--output") + 1])
+        for relative_path, prerequisite_build in (
+            (Path("24J5353b__AppleTV14,1/Info.plist"), "24J5346a"),
+            (Path("payload.001/System/Library/CoreServices/Info.plist"), "23L5766a"),
+        ):
+            info_path = output_root / relative_path
+            info_path.parent.mkdir(parents=True)
+            info_path.write_bytes(plistlib.dumps({"MobileAssetProperties": {"PrerequisiteBuild": prerequisite_build}}))
+        return CompletedProcess(args=args, returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+
+    evidence = _collect_ota_classification_evidence(request)
+
+    assert evidence.info_succeeded is False
+    assert evidence.prerequisite_build is None
+    assert evidence.metadata_source == "aea-extracted-info-plist-conflict"
+    assert _classify_ota_evidence(evidence) == OtaClassification.UNKNOWN
+
+
+def test_classify_ota_falls_back_to_aea_info_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    artifact = tmp_path / "test.aea"
+    artifact.write_bytes(b"AEA1")
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="tvos",
+        version="27.0",
+        build="24J5353b",
+        bundle_id="ota_test",
+    )
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> CompletedProcess[bytes] | CompletedProcess[str]:
+        commands.append(args)
+        if "extract" in args:
+            return CompletedProcess(args=args, returncode=1, stdout=b"", stderr=b"unsupported archive stream")
+        return CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout="Version = 27.0\nPrereqBuild    = 24J5346a\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+
+    evidence = _collect_ota_classification_evidence(request)
+
+    assert ["extract" in command for command in commands] == [True, False]
+    assert evidence.prerequisite_build == "24J5346a"
+    assert evidence.metadata_source == "ipsw-info-text-fallback"
+    assert _classify_ota_evidence(evidence) == OtaClassification.DELTA
+
+
+def test_classify_ota_uses_recovery_platform_without_reading_artifact(tmp_path: Path) -> None:
+    request = OtaExtractionRequest(
+        local_ota=tmp_path / "missing.ota",
+        work_dir=tmp_path / "work",
+        platform="recovery",
+        version="27.0",
+        build="24A1",
+        bundle_id="ota_test",
+    )
+
+    assert _classify_ota(request) == OtaClassification.RECOVERY
 
 
 def test_extract_symbols_classifies_delta_after_reconstruction_inputs_are_skipped(
@@ -2072,10 +2254,10 @@ def test_extract_symbols_classifies_delta_after_reconstruction_inputs_are_skippe
         message="OTA DSC materialization was incomplete",
     )
     monkeypatch.setattr("symx.ota.extract.extract_ota", lambda materialization_request: unavailable)
-    classified_artifacts: list[Path] = []
+    classified_requests: list[OtaExtractionRequest] = []
 
-    def classify(artifact: Path) -> OtaClassification:
-        classified_artifacts.append(artifact)
+    def classify(classification_request: OtaExtractionRequest) -> OtaClassification:
+        classified_requests.append(classification_request)
         return OtaClassification.DELTA
 
     monkeypatch.setattr("symx.ota.extract._classify_ota", classify)
@@ -2087,7 +2269,7 @@ def test_extract_symbols_classifies_delta_after_reconstruction_inputs_are_skippe
     result = extract_symbols(request)
 
     assert result == OtaExtractionSkipped(reason=OtaExtractionSkipReason.DELTA)
-    assert classified_artifacts == [artifact]
+    assert classified_requests == [request]
 
 
 def test_extract_symbols_keeps_unknown_no_primary_outcome_as_failure(
@@ -2133,7 +2315,11 @@ def test_extract_symbols_classifies_delta_when_only_subcaches_are_materialized(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     artifact = tmp_path / "test.zip"
-    artifact.touch()
+    with zipfile.ZipFile(artifact, "w") as archive:
+        archive.writestr(
+            "Info.plist",
+            plistlib.dumps({"MobileAssetProperties": {"PrerequisiteBuild": "24J5335e"}}),
+        )
     request = OtaExtractionRequest(
         local_ota=artifact,
         work_dir=tmp_path / "work",
@@ -2166,14 +2352,7 @@ def test_extract_symbols_classifies_delta_when_only_subcaches_are_materialized(
                 stdout=_ota_dsc_report(complete=True, files=files),
                 stderr=b"",
             )
-        if args[2] == "info":
-            return CompletedProcess(args=args, returncode=0, stdout="Version = 27.0", stderr="")
-        return CompletedProcess(
-            args=args,
-            returncode=0,
-            stdout="AssetData/payloadv2/patches/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e",
-            stderr="",
-        )
+        raise AssertionError(f"unexpected command: {args}")
 
     monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
 
@@ -2208,10 +2387,10 @@ def test_extract_symbols_classifies_plain_no_dsc_materialization(
         message="no DSC materialized",
     )
     monkeypatch.setattr("symx.ota.extract.extract_ota", lambda materialization_request: unavailable)
-    classified_artifacts: list[Path] = []
+    classified_requests: list[OtaExtractionRequest] = []
 
-    def classify(artifact: Path) -> OtaClassification:
-        classified_artifacts.append(artifact)
+    def classify(classification_request: OtaExtractionRequest) -> OtaClassification:
+        classified_requests.append(classification_request)
         return OtaClassification.RECOVERY
 
     monkeypatch.setattr("symx.ota.extract._classify_ota", classify)
@@ -2223,4 +2402,4 @@ def test_extract_symbols_classifies_plain_no_dsc_materialization(
     result = extract_symbols(request)
 
     assert result == OtaExtractionSkipped(reason=OtaExtractionSkipReason.RECOVERY)
-    assert classified_artifacts == [artifact]
+    assert classified_requests == [request]
