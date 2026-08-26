@@ -36,6 +36,7 @@ from symx.ota.model.materialization import (
     OtaDscNotPresent,
     OtaDscProtocolError,
     OtaDscSource,
+    OtaDscUnsupportedPrimaryError,
 )
 from symx.ota.model import (
     DYLD_SHARED_CACHE,
@@ -78,7 +79,9 @@ def _should_probe_payload_inventory(error: OtaExtractError) -> bool:
 
 
 def _is_no_dsc_materialization(error: OtaExtractError) -> bool:
-    """Return whether materialization exhausted its sources without producing a DSC."""
+    """Return whether materialization produced no supported primary DSC."""
+    if isinstance(error, OtaDscUnsupportedPrimaryError):
+        return True
     if not isinstance(error, OtaDscMaterializationError) or error.report.files:
         return False
     return any(report_error.phase == "dsc-discovery" for report_error in error.report.errors)
@@ -588,7 +591,7 @@ def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationA
 
             if not dscs:
                 architectures = ", ".join(sorted({entry.arch for entry in report.files}))
-                raise OtaDscMaterializationError(
+                raise OtaDscUnsupportedPrimaryError(
                     f"OTA DSC materialization produced no supported primary {DYLD_SHARED_CACHE} files "
                     f"for {request.local_ota}; reported architectures={architectures}",
                     report,
