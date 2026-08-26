@@ -8,7 +8,7 @@ import typer
 from symx.tools import validate_shell_deps
 from symx.ota.storage.gcs import init_storage
 from symx.ota.extract import extract_symbols
-from symx.ota.model import OtaExtractionRequest
+from symx.ota.model import OtaExtractionRequest, OtaExtractionSkipped, OtaSymbolsExtracted
 from symx.ota.runners import OtaExtract, OtaMirror
 from symx.ota.storage.maintenance import migrate
 
@@ -89,15 +89,16 @@ def extract_file(
             build=build,
             bundle_id=bundle_id,
         )
-        symbol_dirs = extract_symbols(request)
+        result = extract_symbols(request)
 
-        if symbol_dirs:
-            typer.echo("Extracted symbols to:")
-            for d in symbol_dirs:
-                typer.echo(f"  {d}")
-        else:
-            typer.echo("No symbols extracted.", err=True)
-            raise typer.Exit(code=1)
+        match result:
+            case OtaExtractionSkipped(reason=reason):
+                typer.echo(f"No symbols extracted: OTA classified as {reason}.", err=True)
+                raise typer.Exit(code=1)
+            case OtaSymbolsExtracted(symbol_dirs=symbol_dirs):
+                typer.echo("Extracted symbols to:")
+                for symbol_dir in symbol_dirs:
+                    typer.echo(f"  {symbol_dir}")
 
 
 @ota_app.command()

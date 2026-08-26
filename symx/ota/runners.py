@@ -15,17 +15,18 @@ from symx.model import (
 )
 from symx.tools import validate_shell_deps
 from symx.ota.model import (
-    DeltaOtaError,
     OtaArtifact,
     OtaDownloader,
     OtaExtractError,
     OtaExtractionRequest,
+    OtaExtractionResult,
+    OtaExtractionSkipped,
+    OtaExtractionSkipReason,
     OtaMetaData,
     OtaMetaRetriever,
     OtaStorage,
     OtaSymbolExtractor,
-    RecoveryOtaError,
-    UnsupportedOtaPayloadError,
+    OtaSymbolsExtracted,
     parse_version_tuple,
 )
 from symx.ota.extract import extract_symbols
@@ -216,50 +217,62 @@ class OtaExtract:
                                 meta_key=key,
                                 artifact=ota,
                             )
-                            symbol_dirs = self._extractor.extract(request)
-                        bundle_id = request.bundle_id
-                        for symbol_dir in symbol_dirs:
-                            with sentry_sdk.start_span(
-                                op="gcs.upload_symbols", name=f"Upload OTA symbols {ota.platform} {ota.version}"
-                            ):
-                                self.storage.upload_symbols(symbol_dir, key, ota, bundle_id)
-                        ota.processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
-                        ota.update_last_run()
-                        self.storage.update_meta_item(key, ota)
-                        artifacts_extracted += 1
-                        sentry_sdk.metrics.count("ota.extract.succeeded", 1, attributes={"platform": ota.platform})
-                    except DeltaOtaError:
-                        logger.info(
-                            "Skipping delta/patch OTA %s %s %s (no full DSC)", ota.platform, ota.version, ota.build
-                        )
-                        ota.processing_state = ArtifactProcessingState.DELTA_OTA
-                        ota.update_last_run()
-                        self.storage.update_meta_item(key, ota)
-                        artifacts_skipped += 1
-                        sentry_sdk.metrics.count("ota.extract.skipped_delta", 1, attributes={"platform": ota.platform})
-                    except RecoveryOtaError:
-                        logger.info("Skipping recovery OTA %s %s %s (no DSC)", ota.platform, ota.version, ota.build)
-                        ota.processing_state = ArtifactProcessingState.RECOVERY_OTA
-                        ota.update_last_run()
-                        self.storage.update_meta_item(key, ota)
-                        artifacts_skipped += 1
-                        sentry_sdk.metrics.count(
-                            "ota.extract.skipped_recovery", 1, attributes={"platform": ota.platform}
-                        )
-                    except UnsupportedOtaPayloadError:
-                        logger.info(
-                            "Skipping unsupported OTA payload %s %s %s (DSC referenced but current tooling cannot materialize it)",
-                            ota.platform,
-                            ota.version,
-                            ota.build,
-                        )
-                        ota.processing_state = ArtifactProcessingState.UNSUPPORTED_OTA_PAYLOAD
-                        ota.update_last_run()
-                        self.storage.update_meta_item(key, ota)
-                        artifacts_skipped += 1
-                        sentry_sdk.metrics.count(
-                            "ota.extract.skipped_unsupported_payload", 1, attributes={"platform": ota.platform}
-                        )
+                            extraction = self._extractor.extract(request)
+
+                        match extraction:
+                            case OtaExtractionSkipped(reason=reason):
+                                match reason:
+                                    case OtaExtractionSkipReason.DELTA:
+                                        logger.info(
+                                            "Skipping delta/patch OTA %s %s %s (no full DSC)",
+                                            ota.platform,
+                                            ota.version,
+                                            ota.build,
+                                        )
+                                        ota.processing_state = ArtifactProcessingState.DELTA_OTA
+                                        metric = "ota.extract.skipped_delta"
+                                    case OtaExtractionSkipReason.RECOVERY:
+                                        logger.info(
+                                            "Skipping recovery OTA %s %s %s (no DSC)",
+                                            ota.platform,
+                                            ota.version,
+                                            ota.build,
+                                        )
+                                        ota.processing_state = ArtifactProcessingState.RECOVERY_OTA
+                                        metric = "ota.extract.skipped_recovery"
+                                    case OtaExtractionSkipReason.UNSUPPORTED_PAYLOAD:
+                                        logger.info(
+                                            "Skipping unsupported OTA payload %s %s %s "
+                                            "(DSC referenced but current tooling cannot materialize it)",
+                                            ota.platform,
+                                            ota.version,
+                                            ota.build,
+                                        )
+                                        ota.processing_state = ArtifactProcessingState.UNSUPPORTED_OTA_PAYLOAD
+                                        metric = "ota.extract.skipped_unsupported_payload"
+                                ota.update_last_run()
+                                self.storage.update_meta_item(key, ota)
+                                artifacts_skipped += 1
+                                sentry_sdk.metrics.count(metric, 1, attributes={"platform": ota.platform})
+                                continue
+
+                            case OtaSymbolsExtracted(symbol_dirs=symbol_dirs):
+                                bundle_id = request.bundle_id
+                                for symbol_dir in symbol_dirs:
+                                    with sentry_sdk.start_span(
+                                        op="gcs.upload_symbols",
+                                        name=f"Upload OTA symbols {ota.platform} {ota.version}",
+                                    ):
+                                        self.storage.upload_symbols(symbol_dir, key, ota, bundle_id)
+                                ota.processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
+                                ota.update_last_run()
+                                self.storage.update_meta_item(key, ota)
+                                artifacts_extracted += 1
+                                sentry_sdk.metrics.count(
+                                    "ota.extract.succeeded",
+                                    1,
+                                    attributes={"platform": ota.platform},
+                                )
                     except OtaExtractError as e:
                         sentry_sdk.capture_exception(e)
                         logger.warning(
@@ -297,5 +310,5 @@ class _RealOtaSymbolExtractor(OtaSymbolExtractor):
     def validate_deps(self) -> None:
         validate_shell_deps()
 
-    def extract(self, request: OtaExtractionRequest) -> list[Path]:
+    def extract(self, request: OtaExtractionRequest) -> OtaExtractionResult:
         return extract_symbols(request)

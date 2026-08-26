@@ -2,11 +2,12 @@
 
 Application code constructs requests from validated workflow state; the adapter
 constructs sources and results after validating the external ``ipsw`` report.
-These values are operation context, not persistence or wire schemas. Only
-failures retain the parsed report needed for diagnostics and classification.
+These values are operation context, not persistence or wire schemas. Non-success
+outcomes retain the parsed report needed for diagnostics and classification.
 """
 
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from symx.model import Arch
@@ -55,6 +56,8 @@ class OtaDscSource:
 
 @dataclass(frozen=True)
 class OtaDscMaterializationResult:
+    """Materialization produced one or more supported primary DSCs."""
+
     dscs: tuple[OtaDscSource, ...]
 
 
@@ -66,7 +69,34 @@ class OtaDscNotPresent:
     report: OtaDscReport
 
 
-OtaDscMaterializationAttempt = OtaDscMaterializationResult | OtaDscNotPresent
+class OtaDscUnavailableReason(StrEnum):
+    """Why a valid ipsw report did not produce usable materialization input."""
+
+    INCOMPLETE = "incomplete"
+    NO_SUPPORTED_PRIMARY = "no_supported_primary"
+
+
+@dataclass(frozen=True)
+class OtaDscUnavailable:
+    """A valid report that cannot be accepted as complete Symx input."""
+
+    reason: OtaDscUnavailableReason
+    report: OtaDscReport
+    message: str
+
+    @property
+    def exhausted_sources_without_primary(self) -> bool:
+        """Whether all attempted sources yielded no supported primary DSC."""
+        if self.reason == OtaDscUnavailableReason.NO_SUPPORTED_PRIMARY:
+            return True
+        return not self.report.files and any(error.phase == "dsc-discovery" for error in self.report.errors)
+
+    @property
+    def has_payload_extraction_failure(self) -> bool:
+        return any(error.phase == "payload-extract" for error in self.report.errors)
+
+
+OtaDscMaterializationAttempt = OtaDscMaterializationResult | OtaDscNotPresent | OtaDscUnavailable
 
 
 class OtaDscProtocolError(OtaExtractError):
@@ -74,12 +104,9 @@ class OtaDscProtocolError(OtaExtractError):
 
 
 class OtaDscMaterializationError(OtaExtractError):
-    """Raised for a valid report that cannot be accepted as complete Symx input."""
+    """Raised after an unavailable materialization outcome cannot be classified."""
 
-    def __init__(self, message: str, report: OtaDscReport) -> None:
-        super().__init__(message)
-        self.report = report
-
-
-class OtaDscUnsupportedPrimaryError(OtaDscMaterializationError):
-    """Raised when materialization produces files but no supported primary DSC."""
+    def __init__(self, unavailable: OtaDscUnavailable) -> None:
+        super().__init__(unavailable.message)
+        self.unavailable = unavailable
+        self.report = unavailable.report

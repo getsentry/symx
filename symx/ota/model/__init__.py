@@ -8,6 +8,7 @@ the ``ipsw_report`` and ``materialization`` submodules respectively.
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from subprocess import CompletedProcess
 from typing import Protocol
@@ -103,6 +104,49 @@ class OtaExtractionRequest:
 
 
 @dataclass(frozen=True)
+class OtaSymbolsExtracted:
+    """Successful extraction output ready for symbol upload."""
+
+    symbol_dirs: tuple[Path, ...]
+
+
+class OtaExtractionSkipReason(StrEnum):
+    """Expected artifact dispositions that do not produce symbols."""
+
+    DELTA = "delta"
+    RECOVERY = "recovery"
+    UNSUPPORTED_PAYLOAD = "unsupported_payload"
+
+
+@dataclass(frozen=True)
+class OtaExtractionSkipped:
+    """An expected terminal extraction disposition."""
+
+    reason: OtaExtractionSkipReason
+
+
+OtaExtractionResult = OtaSymbolsExtracted | OtaExtractionSkipped
+
+
+class OtaClassification(StrEnum):
+    """Best-effort diagnosis after materialization finds no usable DSC."""
+
+    DELTA = "delta"
+    RECOVERY = "recovery"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class OtaClassificationEvidence:
+    """Untrusted command results collected for pure OTA classification policy."""
+
+    info_returncode: int
+    info_output: str
+    listing_returncode: int
+    listing_output: str
+
+
+@dataclass(frozen=True)
 class DSCSearchResult:
     arch: Arch
     artifact: Path
@@ -143,8 +187,8 @@ class OtaDownloader(Protocol):
 class OtaSymbolExtractor(Protocol):
     def validate_deps(self) -> None: ...
 
-    def extract(self, request: OtaExtractionRequest) -> list[Path]:
-        """Run the full extract pipeline, return list of symbol directories."""
+    def extract(self, request: OtaExtractionRequest) -> OtaExtractionResult:
+        """Run extraction and return either symbols or an expected skip disposition."""
         ...
 
 
@@ -161,24 +205,6 @@ class OtaMirrorError(Exception):
 
 
 class OtaExtractError(Exception):
-    pass
-
-
-class DeltaOtaError(Exception):
-    """Raised when an OTA is identified as a delta/patch update that contains no full DSC."""
-
-    pass
-
-
-class RecoveryOtaError(Exception):
-    """Raised when an OTA is a recoveryOS update (minimal boot environment, no DSC)."""
-
-    pass
-
-
-class UnsupportedOtaPayloadError(Exception):
-    """Raised when an OTA references a DSC but current tooling cannot materialize it."""
-
     pass
 
 

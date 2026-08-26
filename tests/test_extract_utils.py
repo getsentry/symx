@@ -43,18 +43,23 @@ from symx.ota.model.materialization import (
     OtaDscNotPresent,
     OtaDscProtocolError,
     OtaDscSource,
+    OtaDscUnavailable,
+    OtaDscUnavailableReason,
 )
 from symx.ota.model import (
     DSCSearchResult,
-    DeltaOtaError,
+    OtaClassification,
+    OtaClassificationEvidence,
     OtaExtractError,
     OtaExtractionRequest,
-    RecoveryOtaError,
+    OtaExtractionSkipped,
+    OtaExtractionSkipReason,
+    OtaSymbolsExtracted,
 )
 from symx.tools import symsort as tool_symsort
 from symx.ota.extract import (
     MACOS_OTA_DSC_ARCHITECTURES,
-    _classify_ota_failure,
+    _classify_ota_evidence,
     _dsc_entries_from_ipsw_listing,
     _probe_payload_dsc_inventory,
     _symsort_split_results,
@@ -1275,7 +1280,7 @@ def test_extract_ota_returns_clean_requested_arch_absence(tmp_path: Path, monkey
     assert result.report.files == []
 
 
-def test_extract_ota_rejects_source_attributed_requested_arch_absence(
+def test_extract_ota_returns_unavailable_for_source_attributed_requested_arch_absence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     request = _ota_materialization_request(tmp_path, Arch.X86_64H)
@@ -1294,11 +1299,14 @@ def test_extract_ota_rejects_source_attributed_requested_arch_absence(
         ),
     )
 
-    with pytest.raises(OtaDscMaterializationError, match="incomplete"):
-        extract_ota(request)
+    result = extract_ota(request)
+
+    assert isinstance(result, OtaDscUnavailable)
+    assert result.reason == OtaDscUnavailableReason.INCOMPLETE
+    assert "incomplete" in result.message
 
 
-def test_extract_ota_rejects_incomplete_report_without_fallback(
+def test_extract_ota_returns_incomplete_report_without_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     request = _ota_materialization_request(tmp_path)
@@ -1315,10 +1323,12 @@ def test_extract_ota_rejects_incomplete_report_without_fallback(
 
     monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
 
-    with pytest.raises(OtaDscMaterializationError, match="incomplete.*exit code 1") as exc_info:
-        extract_ota(request)
+    result = extract_ota(request)
 
-    assert exc_info.value.report.errors[0].phase == "dsc-discovery"
+    assert isinstance(result, OtaDscUnavailable)
+    assert result.reason == OtaDscUnavailableReason.INCOMPLETE
+    assert "incomplete" in result.message and "exit code 1" in result.message
+    assert result.report.errors[0].phase == "dsc-discovery"
     assert len(calls) == 1
     assert "--json" in calls[0]
 
@@ -1338,8 +1348,11 @@ def test_extract_ota_rejects_partial_report_before_split(tmp_path: Path, monkeyp
         lambda args, *, stdin, capture_output: CompletedProcess(args=args, returncode=1, stdout=report, stderr=b""),
     )
 
-    with pytest.raises(OtaDscMaterializationError, match="incomplete"):
-        extract_ota(request)
+    result = extract_ota(request)
+
+    assert isinstance(result, OtaDscUnavailable)
+    assert result.reason == OtaDscUnavailableReason.INCOMPLETE
+    assert "incomplete" in result.message
 
 
 @pytest.mark.parametrize(
@@ -1543,7 +1556,10 @@ def test_extract_symbols_non_macos_splits_only_validated_report_sources(
         lambda split_dirs, platform, bundle_id, output_dir: [tmp_path / "symbols"],
     )
 
-    assert extract_symbols(request) == [tmp_path / "symbols"]
+    result = extract_symbols(request)
+
+    assert isinstance(result, OtaSymbolsExtracted)
+    assert result.symbol_dirs == (tmp_path / "symbols",)
     assert len(captured_search_results) == 1
     assert captured_search_results[0].arch == Arch.ARM64E
     assert captured_search_results[0].artifact.name == "dyld_shared_cache_arm64e"
@@ -1623,7 +1639,10 @@ def test_extract_symbols_processes_macos_architectures_sequentially(
     monkeypatch.setattr("symx.ota.extract.decompress_archive", fake_decompress)
     monkeypatch.setattr("symx.ota.extract._symsort_split_results", fake_symsort)
 
-    assert extract_symbols(request) == [request.work_dir / "symbols" / request.bundle_id]
+    result = extract_symbols(request)
+
+    assert isinstance(result, OtaSymbolsExtracted)
+    assert result.symbol_dirs == (request.work_dir / "symbols" / request.bundle_id,)
     assert attempts == list(MACOS_OTA_DSC_ARCHITECTURES)
     assert split_arches == [Arch.ARM64E, Arch.X86_64H]
     assert len(symsort_inputs) == 1
@@ -1656,13 +1675,19 @@ def test_extract_symbols_macos_real_failure_after_success_is_not_masked(
             errors=[{"phase": "mount", "source": "cryptex-system-x86_64", "message": "failed"}],
         )
     )
-    failure = OtaDscMaterializationError("x86_64 failed", report)
+    unavailable = OtaDscUnavailable(
+        reason=OtaDscUnavailableReason.INCOMPLETE,
+        report=report,
+        message="x86_64 failed",
+    )
     split_dir: Path | None = None
 
-    def fake_extract(materialization_request: OtaDscMaterializationRequest) -> OtaDscMaterializationResult:
+    def fake_extract(
+        materialization_request: OtaDscMaterializationRequest,
+    ) -> OtaDscMaterializationResult | OtaDscUnavailable:
         arch = materialization_request.requested_arch
         if arch == Arch.X86_64:
-            raise failure
+            return unavailable
         assert arch == Arch.ARM64E
         dsc = materialization_request.output_root / "dyld_shared_cache_arm64e"
         dsc.touch()
@@ -1691,7 +1716,7 @@ def test_extract_symbols_macos_real_failure_after_success_is_not_masked(
     with pytest.raises(OtaDscMaterializationError) as exc_info:
         extract_symbols(request)
 
-    assert exc_info.value is failure
+    assert exc_info.value.unavailable is unavailable
     assert split_dir is not None and not split_dir.exists()
     assert not list(request.work_dir.glob("**/*.tar.zst"))
     assert artifact.exists()
@@ -1719,20 +1744,20 @@ def test_extract_symbols_macos_classifies_once_when_all_architectures_are_absent
         attempts.append(arch)
         return _arch_not_present(arch)
 
-    def fake_classify(path: Path) -> type[Exception]:
+    def fake_classify(path: Path) -> OtaClassification:
         classified.append(path)
-        return RecoveryOtaError
+        return OtaClassification.RECOVERY
 
     monkeypatch.setattr("symx.ota.extract.extract_ota", fake_extract)
-    monkeypatch.setattr("symx.ota.extract._classify_ota_failure", fake_classify)
+    monkeypatch.setattr("symx.ota.extract._classify_ota", fake_classify)
     monkeypatch.setattr(
         "symx.ota.extract.split_dsc",
         lambda *args: pytest.fail("absent architectures must not be split"),
     )
 
-    with pytest.raises(RecoveryOtaError):
-        extract_symbols(request)
+    result = extract_symbols(request)
 
+    assert result == OtaExtractionSkipped(reason=OtaExtractionSkipReason.RECOVERY)
     assert attempts == list(MACOS_OTA_DSC_ARCHITECTURES)
     assert classified == [artifact]
     assert artifact.exists()
@@ -1965,13 +1990,14 @@ def test_extract_symbols_keeps_payload_extract_failure_as_materialization_error_
             errors=[{"phase": "payload-extract", "source": "payloadv2", "message": "transient I/O failure"}],
         )
     )
-    materialization_error = OtaDscMaterializationError("OTA DSC materialization was incomplete", report)
-    monkeypatch.setattr(
-        "symx.ota.extract.extract_ota",
-        lambda materialization_request: (_ for _ in ()).throw(materialization_error),
+    unavailable = OtaDscUnavailable(
+        reason=OtaDscUnavailableReason.INCOMPLETE,
+        report=report,
+        message="OTA DSC materialization was incomplete",
     )
+    monkeypatch.setattr("symx.ota.extract.extract_ota", lambda materialization_request: unavailable)
     monkeypatch.setattr(
-        "symx.ota.extract._classify_ota_failure",
+        "symx.ota.extract._classify_ota",
         lambda artifact: pytest.fail("materialization-phase failures must not be reclassified"),
     )
     inventory_probes: list[Path] = []
@@ -1983,32 +2009,30 @@ def test_extract_symbols_keeps_payload_extract_failure_as_materialization_error_
     with pytest.raises(OtaDscMaterializationError) as exc_info:
         extract_symbols(request)
 
-    assert exc_info.value is materialization_error
+    assert exc_info.value.unavailable is unavailable
     assert inventory_probes == [artifact]
 
 
-def test_classify_ota_failure_recognizes_payloadv2_dsc_patch_tree(monkeypatch: pytest.MonkeyPatch) -> None:
-    artifact = Path("/tmp/test.zip")
-    calls: list[list[str]] = []
+def test_classify_ota_evidence_recognizes_payloadv2_dsc_patch_tree() -> None:
+    evidence = OtaClassificationEvidence(
+        info_returncode=0,
+        info_output="Version = 27.0",
+        listing_returncode=0,
+        listing_output=("AssetData/payloadv2/patches/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e"),
+    )
 
-    def fake_run(args: list[str], *, capture_output: bool, text: bool) -> CompletedProcess[str]:
-        calls.append(args)
-        if args[2] == "info":
-            return CompletedProcess(args=args, returncode=0, stdout="Version = 27.0", stderr="")
-        return CompletedProcess(
-            args=args,
-            returncode=0,
-            stdout=("AssetData/payloadv2/patches/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e"),
-            stderr="",
-        )
+    assert _classify_ota_evidence(evidence) == OtaClassification.DELTA
 
-    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
 
-    assert _classify_ota_failure(artifact) is DeltaOtaError
-    assert calls == [
-        ["ipsw", "ota", "info", str(artifact)],
-        ["ipsw", "ota", "ls", str(artifact)],
-    ]
+def test_classify_ota_evidence_requires_successful_probes() -> None:
+    evidence = OtaClassificationEvidence(
+        info_returncode=1,
+        info_output="Darwin Recovery",
+        listing_returncode=1,
+        listing_output="AssetData/image_patches/System/image.patch",
+    )
+
+    assert _classify_ota_evidence(evidence) == OtaClassification.UNKNOWN
 
 
 def test_extract_symbols_classifies_delta_after_reconstruction_inputs_are_skipped(
@@ -2042,28 +2066,67 @@ def test_extract_symbols_classifies_delta_after_reconstruction_inputs_are_skippe
             ],
         )
     )
-    materialization_error = OtaDscMaterializationError("OTA DSC materialization was incomplete", report)
-    monkeypatch.setattr(
-        "symx.ota.extract.extract_ota",
-        lambda materialization_request: (_ for _ in ()).throw(materialization_error),
+    unavailable = OtaDscUnavailable(
+        reason=OtaDscUnavailableReason.INCOMPLETE,
+        report=report,
+        message="OTA DSC materialization was incomplete",
     )
+    monkeypatch.setattr("symx.ota.extract.extract_ota", lambda materialization_request: unavailable)
     classified_artifacts: list[Path] = []
 
-    def classify(artifact: Path) -> type[Exception] | None:
+    def classify(artifact: Path) -> OtaClassification:
         classified_artifacts.append(artifact)
-        return DeltaOtaError
+        return OtaClassification.DELTA
 
-    monkeypatch.setattr("symx.ota.extract._classify_ota_failure", classify)
+    monkeypatch.setattr("symx.ota.extract._classify_ota", classify)
     monkeypatch.setattr(
         "symx.ota.extract._probe_payload_dsc_inventory",
         lambda artifact: pytest.fail("a classified delta does not need payload inventory diagnostics"),
     )
 
-    with pytest.raises(DeltaOtaError) as exc_info:
+    result = extract_symbols(request)
+
+    assert result == OtaExtractionSkipped(reason=OtaExtractionSkipReason.DELTA)
+    assert classified_artifacts == [artifact]
+
+
+def test_extract_symbols_keeps_unknown_no_primary_outcome_as_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "test.zip"
+    artifact.touch()
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="tvos",
+        version="27.0",
+        build="24J5353b",
+        bundle_id="ota_test",
+    )
+    report = OtaDscReport.model_validate_json(
+        _ota_dsc_report(
+            complete=True,
+            files=[
+                {
+                    "path": "System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e.01",
+                    "arch": "arm64e",
+                    "source": "payloadv2",
+                }
+            ],
+        )
+    )
+    unavailable = OtaDscUnavailable(
+        reason=OtaDscUnavailableReason.NO_SUPPORTED_PRIMARY,
+        report=report,
+        message="no supported primary DSC",
+    )
+    monkeypatch.setattr("symx.ota.extract.extract_ota", lambda materialization_request: unavailable)
+    monkeypatch.setattr("symx.ota.extract._classify_ota", lambda artifact: OtaClassification.UNKNOWN)
+
+    with pytest.raises(OtaDscMaterializationError) as exc_info:
         extract_symbols(request)
 
-    assert exc_info.value.__cause__ is materialization_error
-    assert classified_artifacts == [artifact]
+    assert exc_info.value.unavailable is unavailable
 
 
 def test_extract_symbols_classifies_delta_when_only_subcaches_are_materialized(
@@ -2114,11 +2177,9 @@ def test_extract_symbols_classifies_delta_when_only_subcaches_are_materialized(
 
     monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
 
-    with pytest.raises(DeltaOtaError) as exc_info:
-        extract_symbols(request)
+    result = extract_symbols(request)
 
-    assert isinstance(exc_info.value.__cause__, OtaDscMaterializationError)
-    assert "no supported primary" in str(exc_info.value.__cause__)
+    assert result == OtaExtractionSkipped(reason=OtaExtractionSkipReason.DELTA)
 
 
 def test_extract_symbols_classifies_plain_no_dsc_materialization(
@@ -2141,25 +2202,25 @@ def test_extract_symbols_classifies_plain_no_dsc_materialization(
             errors=[{"phase": "dsc-discovery", "source": "", "message": "no caches"}],
         )
     )
-    materialization_error = OtaDscMaterializationError("no DSC materialized", report)
-    monkeypatch.setattr(
-        "symx.ota.extract.extract_ota",
-        lambda materialization_request: (_ for _ in ()).throw(materialization_error),
+    unavailable = OtaDscUnavailable(
+        reason=OtaDscUnavailableReason.INCOMPLETE,
+        report=report,
+        message="no DSC materialized",
     )
+    monkeypatch.setattr("symx.ota.extract.extract_ota", lambda materialization_request: unavailable)
     classified_artifacts: list[Path] = []
 
-    def classify(artifact: Path) -> type[Exception] | None:
+    def classify(artifact: Path) -> OtaClassification:
         classified_artifacts.append(artifact)
-        return RecoveryOtaError
+        return OtaClassification.RECOVERY
 
-    monkeypatch.setattr("symx.ota.extract._classify_ota_failure", classify)
+    monkeypatch.setattr("symx.ota.extract._classify_ota", classify)
     monkeypatch.setattr(
         "symx.ota.extract._probe_payload_dsc_inventory",
         lambda artifact: pytest.fail("plain no-DSC reports do not need payload inventory diagnostics"),
     )
 
-    with pytest.raises(RecoveryOtaError) as exc_info:
-        extract_symbols(request)
+    result = extract_symbols(request)
 
-    assert exc_info.value.__cause__ is materialization_error
+    assert result == OtaExtractionSkipped(reason=OtaExtractionSkipReason.RECOVERY)
     assert classified_artifacts == [artifact]

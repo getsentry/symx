@@ -145,8 +145,10 @@ Workflow: [`symx-ota-extract.yml`](../.github/workflows/symx-ota-extract.yml)
      unfiltered materialization operation,
    - parse every schema-1 report into strict typed models and independently validate every reported path as a
      regular file beneath that attempt's output root,
+   - normalize each valid report into a typed materialization outcome: supported primary DSCs, requested architecture
+     absent, or unavailable input with an explicit `incomplete`/`no_supported_primary` reason,
    - treat an empty report containing only unattributed `dsc-discovery` errors as that requested architecture being
-     absent; any files plus errors or source-attributed error remains a failure,
+     absent; files plus errors or a source-attributed error produce an `incomplete` outcome,
    - split each macOS architecture while its materialized cache and subcaches are present, compress the split
      directory, and remove that attempt's materialization before starting the next architecture,
    - after all macOS attempts, restore every successful split archive and symsort them together,
@@ -157,9 +159,16 @@ The structured report contract was introduced in `ipsw` 3.1.707. Sequential macO
 3.1.711 or newer, the first release containing the required cryptex architecture-search behavior. There is no
 literal, payload-pattern, or other materialization fallback after a JSON operation. At least one requested macOS
 architecture must be present, and one successful architecture never hides another architecture's materialization or
-split failure. Human stderr is
-retained only as bounded diagnostic data and does not drive control flow. If all macOS candidates are absent, the
-existing delta/recovery classifier runs once. Symx does not own OTA cryptex mount lifecycle.
+split failure. Human stderr is retained only as bounded diagnostic data and does not drive control flow. Protocol and
+invocation violations remain exceptions; expected materialization availability is represented by typed outcomes
+instead of exceptions.
+
+Only after materialization exhausts its sources without a supported primary DSC does Symx collect `ipsw ota info/ls`
+evidence. A pure policy maps successful probe output to `delta`, `recovery`, or `unknown`. `delta` and `recovery`
+become typed extraction skip outcomes; `unknown` preserves the unavailable materialization as an extraction failure.
+If all macOS candidates are absent, this classifier runs once. The storage runner maps typed success/skip outcomes to
+persisted processing states, while exceptions are reserved for failed extraction. Symx does not own OTA cryptex mount
+lifecycle.
 
 A GCS extraction request owns its downloaded temporary OTA and removes it after the final macOS materialization
 attempt, before restoring split archives for symsort. `ota extract-file` does not own its input and always preserves

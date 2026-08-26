@@ -10,15 +10,20 @@ from pathlib import Path
 
 from symx.model import ArtifactProcessingState
 from symx.ota.model.ipsw_report import OtaDscReport, OtaDscReportError
-from symx.ota.model.materialization import OtaDscMaterializationError
+from symx.ota.model.materialization import (
+    OtaDscMaterializationError,
+    OtaDscUnavailable,
+    OtaDscUnavailableReason,
+)
 from symx.ota.model import (
-    DeltaOtaError,
     OtaArtifact,
     OtaExtractError,
     OtaExtractionRequest,
+    OtaExtractionResult,
+    OtaExtractionSkipped,
+    OtaExtractionSkipReason,
     OtaMetaData,
-    RecoveryOtaError,
-    UnsupportedOtaPayloadError,
+    OtaSymbolsExtracted,
     parse_version_tuple,
 )
 from symx.ota.runners import OtaExtract
@@ -82,9 +87,15 @@ class MockStorage:
 
 
 class FakeOtaExtractor:
-    """Fake extractor that creates dummy symbol dirs or raises configured errors."""
+    """Fake extractor that creates dummy symbol dirs or returns/raises configured outcomes."""
 
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        result: OtaExtractionResult | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self._result = result
         self._error = error
         self.extractions: list[OtaExtractionRequest] = []
         self.validate_called = False
@@ -92,14 +103,16 @@ class FakeOtaExtractor:
     def validate_deps(self) -> None:
         self.validate_called = True
 
-    def extract(self, request: OtaExtractionRequest) -> list[Path]:
+    def extract(self, request: OtaExtractionRequest) -> OtaExtractionResult:
         self.extractions.append(request)
         if self._error is not None:
             raise self._error
+        if self._result is not None:
+            return self._result
         symbols_dir = request.work_dir / "symbols" / request.bundle_id
         symbols_dir.mkdir(parents=True, exist_ok=True)
         (symbols_dir / "fake.sym").write_bytes(b"symbols")
-        return [symbols_dir]
+        return OtaSymbolsExtracted(symbol_dirs=(symbols_dir,))
 
 
 # -- Tests --
@@ -163,7 +176,12 @@ def test_payload_extract_materialization_failure_is_marked_symbol_extraction_fai
             )
         ],
     )
-    extractor = FakeOtaExtractor(error=OtaDscMaterializationError("incomplete materialization", report))
+    unavailable = OtaDscUnavailable(
+        reason=OtaDscUnavailableReason.INCOMPLETE,
+        report=report,
+        message="incomplete materialization",
+    )
+    extractor = FakeOtaExtractor(error=OtaDscMaterializationError(unavailable))
 
     OtaExtract(storage, extractor=extractor).extract(FakeTimeout(timedelta(minutes=5)))
 
@@ -217,7 +235,9 @@ def test_delta_ota_skipped(tmp_path: Path) -> None:
     ota_file.touch()
     storage.load_ota_returns = ota_file
 
-    extractor = FakeOtaExtractor(error=DeltaOtaError("delta"))
+    extractor = FakeOtaExtractor(
+        result=OtaExtractionSkipped(reason=OtaExtractionSkipReason.DELTA),
+    )
 
     OtaExtract(storage, extractor=extractor).extract(FakeTimeout(timedelta(minutes=5)))
 
@@ -231,7 +251,9 @@ def test_recovery_ota_skipped(tmp_path: Path) -> None:
     ota_file.touch()
     storage.load_ota_returns = ota_file
 
-    extractor = FakeOtaExtractor(error=RecoveryOtaError("recovery"))
+    extractor = FakeOtaExtractor(
+        result=OtaExtractionSkipped(reason=OtaExtractionSkipReason.RECOVERY),
+    )
 
     OtaExtract(storage, extractor=extractor).extract(FakeTimeout(timedelta(minutes=5)))
 
@@ -245,7 +267,9 @@ def test_unsupported_payload_ota_skipped(tmp_path: Path) -> None:
     ota_file.touch()
     storage.load_ota_returns = ota_file
 
-    extractor = FakeOtaExtractor(error=UnsupportedOtaPayloadError("unsupported payload"))
+    extractor = FakeOtaExtractor(
+        result=OtaExtractionSkipped(reason=OtaExtractionSkipReason.UNSUPPORTED_PAYLOAD),
+    )
 
     OtaExtract(storage, extractor=extractor).extract(FakeTimeout(timedelta(minutes=5)))
 
@@ -269,7 +293,7 @@ def test_timeout_stops_processing(tmp_path: Path) -> None:
 
     original_extract = extractor.extract
 
-    def extract_then_advance(request: OtaExtractionRequest) -> list[Path]:
+    def extract_then_advance(request: OtaExtractionRequest) -> OtaExtractionResult:
         result = original_extract(request)
         timer.advance(11)
         return result
