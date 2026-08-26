@@ -498,6 +498,7 @@ Representative counters/distributions/gauges emitted by the current code:
 - `ota.extract.materialization.succeeded`
 - `ota.extract.materialization.failed`
 - `ota.extract.materialization.incomplete`
+- `ota.extract.materialization.unavailable`
 - `ota.extract.materialization.not_present`
 - `ota.extract.materialized_dscs`
 - `ota.extract.skipped_delta`

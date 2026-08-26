@@ -36,16 +36,21 @@ from symx.ota.model.materialization import (
     OtaDscNotPresent,
     OtaDscProtocolError,
     OtaDscSource,
-    OtaDscUnsupportedPrimaryError,
+    OtaDscUnavailable,
+    OtaDscUnavailableReason,
 )
 from symx.ota.model import (
     DYLD_SHARED_CACHE,
     DSCSearchResult,
-    DeltaOtaError,
     DscSplitter,
+    OtaClassification,
+    OtaClassificationEvidence,
     OtaExtractError,
     OtaExtractionRequest,
-    RecoveryOtaError,
+    OtaExtractionResult,
+    OtaExtractionSkipped,
+    OtaExtractionSkipReason,
+    OtaSymbolsExtracted,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,21 +75,6 @@ class PayloadListingProbeResult(TypedDict):
     stdout: str | None
     stderr: str | None
     dsc_entries: list[str]
-
-
-def _should_probe_payload_inventory(error: OtaExtractError) -> bool:
-    return isinstance(error, OtaDscMaterializationError) and any(
-        report_error.phase == "payload-extract" for report_error in error.report.errors
-    )
-
-
-def _is_no_dsc_materialization(error: OtaExtractError) -> bool:
-    """Return whether materialization produced no supported primary DSC."""
-    if isinstance(error, OtaDscUnsupportedPrimaryError):
-        return True
-    if not isinstance(error, OtaDscMaterializationError) or error.report.files:
-        return False
-    return any(report_error.phase == "dsc-discovery" for report_error in error.report.errors)
 
 
 def _is_clean_requested_arch_absence(report: OtaDscReport) -> bool:
@@ -303,40 +293,55 @@ def symsort(dsc_split_dirs: list[Path], output_dir: Path, prefix: str, bundle_id
         raise OtaExtractError(f"Symsorter failed with {result}")
 
 
-def _classify_ota_failure(artifact: Path) -> type[Exception] | None:
-    """When DSC extraction fails, classify the OTA to determine the appropriate error type.
-
-    Runs ipsw ota info + ls once and checks for:
-    - Recovery OTA (Darwin Recovery / RecoveryOSUpdate) → RecoveryOtaError
-    - Delta OTA (contains image_patches/) → DeltaOtaError
-
-    Returns the error class to raise, or None if the OTA type is unrecognized.
-    """
+def _collect_ota_classification_evidence(artifact: Path) -> OtaClassificationEvidence:
+    """Collect best-effort evidence only after materialization finds no usable DSC."""
     info_result = subprocess.run(
         ["ipsw", "ota", "info", str(artifact)],
         capture_output=True,
         text=True,
     )
-    info_output = info_result.stdout + info_result.stderr
-    if "Darwin Recovery" in info_output or "RecoveryOSUpdate" in info_output:
-        return RecoveryOtaError
-
-    # Check for delta indicators in the file listing:
-    # - image_patches/: newer-style delta OTAs (e.g. iPad)
-    # - payloadv2/patches/System/Library/Caches/com.apple.dyld/: older-style deltas (e.g. Apple TV)
-    #   where the DSC itself is a binary diff
-    # Note: app_patches/ alone is not sufficient: full OTAs (e.g. watchOS, visionOS) can also
-    # contain app_patches/ alongside a full system image with a DSC.
     ls_result = subprocess.run(
         ["ipsw", "ota", "ls", str(artifact)],
         capture_output=True,
         text=True,
     )
-    ls_output = ls_result.stdout + ls_result.stderr
-    if "image_patches/" in ls_output or "payloadv2/patches/System/Library/Caches/com.apple.dyld/" in ls_output:
-        return DeltaOtaError
+    return OtaClassificationEvidence(
+        info_returncode=info_result.returncode,
+        info_output=info_result.stdout + info_result.stderr,
+        listing_returncode=ls_result.returncode,
+        listing_output=ls_result.stdout + ls_result.stderr,
+    )
 
-    return None
+
+def _classify_ota_evidence(evidence: OtaClassificationEvidence) -> OtaClassification:
+    """Apply pure classification policy to collected OTA metadata and listing output."""
+    if evidence.info_returncode == 0 and (
+        "Darwin Recovery" in evidence.info_output or "RecoveryOSUpdate" in evidence.info_output
+    ):
+        return OtaClassification.RECOVERY
+
+    # High-confidence delta indicators:
+    # - image_patches/: newer-style delta OTAs (e.g. iPad)
+    # - payloadv2/patches/System/Library/Caches/com.apple.dyld/: older-style deltas (e.g. Apple TV)
+    #   where the DSC itself is a binary diff
+    # Note: app_patches/ alone is not sufficient: full OTAs (e.g. watchOS, visionOS) can also
+    # contain app_patches/ alongside a full system image with a DSC.
+    if evidence.listing_returncode == 0 and (
+        "image_patches/" in evidence.listing_output
+        or "payloadv2/patches/System/Library/Caches/com.apple.dyld/" in evidence.listing_output
+    ):
+        return OtaClassification.DELTA
+
+    return OtaClassification.UNKNOWN
+
+
+def _classify_ota(artifact: Path) -> OtaClassification:
+    try:
+        evidence = _collect_ota_classification_evidence(artifact)
+    except OSError as error:
+        logger.warning("Could not collect OTA classification evidence for %s: %s", artifact, error)
+        return OtaClassification.UNKNOWN
+    return _classify_ota_evidence(evidence)
 
 
 def _parse_ota_dsc_report(
@@ -490,6 +495,25 @@ def _set_materialization_report_data(span: Span, report: OtaDscReport) -> None:
     )
 
 
+def _record_materialization_unavailable(
+    span: Span,
+    request: OtaDscMaterializationRequest,
+    unavailable: OtaDscUnavailable,
+) -> OtaDscUnavailable:
+    span.set_data("unavailable_reason", str(unavailable.reason))
+    sentry_sdk.metrics.count(
+        "ota.extract.materialization.unavailable",
+        1,
+        attributes={"platform": request.platform, "reason": str(unavailable.reason)},
+    )
+    if unavailable.reason == OtaDscUnavailableReason.INCOMPLETE:
+        span.set_status("internal_error")
+        span.set_data("failure_reason", unavailable.message)
+        sentry_sdk.metrics.count("ota.extract.materialization.failed", 1, attributes={"platform": request.platform})
+        sentry_sdk.metrics.count("ota.extract.materialization.incomplete", 1, attributes={"platform": request.platform})
+    return unavailable
+
+
 def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationAttempt:
     """Materialize and validate one requested architecture, or the unfiltered non-macOS set."""
     with sentry_sdk.start_span(op="ota.extract.materialize_dsc", name="Materialize OTA DSCs") as span:
@@ -560,10 +584,17 @@ def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationA
 
             if not report.complete:
                 phases = ", ".join(sorted({error.phase for error in report.errors}))
-                raise OtaDscMaterializationError(
-                    f"OTA DSC materialization was incomplete for {request.local_ota} "
-                    f"with exit code {result.returncode}; phases={phases}",
-                    report,
+                return _record_materialization_unavailable(
+                    span,
+                    request,
+                    OtaDscUnavailable(
+                        reason=OtaDscUnavailableReason.INCOMPLETE,
+                        report=report,
+                        message=(
+                            f"OTA DSC materialization was incomplete for {request.local_ota} "
+                            f"with exit code {result.returncode}; phases={phases}"
+                        ),
+                    ),
                 )
 
             if request.requested_arch is not None:
@@ -591,10 +622,17 @@ def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationA
 
             if not dscs:
                 architectures = ", ".join(sorted({entry.arch for entry in report.files}))
-                raise OtaDscUnsupportedPrimaryError(
-                    f"OTA DSC materialization produced no supported primary {DYLD_SHARED_CACHE} files "
-                    f"for {request.local_ota}; reported architectures={architectures}",
-                    report,
+                return _record_materialization_unavailable(
+                    span,
+                    request,
+                    OtaDscUnavailable(
+                        reason=OtaDscUnavailableReason.NO_SUPPORTED_PRIMARY,
+                        report=report,
+                        message=(
+                            f"OTA DSC materialization produced no supported primary {DYLD_SHARED_CACHE} files "
+                            f"for {request.local_ota}; reported architectures={architectures}"
+                        ),
+                    ),
                 )
             if request.requested_arch is not None and (len(dscs) != 1 or dscs[0].arch != request.requested_arch):
                 raise OtaDscProtocolError(
@@ -605,10 +643,6 @@ def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationA
             span.set_status("internal_error")
             span.set_data("failure_reason", str(error))
             sentry_sdk.metrics.count("ota.extract.materialization.failed", 1, attributes={"platform": request.platform})
-            if isinstance(error, OtaDscMaterializationError) and not error.report.complete:
-                sentry_sdk.metrics.count(
-                    "ota.extract.materialization.incomplete", 1, attributes={"platform": request.platform}
-                )
             raise
 
         sentry_sdk.metrics.count("ota.extract.materialization.succeeded", 1, attributes={"platform": request.platform})
@@ -619,41 +653,56 @@ def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationA
         return OtaDscMaterializationResult(dscs=dscs)
 
 
-def extract_symbols(request: OtaExtractionRequest) -> list[Path]:
-    """Extract symbols from a local OTA file without interacting with storage."""
+def extract_symbols(request: OtaExtractionRequest) -> OtaExtractionResult:
+    """Extract symbols or return an expected artifact disposition without storage side effects."""
     return _process_ota(request)
 
 
-def _process_ota(request: OtaExtractionRequest) -> list[Path]:
-    try:
-        if request.platform == "macos":
-            return _process_macos_ota(request)
+def _resolve_unavailable_materialization(
+    request: OtaExtractionRequest,
+    unavailable: OtaDscUnavailable,
+) -> OtaExtractionSkipped:
+    if unavailable.exhausted_sources_without_primary:
+        classification = _classify_ota(request.local_ota)
+        if classification == OtaClassification.DELTA:
+            return OtaExtractionSkipped(reason=OtaExtractionSkipReason.DELTA)
+        if classification == OtaClassification.RECOVERY:
+            return OtaExtractionSkipped(reason=OtaExtractionSkipReason.RECOVERY)
 
-        with tempfile.TemporaryDirectory(suffix="_dsc_extract") as extract_dsc_tmp_dir:
-            materialization_request = OtaDscMaterializationRequest.from_extraction_request(
-                request,
-                output_root=Path(extract_dsc_tmp_dir),
-            )
-            materialized = extract_ota(materialization_request)
-            if isinstance(materialized, OtaDscNotPresent):
+    if unavailable.has_payload_extraction_failure:
+        _probe_payload_dsc_inventory(request.local_ota)
+
+    raise OtaDscMaterializationError(unavailable)
+
+
+def _process_ota(request: OtaExtractionRequest) -> OtaExtractionResult:
+    if request.platform == "macos":
+        return _process_macos_ota(request)
+
+    with tempfile.TemporaryDirectory(suffix="_dsc_extract") as extract_dsc_tmp_dir:
+        materialization_request = OtaDscMaterializationRequest.from_extraction_request(
+            request,
+            output_root=Path(extract_dsc_tmp_dir),
+        )
+        match extract_ota(materialization_request):
+            case OtaDscNotPresent():
                 raise OtaDscProtocolError("unfiltered OTA materialization returned an architecture absence")
-            logger.info("Splitting & symsorting DSC for %s", request.local_ota.name)
-            search_results = _dsc_search_results(materialized.dscs, request)
-            split_dirs = split_dsc(search_results)
-            return _symsort_split_results(split_dirs, request.platform, request.bundle_id, request.work_dir)
-    except OtaDscProtocolError:
-        raise
-    except OtaExtractError as error:
-        if _is_no_dsc_materialization(error):
-            error_cls = _classify_ota_failure(request.local_ota)
-            if error_cls is not None:
-                raise error_cls(f"{error_cls.__name__}: {request.local_ota}") from error
-        if _should_probe_payload_inventory(error):
-            _probe_payload_dsc_inventory(request.local_ota)
-        raise
+            case OtaDscUnavailable() as unavailable:
+                return _resolve_unavailable_materialization(request, unavailable)
+            case OtaDscMaterializationResult(dscs=dscs):
+                logger.info("Splitting & symsorting DSC for %s", request.local_ota.name)
+                search_results = _dsc_search_results(dscs, request)
+                split_dirs = split_dsc(search_results)
+                symbol_dirs = _symsort_split_results(
+                    split_dirs,
+                    request.platform,
+                    request.bundle_id,
+                    request.work_dir,
+                )
+                return OtaSymbolsExtracted(symbol_dirs=tuple(symbol_dirs))
 
 
-def _process_macos_ota(request: OtaExtractionRequest) -> list[Path]:
+def _process_macos_ota(request: OtaExtractionRequest) -> OtaExtractionResult:
     archives: list[tuple[Path, Path]] = []
     split_dirs_to_clean: list[Path] = []
     absent: list[OtaDscNotPresent] = []
@@ -672,39 +721,46 @@ def _process_macos_ota(request: OtaExtractionRequest) -> list[Path]:
                         output_root=Path(materialization_dir),
                         requested_arch=arch,
                     )
-                    attempt = extract_ota(materialization_request)
-                    if isinstance(attempt, OtaDscNotPresent):
-                        absent.append(attempt)
-                        continue
+                    match extract_ota(materialization_request):
+                        case OtaDscNotPresent() as not_present:
+                            absent.append(not_present)
+                            continue
+                        case OtaDscUnavailable() as unavailable:
+                            return _resolve_unavailable_materialization(request, unavailable)
+                        case OtaDscMaterializationResult(dscs=dscs):
+                            search_results = _dsc_search_results(dscs, request)
+                            split_dirs_to_clean.extend(result.split_dir for result in search_results)
+                            split_dirs = split_dsc(search_results)
+                            if len(split_dirs) != 1:
+                                raise OtaExtractError(
+                                    f"Expected one split directory for macOS OTA architecture {arch}, "
+                                    f"got {len(split_dirs)}"
+                                )
 
-                    search_results = _dsc_search_results(attempt.dscs, request)
-                    split_dirs_to_clean.extend(result.split_dir for result in search_results)
-                    split_dirs = split_dsc(search_results)
-                    if len(split_dirs) != 1:
-                        raise OtaExtractError(
-                            f"Expected one split directory for macOS OTA architecture {arch}, got {len(split_dirs)}"
-                        )
-
-                    split_dir = split_dirs[0]
-                    archive_path = split_dir.parent / f"{split_dir.name}.tar.zst"
-                    archives.append((archive_path, split_dir))
-                    try:
-                        compressed = compress_directory(split_dir)
-                    except (DirectoryArchiveError, OSError) as error:
-                        raise OtaExtractError(f"Could not compress macOS OTA {arch} split: {error}") from error
-                    if compressed != archive_path:
-                        raise OtaExtractError(
-                            f"Unexpected macOS OTA split archive path {compressed}; expected {archive_path}"
-                        )
+                            split_dir = split_dirs[0]
+                            archive_path = split_dir.parent / f"{split_dir.name}.tar.zst"
+                            archives.append((archive_path, split_dir))
+                            try:
+                                compressed = compress_directory(split_dir)
+                            except (DirectoryArchiveError, OSError) as error:
+                                raise OtaExtractError(f"Could not compress macOS OTA {arch} split: {error}") from error
+                            if compressed != archive_path:
+                                raise OtaExtractError(
+                                    f"Unexpected macOS OTA split archive path {compressed}; expected {archive_path}"
+                                )
 
         if not archives:
             if not absent:
                 raise OtaDscProtocolError("macOS OTA architecture search produced no result")
-            raise OtaDscMaterializationError(
-                f"OTA DSC materialization found none of the requested macOS architectures: "
-                f"{', '.join(str(arch) for arch in MACOS_OTA_DSC_ARCHITECTURES)}",
-                absent[-1].report,
+            unavailable = OtaDscUnavailable(
+                reason=OtaDscUnavailableReason.NO_SUPPORTED_PRIMARY,
+                report=absent[-1].report,
+                message=(
+                    "OTA DSC materialization found none of the requested macOS architectures: "
+                    f"{', '.join(str(arch) for arch in MACOS_OTA_DSC_ARCHITECTURES)}"
+                ),
             )
+            return _resolve_unavailable_materialization(request, unavailable)
 
         if request.owns_local_ota and request.local_ota.exists():
             logger.info("Deleting workflow-owned OTA after materialization: %s", request.local_ota)
@@ -722,12 +778,13 @@ def _process_macos_ota(request: OtaExtractionRequest) -> list[Path]:
                 raise OtaExtractError(f"Could not restore macOS OTA split {archive_path}: {error}") from error
             restored_split_dirs.append(split_dir)
 
-        return _symsort_split_results(
+        symbol_dirs = _symsort_split_results(
             restored_split_dirs,
             request.platform,
             request.bundle_id,
             request.work_dir,
         )
+        return OtaSymbolsExtracted(symbol_dirs=tuple(symbol_dirs))
     except BaseException:
         primary_error = True
         raise
