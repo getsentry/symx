@@ -38,6 +38,7 @@ def make_ota_artifact(
     platform: str = "ios",
     version: str = "17.0",
     build: str = "21A100",
+    release_type: str | None = None,
 ) -> OtaArtifact:
     return OtaArtifact(
         id=id,
@@ -51,6 +52,7 @@ def make_ota_artifact(
         devices=[],
         download_path=download_path,
         processing_state=processing_state,
+        release_type=release_type,
     )
 
 
@@ -246,7 +248,7 @@ def test_delta_ota_skipped(tmp_path: Path) -> None:
 
 def test_recovery_ota_skipped(tmp_path: Path) -> None:
     """Recovery OTAs are marked RECOVERY_OTA and skipped."""
-    storage = MockStorage({"key1": make_ota_artifact(id="key1")})
+    storage = MockStorage({"key1": make_ota_artifact(id="key1", release_type="Darwin Recovery")})
     ota_file = tmp_path / "test.zip"
     ota_file.touch()
     storage.load_ota_returns = ota_file
@@ -257,6 +259,7 @@ def test_recovery_ota_skipped(tmp_path: Path) -> None:
 
     OtaExtract(storage, extractor=extractor).extract(FakeTimeout(timedelta(minutes=5)))
 
+    assert extractor.extractions[0].release_type == "Darwin Recovery"
     assert storage.artifacts["key1"].processing_state == ArtifactProcessingState.RECOVERY_OTA
 
 

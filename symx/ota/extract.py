@@ -28,7 +28,7 @@ from symx.directory_archive import (
 from symx.model import Arch
 from symx.fs import rmdir_if_exists
 from symx.tools import dyld_split, symsort as common_symsort
-from symx.ota.model.artifact_info import OtaArtifactInfo
+from symx.ota.model.artifact_info import RECOVERY_OTA_RELEASE_TYPE, OtaArtifactInfo
 from symx.ota.model.ipsw_report import OtaDscReport, OtaDscReportFile
 from symx.ota.model.materialization import (
     OtaDscMaterializationAttempt,
@@ -306,6 +306,7 @@ def _unavailable_classification_evidence(
         platform=platform,
         info_succeeded=False,
         prerequisite_build=None,
+        is_recovery=False,
         metadata_source=metadata_source,
     )
 
@@ -331,6 +332,7 @@ def _read_zip_ota_classification_evidence(request: OtaExtractionRequest) -> OtaC
         platform=request.platform,
         info_succeeded=True,
         prerequisite_build=info.prerequisite_build,
+        is_recovery=info.is_recovery,
         metadata_source="zip-info-plist",
     )
 
@@ -370,9 +372,9 @@ def _extract_aea_ota_info(request: OtaExtractionRequest) -> OtaClassificationEvi
             except (OSError, ValueError, plistlib.InvalidFileException, ValidationError):
                 continue
 
-        prerequisite_builds = {info.prerequisite_build for info in parsed}
-        if len(prerequisite_builds) == 1:
-            prerequisite_build = prerequisite_builds.pop()
+        classification_facts = {(info.prerequisite_build, info.is_recovery) for info in parsed}
+        if len(classification_facts) == 1:
+            prerequisite_build, is_recovery = classification_facts.pop()
             logger.info(
                 "Read AEA OTA classification metadata from extracted Info.plist for %s (extract exit %d)",
                 request.local_ota,
@@ -382,6 +384,7 @@ def _extract_aea_ota_info(request: OtaExtractionRequest) -> OtaClassificationEvi
                 platform=request.platform,
                 info_succeeded=True,
                 prerequisite_build=prerequisite_build,
+                is_recovery=is_recovery,
                 metadata_source="aea-extracted-info-plist",
             )
         if parsed:
@@ -430,18 +433,20 @@ def _read_aea_info_text_fallback(request: OtaExtractionRequest) -> OtaClassifica
         platform=request.platform,
         info_succeeded=True,
         prerequisite_build=prerequisite_build,
+        is_recovery=False,
         metadata_source="ipsw-info-text-fallback",
     )
 
 
 def _collect_ota_classification_evidence(request: OtaExtractionRequest) -> OtaClassificationEvidence:
     """Read artifact metadata only after materialization finds no usable DSC."""
-    if request.platform == "recovery":
+    if request.platform == "recovery" or request.release_type == RECOVERY_OTA_RELEASE_TYPE:
         return OtaClassificationEvidence(
             platform=request.platform,
             info_succeeded=True,
             prerequisite_build=None,
-            metadata_source="request-platform",
+            is_recovery=True,
+            metadata_source="request-metadata",
         )
     if zipfile.is_zipfile(request.local_ota):
         return _read_zip_ota_classification_evidence(request)
@@ -452,7 +457,7 @@ def _collect_ota_classification_evidence(request: OtaExtractionRequest) -> OtaCl
 
 def _classify_ota_evidence(evidence: OtaClassificationEvidence) -> OtaClassification:
     """Apply pure policy to trusted request context and typed artifact metadata."""
-    if evidence.platform == "recovery":
+    if evidence.platform == "recovery" or (evidence.info_succeeded and evidence.is_recovery):
         return OtaClassification.RECOVERY
     if evidence.info_succeeded and evidence.prerequisite_build:
         return OtaClassification.DELTA

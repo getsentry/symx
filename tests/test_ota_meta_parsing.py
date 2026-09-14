@@ -35,6 +35,7 @@ def test_parse_download_meta_output_success() -> None:
             "hash_algorithm": "SHA-1",
             "devices": ["iPhone14,7"],
             "description": "iOS 17.0",
+            "type": "Darwin Recovery",
         }
     ]
     result = make_completed_process(stdout=json.dumps(meta_json).encode())
@@ -49,6 +50,7 @@ def test_parse_download_meta_output_success() -> None:
     assert artifact.platform == "ios"
     assert artifact.devices == ["iPhone14,7"]
     assert artifact.description == ["iOS 17.0"]
+    assert artifact.release_type == "Darwin Recovery"
     assert artifact.processing_state == ArtifactProcessingState.INDEXED
 
 
@@ -88,7 +90,9 @@ def test_parse_download_meta_output_no_description() -> None:
 
     parse_download_meta_output("ios", result, meta, beta=False)
 
-    assert meta["abc123def456789012345678901234567890"].description == []
+    artifact = meta["abc123def456789012345678901234567890"]
+    assert artifact.description == []
+    assert artifact.release_type is None
 
 
 def test_parse_download_meta_output_no_devices() -> None:
