@@ -2027,6 +2027,32 @@ def test_classify_ota_evidence_recognizes_prerequisite_delta() -> None:
     assert _classify_ota_evidence(evidence) == OtaClassification.DELTA
 
 
+def test_classify_ota_evidence_recognizes_synced_delivery_delta() -> None:
+    evidence = OtaClassificationEvidence(
+        platform="tvos",
+        info_succeeded=True,
+        prerequisite_build=None,
+        is_recovery=False,
+        metadata_source="request-metadata",
+        delivery="delta",
+    )
+
+    assert _classify_ota_evidence(evidence) == OtaClassification.DELTA
+
+
+def test_classify_ota_evidence_recognizes_prerequisite_version_delta() -> None:
+    evidence = OtaClassificationEvidence(
+        platform="tvos",
+        info_succeeded=True,
+        prerequisite_build=None,
+        is_recovery=False,
+        metadata_source="request-metadata",
+        prerequisite_version="26.0",
+    )
+
+    assert _classify_ota_evidence(evidence) == OtaClassification.DELTA
+
+
 def test_classify_ota_evidence_uses_trusted_recovery_platform() -> None:
     evidence = OtaClassificationEvidence(
         platform="recovery",
@@ -2296,7 +2322,18 @@ def test_classify_ota_uses_recovery_platform_without_reading_artifact(tmp_path: 
     assert _classify_ota(request) == OtaClassification.RECOVERY
 
 
-def test_classify_ota_uses_recovery_release_type_without_reading_artifact(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("release_type", "asset_type"),
+    [
+        ("Darwin Recovery", None),
+        (None, "com.apple.MobileAsset.RecoveryOSUpdate"),
+    ],
+)
+def test_classify_ota_uses_synced_recovery_metadata_without_reading_artifact(
+    tmp_path: Path,
+    release_type: str | None,
+    asset_type: str | None,
+) -> None:
     request = OtaExtractionRequest(
         local_ota=tmp_path / "missing.ota",
         work_dir=tmp_path / "work",
@@ -2304,10 +2341,62 @@ def test_classify_ota_uses_recovery_release_type_without_reading_artifact(tmp_pa
         version="27.0",
         build="24J360",
         bundle_id="ota_test",
-        release_type="Darwin Recovery",
+        release_type=release_type,
+        asset_type=asset_type,
     )
 
     assert _classify_ota(request) == OtaClassification.RECOVERY
+
+
+def test_classify_ota_uses_synced_delta_metadata_before_artifact_fallback(tmp_path: Path) -> None:
+    artifact = tmp_path / "conflicting.zip"
+    with zipfile.ZipFile(artifact, "w") as archive:
+        archive.writestr(
+            "Info.plist",
+            plistlib.dumps(
+                {
+                    "CFBundleIdentifier": "com.apple.MobileAsset.RecoveryOSUpdate",
+                    "MobileAssetProperties": {"ReleaseType": "Darwin Recovery"},
+                }
+            ),
+        )
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="tvos",
+        version="27.0",
+        build="24J5353b",
+        bundle_id="ota_test",
+        delivery="delta",
+    )
+
+    evidence = _collect_ota_classification_evidence(request)
+
+    assert evidence.metadata_source == "request-metadata"
+    assert _classify_ota_evidence(evidence) == OtaClassification.DELTA
+
+
+def test_synced_full_delivery_does_not_fall_back_to_conflicting_artifact_metadata(tmp_path: Path) -> None:
+    artifact = tmp_path / "conflicting.zip"
+    with zipfile.ZipFile(artifact, "w") as archive:
+        archive.writestr(
+            "Info.plist",
+            plistlib.dumps({"MobileAssetProperties": {"PrerequisiteBuild": "24J5346a"}}),
+        )
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="tvos",
+        version="27.0",
+        build="24J5353b",
+        bundle_id="ota_test",
+        delivery="full",
+    )
+
+    evidence = _collect_ota_classification_evidence(request)
+
+    assert evidence.metadata_source == "request-metadata"
+    assert _classify_ota_evidence(evidence) == OtaClassification.UNKNOWN
 
 
 def test_extract_symbols_classifies_delta_after_reconstruction_inputs_are_skipped(

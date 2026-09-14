@@ -8,12 +8,13 @@ the ``ipsw_report`` and ``materialization`` submodules respectively.
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from subprocess import CompletedProcess
-from typing import Protocol
+from typing import Literal, Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from symx.model import (
     Arch,
@@ -42,6 +43,9 @@ DYLD_SHARED_CACHE = "dyld_shared_cache"
 # -- Data models --
 
 
+OtaDelivery = Literal["full", "delta", "rsr"]
+
+
 class OtaArtifact(BaseModel):
     build: str
     description: list[str]
@@ -51,14 +55,18 @@ class OtaArtifact(BaseModel):
     url: str
     download_path: str | None
     devices: list[str]
+    supported_models: list[str] = Field(default_factory=list)
     hash: str
     hash_algorithm: str
     release_type: str | None = None
+    asset_type: str | None = None
+    delivery: OtaDelivery | None = None
+    prerequisite_build: str | None = None
+    prerequisite_version: str | None = None
 
-    # currently the run_id of the GHA Workflow so we can look it up
-    # TODO: add a `last_modified` field like IPSW has and migrate old meta-data offline by
-    #  hydrating it from the existing JSON plus `last_run`/fetch context where available.
+    # Currently the run ID of the GHA workflow, so we can look it up.
     last_run: int = github_run_id()
+    last_modified: datetime | None = None
     processing_state: ArtifactProcessingState = ArtifactProcessingState.INDEXED
 
     def is_indexed(self) -> bool:
@@ -69,6 +77,7 @@ class OtaArtifact(BaseModel):
 
     def update_last_run(self) -> None:
         self.last_run = github_run_id()
+        self.last_modified = datetime.now(UTC)
 
 
 OtaMetaData = dict[str, OtaArtifact]
@@ -83,6 +92,10 @@ class OtaExtractionRequest:
     build: str
     bundle_id: str
     release_type: str | None = None
+    asset_type: str | None = None
+    delivery: OtaDelivery | None = None
+    prerequisite_build: str | None = None
+    prerequisite_version: str | None = None
     owns_local_ota: bool = False
 
     @classmethod
@@ -102,6 +115,10 @@ class OtaExtractionRequest:
             build=artifact.build,
             bundle_id=f"ota_{meta_key}",
             release_type=artifact.release_type,
+            asset_type=artifact.asset_type,
+            delivery=artifact.delivery,
+            prerequisite_build=artifact.prerequisite_build,
+            prerequisite_version=artifact.prerequisite_version,
             owns_local_ota=True,
         )
 
@@ -148,6 +165,8 @@ class OtaClassificationEvidence:
     prerequisite_build: str | None
     is_recovery: bool
     metadata_source: str
+    delivery: OtaDelivery | None = None
+    prerequisite_version: str | None = None
 
 
 @dataclass(frozen=True)

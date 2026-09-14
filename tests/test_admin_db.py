@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from symx.admin.db import (
     DEFAULT_FAILURE_STATES,
     SnapshotManifest,
     build_snapshot_db,
+    connect,
     load_ipsw_failures,
     load_ipsw_rows,
     load_ota_failures,
@@ -53,6 +55,7 @@ def _ota_artifact(
     artifact_id: str,
     processing_state: ArtifactProcessingState,
     last_run: int,
+    last_modified: datetime | None = None,
 ) -> OtaArtifact:
     return OtaArtifact(
         build="22A100",
@@ -66,8 +69,48 @@ def _ota_artifact(
         hash=f"hash-{artifact_id}",
         hash_algorithm="SHA-1",
         last_run=last_run,
+        last_modified=last_modified,
         processing_state=processing_state,
     )
+
+
+def test_connect_migrates_cached_ota_snapshot_last_modified_column(tmp_path: Path) -> None:
+    db_path = tmp_path / "snapshot.sqlite3"
+    raw_conn = sqlite3.connect(db_path)
+    raw_conn.executescript(
+        """
+        CREATE TABLE ota_artifacts (
+            ota_key TEXT PRIMARY KEY,
+            build TEXT NOT NULL,
+            description_json TEXT NOT NULL,
+            version TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            artifact_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            devices_json TEXT NOT NULL,
+            hash TEXT NOT NULL,
+            hash_algorithm TEXT NOT NULL,
+            processing_state TEXT NOT NULL,
+            download_path TEXT,
+            last_run INTEGER NOT NULL
+        );
+        CREATE INDEX ota_artifacts_failure_idx
+            ON ota_artifacts(processing_state, last_run DESC);
+        """
+    )
+    raw_conn.close()
+
+    conn = connect(db_path)
+    try:
+        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(ota_artifacts)")}
+        index_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'ota_artifacts_failure_idx'"
+        ).fetchone()["sql"]
+    finally:
+        conn.close()
+
+    assert "last_modified" in columns
+    assert "last_modified DESC" in index_sql
 
 
 def test_build_snapshot_db_and_query_failures(tmp_path: Path) -> None:
@@ -108,9 +151,24 @@ def test_build_snapshot_db_and_query_failures(tmp_path: Path) -> None:
         }
     )
     ota_meta = {
-        "ota-newest": _ota_artifact("ota-newest", ArtifactProcessingState.INDEXED_INVALID, last_run=400),
-        "ota-older": _ota_artifact("ota-older", ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED, last_run=300),
-        "ota-ok": _ota_artifact("ota-ok", ArtifactProcessingState.MIRRORED, last_run=100),
+        "ota-newest": _ota_artifact(
+            "ota-newest",
+            ArtifactProcessingState.INDEXED_INVALID,
+            last_run=400,
+            last_modified=datetime(2024, 9, 3, 12, 0, 0),
+        ),
+        "ota-older": _ota_artifact(
+            "ota-older",
+            ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED,
+            last_run=500,
+            last_modified=datetime(2024, 9, 2, 12, 0, 0),
+        ),
+        "ota-ok": _ota_artifact(
+            "ota-ok",
+            ArtifactProcessingState.MIRRORED,
+            last_run=100,
+            last_modified=datetime(2024, 9, 1, 12, 0, 0),
+        ),
     }
 
     build_snapshot_db(
@@ -144,7 +202,8 @@ def test_build_snapshot_db_and_query_failures(tmp_path: Path) -> None:
 
     ota_failures = load_ota_failures(paths.db_path)
     assert [row.ota_key for row in ota_failures] == ["ota-newest", "ota-older"]
-    assert [row.last_run for row in ota_failures] == [400, 300]
+    assert [row.last_run for row in ota_failures] == [400, 500]
+    assert [row.last_modified for row in ota_failures] == ["2024-09-03T12:00:00", "2024-09-02T12:00:00"]
 
 
 def test_build_snapshot_db_allows_missing_source_last_modified(tmp_path: Path) -> None:

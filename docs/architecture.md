@@ -120,8 +120,14 @@ OTA differs from IPSW because metadata refresh is part of the mirror workflow.
 1. GitHub Actions starts an Ubuntu job.
 2. The job runs `symx ota mirror -s $SYMX_STORE`.
 3. `OtaMirror.update_meta()`:
-   - calls the `ipsw` CLI to fetch current OTA metadata from Apple,
-   - merges it into `ota_image_meta.json` in GCS.
+   - calls `ipsw download ota --platform <platform> --json [--beta]`,
+   - validates the schema-1 envelope and the typed fields Symx consumes,
+   - maps `supported_devices` to the existing device list and persists `supported_models` separately without inventing
+     device/model pairings,
+   - requires SHA-1 because OTA mirroring currently verifies SHA-1 end to end,
+   - timestamps new artifacts with `last_modified`,
+   - merges the metadata into `ota_image_meta.json` in GCS while preserving processing state, mirror paths, and the
+     existing artifact's `last_modified` timestamp.
 4. The workflow iterates OTA artifacts still in `indexed`.
 5. For each indexed OTA:
    - download the zip from Apple,
@@ -155,8 +161,10 @@ Workflow: [`symx-ota-extract.yml`](../.github/workflows/symx-ota-extract.yml)
    - upload symbol files once,
    - update the OTA state once.
 
-The structured report contract was introduced in `ipsw` 3.1.707. Sequential macOS extraction requires `ipsw`
-3.1.711 or newer, the first release containing the required cryptex architecture-search behavior. There is no
+The structured extraction report was introduced in `ipsw` 3.1.707, sequential macOS extraction first worked with
+3.1.711's cryptex architecture search, and the schema-1 OTA metadata envelope was introduced in 3.1.713. Symx now
+requires checksum-pinned `ipsw` 3.1.718 or newer to include the current OTA resolver and `arm64e_x1` DSC/cryptex
+handling. There is no
 literal, payload-pattern, or other materialization fallback after a JSON operation. At least one requested macOS
 architecture must be present, and one successful architecture never hides another architecture's materialization or
 split failure. Human stderr is retained only as bounded diagnostic data and does not drive control flow. Protocol and
@@ -168,22 +176,24 @@ instead of exceptions. `ipsw` owns the OTA cryptex mount lifecycle.
 Symx classifies an OTA only after `ipsw` cannot provide a supported primary DSC. The classifier uses these sources,
 in order:
 
-1. **Request metadata:** an OTA requested for the `recovery` platform, or carrying the `Darwin Recovery` release type
-   from OTA metadata sync, is a recovery OTA. Metadata refresh hydrates this field on existing rows without changing
-   processing state.
-2. **ZIP metadata:** When persisted release type is unavailable, Symx reads the root `Info.plist` and validates the
-   fields it needs. The canonical
+1. **Request metadata:** an OTA requested for the `recovery` platform, or carrying either the
+   `com.apple.MobileAsset.RecoveryOSUpdate` provenance asset type or `Darwin Recovery` release type from metadata sync,
+   is a recovery OTA. Synced `delivery=delta` or prerequisite build/version fields identify a delta. Metadata refresh
+   hydrates these fields on existing rows without changing processing state or `download_path`.
+2. **ZIP metadata:** When persisted schema-1 classification facts are unavailable (including local `extract-file`
+   requests), Symx reads the root `Info.plist` and validates the fields it needs. The canonical
    `com.apple.MobileAsset.RecoveryOSUpdate` bundle identifier or `Darwin Recovery` release type identifies a recovery
    OTA, while a non-empty `MobileAssetProperties.PrerequisiteBuild` identifies a delta OTA.
-3. **AEA metadata:** When persisted release type is unavailable, Symx asks `ipsw` to extract `Info.plist` candidates
+3. **AEA metadata:** When persisted schema-1 classification facts are unavailable, Symx asks `ipsw` to extract
+   `Info.plist` candidates
    into a temporary directory while preserving
    their paths. It accepts only small, regular files that contain the expected typed metadata, and all accepted
    candidates must agree on the recovery and prerequisite facts.
 
-`ipsw` 3.1.711 does not include `PrerequisiteBuild` in its JSON output. Some AppleArchive versions may also fail to
-reconstruct the plist from an AEA. In that case, an AEA-only compatibility fallback reads the single
-`PrereqBuild = ...` field from a successful `ipsw ota info` command. Logs record whether classification used an
-extracted plist or this fallback.
+Historical rows may lack the schema-1 delivery and prerequisite fields, and local `extract-file` requests have no
+synced metadata. If `ipsw` cannot reconstruct the plist from an AEA in those cases, an AEA-only compatibility fallback
+reads the single `PrereqBuild = ...` field from a successful `ipsw ota info` command. Logs record whether
+classification used synced request metadata, an extracted plist, or this fallback.
 
 The classifier follows two safety rules:
 
@@ -372,6 +382,8 @@ These could be aligned if we choose to use AppleDB as the metadata source for OT
 **Benefit:** fresh OTA metadata can be ingested without losing progress.
 
 **Shortcoming:** the merge logic becomes the authoritative definition of artifact identity and duplicate handling.
+Apple can reassociate the same URL and hash with corrected build or version metadata; Symx preserves such aliases under
+stable duplicate keys and matches their full identity on later refreshes so repeated syncs do not create more rows.
 
 ## 4.6 Shared state enum across domains
 
@@ -477,7 +489,9 @@ stateDiagram-v2
 ### OTA state notes
 
 - The persisted state lives directly on each **`OtaArtifact`**.
-- OTA metadata merge preserves `processing_state` and `download_path` for already-known artifacts.
+- OTA metadata merge preserves `processing_state`, `download_path`, and `last_modified` for already-known artifacts.
+- New artifacts receive a `last_modified` timestamp during metadata retrieval. State transitions update it alongside
+  `last_run`; legacy rows leave it empty until their next transition rather than inventing historical timestamps.
 - `iter_mirror()` always reloads metadata and prefers the newest mirrored OTA first.
 - Existing `unsupported_ota_payload` rows remain terminal and may be reset to `mirrored` through an admin curated rerun. The default extractor no longer creates new rows from a `payload-extract` phase plus payload/BOM inventory alone; that evidence does not distinguish unsupported data from transient failures.
 - A `delta_ota` row may be reset to `mirrored` only through an explicitly filtered curated extract rerun, for example after correcting a false delta classification. `recovery_ota` remains excluded.

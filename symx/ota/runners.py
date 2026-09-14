@@ -53,9 +53,15 @@ def _set_artifact_context(key: str, ota: OtaArtifact) -> None:
             "id": ota.id,
             "download_path": ota.download_path,
             "processing_state": str(ota.processing_state),
+            "last_modified": ota.last_modified.isoformat() if ota.last_modified is not None else None,
             "devices": ota.devices,
+            "supported_models": ota.supported_models,
             "hash": ota.hash,
             "release_type": ota.release_type,
+            "asset_type": ota.asset_type,
+            "delivery": ota.delivery,
+            "prerequisite_build": ota.prerequisite_build,
+            "prerequisite_version": ota.prerequisite_version,
         },
     )
 

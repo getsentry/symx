@@ -4,15 +4,17 @@ Tests for OTA metadata merge logic.
 merge_meta_data() is the core function that reconciles our stored metadata with
 fresh data from Apple. It handles:
 - Merging device/description lists
-- Detecting duplicates (same artifact with different build/URL)
+- Detecting content aliases with changed build/version/URL metadata
 - Detecting beta/release duplicates (same hash, different build)
 - Raising errors on identity mismatches
 """
 
+from datetime import UTC, datetime
+
 import pytest
 
 from symx.model import ArtifactProcessingState
-from symx.ota.model import OtaArtifact, OtaMetaData
+from symx.ota.model import OtaArtifact, OtaDelivery, OtaMetaData
 from symx.ota.meta import generate_duplicate_key_from, merge_meta_data
 
 
@@ -29,6 +31,12 @@ def make_ota_artifact(
     download_path: str | None = None,
     processing_state: ArtifactProcessingState = ArtifactProcessingState.INDEXED,
     release_type: str | None = None,
+    asset_type: str | None = None,
+    delivery: OtaDelivery | None = None,
+    prerequisite_build: str | None = None,
+    prerequisite_version: str | None = None,
+    supported_models: list[str] | None = None,
+    last_modified: datetime | None = None,
 ) -> OtaArtifact:
     if url is None:
         url = f"https://updates.cdn-apple.com/2023FallFCS/patches/{id}.zip"
@@ -45,7 +53,13 @@ def make_ota_artifact(
         download_path=download_path,
         processing_state=processing_state,
         release_type=release_type,
+        asset_type=asset_type,
+        delivery=delivery,
+        prerequisite_build=prerequisite_build,
+        prerequisite_version=prerequisite_version,
+        supported_models=supported_models or [],
         last_run=0,
+        last_modified=last_modified,
     )
 
 
@@ -83,25 +97,41 @@ def test_merge_deduplicates_description_and_device_lists() -> None:
     assert set(ours["key1"].devices) == {"iPhone11,2", "iPhone11,6", "iPhone12,1"}
 
 
-def test_merge_hydrates_release_type_without_changing_processing_state() -> None:
+def test_merge_hydrates_classification_metadata_without_changing_processing_state() -> None:
+    previous_update = datetime(2026, 9, 13, 12, tzinfo=UTC)
     ours: OtaMetaData = {
         "key1": make_ota_artifact(
             id="key1",
             processing_state=ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED,
-            release_type=None,
+            download_path="mirror/ota/ios/key1.zip",
+            last_modified=previous_update,
         )
     }
     theirs: OtaMetaData = {
         "key1": make_ota_artifact(
             id="key1",
             release_type="Darwin Recovery",
+            asset_type="com.apple.MobileAsset.RecoveryOSUpdate",
+            delivery="delta",
+            prerequisite_build="20A99",
+            prerequisite_version="16.6",
+            supported_models=["D27AP"],
+            last_modified=datetime(2026, 9, 14, 12, tzinfo=UTC),
         )
     }
 
     merge_meta_data(ours, theirs)
 
-    assert ours["key1"].release_type == "Darwin Recovery"
-    assert ours["key1"].processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
+    artifact = ours["key1"]
+    assert artifact.release_type == "Darwin Recovery"
+    assert artifact.asset_type == "com.apple.MobileAsset.RecoveryOSUpdate"
+    assert artifact.delivery == "delta"
+    assert artifact.prerequisite_build == "20A99"
+    assert artifact.prerequisite_version == "16.6"
+    assert artifact.supported_models == ["D27AP"]
+    assert artifact.processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
+    assert artifact.download_path == "mirror/ota/ios/key1.zip"
+    assert artifact.last_modified == previous_update
 
 
 def test_merge_preserves_our_processing_state_and_download_path() -> None:
@@ -175,13 +205,36 @@ def test_new_artifact_without_matching_hash_stays_indexed() -> None:
     assert ours["new_key"].processing_state == ArtifactProcessingState.INDEXED
 
 
-def test_different_version_raises_error() -> None:
-    """Same key with different version = identity mismatch, should fail."""
-    ours: OtaMetaData = {"key1": make_ota_artifact(id="key1", version="17.2.1")}
-    theirs: OtaMetaData = {"key1": make_ota_artifact(id="key1", version="17.3.0")}
+def test_same_content_with_different_version_creates_one_stable_duplicate() -> None:
+    ours: OtaMetaData = {
+        "key1": make_ota_artifact(
+            id="key1",
+            version="9.3.5",
+            build="13G36",
+            processing_state=ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED,
+        )
+    }
+    their_item = make_ota_artifact(
+        id="key1",
+        version="7.1.2",
+        build="11D257",
+        delivery="delta",
+        prerequisite_build="11D167",
+    )
+    theirs: OtaMetaData = {"key1": their_item}
 
-    with pytest.raises(RuntimeError, match="Matching keys with different value"):
-        merge_meta_data(ours, theirs)
+    merge_meta_data(ours, theirs)
+    merge_meta_data(ours, theirs)
+
+    assert len(ours) == 2
+    assert ours["key1"].version == "9.3.5"
+    assert ours["key1"].processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
+    duplicate = ours["key1_duplicate_1"]
+    assert duplicate.version == "7.1.2"
+    assert duplicate.build == "11D257"
+    assert duplicate.delivery == "delta"
+    assert duplicate.prerequisite_build == "11D167"
+    assert duplicate.processing_state == ArtifactProcessingState.INDEXED_DUPLICATE
 
 
 def test_different_platform_raises_error() -> None:
