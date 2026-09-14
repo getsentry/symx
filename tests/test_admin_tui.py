@@ -139,6 +139,7 @@ def test_format_ota_detail_includes_resolved_run_time() -> None:
         hash="def456",
         hash_algorithm="SHA-1",
         download_path=None,
+        last_modified="2024-09-03T12:35:00+00:00",
     )
     run_info = GithubRunInfo(
         run_id=456,
@@ -151,6 +152,7 @@ def test_format_ota_detail_includes_resolved_run_time() -> None:
     detail = format_ota_detail(row, run_info)
 
     assert "type: OTA artifact" in detail
+    assert "last_modified: 2024-09-03T12:35:00+00:00" in detail
     assert "last_run: #456" in detail
     assert "last_run_at: 2024-09-03 12:34Z" in detail
     assert "run_title: Extract OTA symbols" in detail

@@ -408,7 +408,7 @@ class AdminTui(App[None]):
         ipsw_table.add_columns("last_modified", "state", "platform", "version", "build", "file_name", "artifact_key")
 
         ota_table = cast(DataTable[str], self.query_one("#ota-failures", DataTable))
-        ota_table.add_columns("last_run_at", "state", "platform", "version", "build", "artifact_id", "ota_key")
+        ota_table.add_columns("last_modified", "state", "platform", "version", "build", "artifact_id", "ota_key")
 
         tasks_table = cast(DataTable[object], self.query_one("#tasks", DataTable))
         tasks_table.add_columns("type", "status", "item", "detail")
@@ -496,7 +496,7 @@ class AdminTui(App[None]):
             row_key = _ota_row_key(row)
             self._ota_rows_by_key[row_key] = row
             table.add_row(
-                format_github_run_time(row.last_run, self._run_infos.get(row.last_run)),
+                row.last_modified or EMPTY,
                 row.processing_state.value,
                 row.platform,
                 row.version,
@@ -1167,6 +1167,7 @@ def format_ota_detail(row: OtaArtifactRow, run_info: GithubRunInfo | None) -> st
             f"build: {row.build}",
             f"ota_key: {row.ota_key}",
             f"artifact_id: {row.artifact_id}",
+            f"last_modified: {row.last_modified or EMPTY}",
             f"last_run: #{row.last_run}",
             f"last_run_at: {format_github_run_time(row.last_run, run_info)}",
             f"hash: {row.hash}",

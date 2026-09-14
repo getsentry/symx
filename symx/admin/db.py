@@ -87,6 +87,7 @@ class OtaArtifactRow:
     hash: str
     hash_algorithm: str
     download_path: str | None
+    last_modified: str | None = None
 
 
 IpswFailureRow = IpswSourceRow
@@ -215,16 +216,29 @@ def init_schema(conn: sqlite3.Connection) -> None:
             hash_algorithm TEXT NOT NULL,
             processing_state TEXT NOT NULL,
             download_path TEXT,
-            last_run INTEGER NOT NULL
+            last_run INTEGER NOT NULL,
+            last_modified TEXT
         );
 
         CREATE INDEX IF NOT EXISTS ipsw_sources_failure_idx
             ON ipsw_sources(processing_state, last_modified DESC);
-
-        CREATE INDEX IF NOT EXISTS ota_artifacts_failure_idx
-            ON ota_artifacts(processing_state, last_run DESC);
         """
     )
+    ota_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(ota_artifacts)")}
+    if "last_modified" not in ota_columns:
+        conn.execute("ALTER TABLE ota_artifacts ADD COLUMN last_modified TEXT")
+
+    ota_index = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'ota_artifacts_failure_idx'"
+    ).fetchone()
+    if ota_index is None or "last_modified DESC" not in str(ota_index["sql"]):
+        conn.execute("DROP INDEX IF EXISTS ota_artifacts_failure_idx")
+        conn.execute(
+            """
+            CREATE INDEX ota_artifacts_failure_idx
+                ON ota_artifacts(processing_state, last_modified DESC, last_run DESC)
+            """
+        )
 
 
 def build_snapshot_db(
@@ -339,9 +353,10 @@ def build_snapshot_db(
                         hash_algorithm,
                         processing_state,
                         download_path,
-                        last_run
+                        last_run,
+                        last_modified
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         ota_key,
@@ -357,6 +372,7 @@ def build_snapshot_db(
                         artifact.processing_state.value,
                         artifact.download_path,
                         artifact.last_run,
+                        artifact.last_modified.isoformat() if artifact.last_modified is not None else None,
                     ),
                 )
     finally:
@@ -469,6 +485,7 @@ def load_ota_rows(
     query = """
         SELECT
             last_run,
+            last_modified,
             processing_state,
             platform,
             version,
@@ -486,7 +503,7 @@ def load_ota_rows(
         placeholders = ", ".join("?" for _ in states)
         query = f"{query}\nWHERE processing_state IN ({placeholders})"
         params.extend(state.value for state in states)
-    query = f"{query}\nORDER BY last_run DESC, ota_key ASC"
+    query = f"{query}\nORDER BY last_modified DESC, last_run DESC, ota_key ASC"
     if limit is not None:
         query = f"{query}\nLIMIT ?"
         params.append(limit)
@@ -510,6 +527,7 @@ def load_ota_rows(
             hash=str(row["hash"]),
             hash_algorithm=str(row["hash_algorithm"]),
             download_path=_str_or_none(row["download_path"]),
+            last_modified=_str_or_none(row["last_modified"]),
         )
         for row in rows
     ]

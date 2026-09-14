@@ -60,6 +60,19 @@ Requirements:
 > [!CAUTION]
 > These commands read and write the configured bucket directly. Use a non-production bucket unless you intentionally want to operate on production data.
 
+### OTA metadata retrieval
+
+Needed for:
+
+- `uv run symx ota mirror ...`
+
+Requirement:
+
+- checksum-pinned `ipsw` 3.1.718 or newer installed and on `PATH`
+
+The schema-1 OTA metadata envelope was introduced in `ipsw` 3.1.713. Symx standardizes metadata retrieval and
+extraction on the newer 3.1.718 production pin.
+
 ### Extraction commands
 
 Needed for:
@@ -72,12 +85,12 @@ Needed for:
 
 Requirements:
 
-- checksum-pinned `ipsw` 3.1.711 or newer installed and on `PATH`
+- checksum-pinned `ipsw` 3.1.718 or newer installed and on `PATH`
 - executable `./symsorter` at the repository root
 
 For IPSW extraction, Symx also ships a vendored AEA PEM DB snapshot at `symx/ipsw/data/fcs-keys.json` and passes it to `ipsw` via `--pem-db` before `ipsw` falls back to live Apple FCS-key lookup. Refresh that file from upstream `ipsw/pkg/aea/data/fcs-keys.gz` when newly mirrored IPSWs start failing with AEA/FCS-key 403s on GitHub macOS runners. Before the high-level `ipsw mount sys` / `ipsw extract --dyld` steps, Symx also does a small AEA preflight against the selected DMG member so failures can be classified as key-resolution problems earlier.
 
-In practice, the extraction paths are run on **macOS** in production because they rely on the `ipsw` toolchain, DMG mount flows, and the platform-specific `symsorter` binary. For OTA DSC materialization, Symx requires `ipsw` 3.1.711 or newer. That release includes both the structured `ipsw ota extract --dyld --json` contract and the cryptex architecture search required by sequential macOS attempts. `ipsw` owns any cryptex patching and temporary mount lifecycle.
+Production extraction runs on **macOS** because some inputs require Apple-provided macOS and Xcode binaries to handle encryption and compression algorithms that are unavailable in the Linux environment. Neither `ipsw`, DMG mounting, nor `symsorter` is inherently limited to macOS. Symx requires `ipsw` 3.1.718 or newer. The schema-1 `ipsw download ota --json` envelope first appeared in 3.1.713; the 3.1.718 production pin also includes the current OTA resolver, sequential macOS cryptex architecture search, and `arm64e_x1` DSC/cryptex handling. `ipsw` owns any cryptex patching and temporary mount lifecycle.
 
 ### Simulator extraction
 
@@ -617,7 +630,17 @@ extract retry, provided the mirrored artifact is still present. `recovery_ota` r
 
 Existing rows are terminal skip states rather than operator emergencies. They record OTAs previously classified as referencing a DSC that the payloadv2 / Apple Archive tooling could not materialize or verify.
 
-The structured adapter does not create this state from a `payload-extract` phase plus payload/BOM inventory alone because that evidence can also accompany transient failures. Those failures remain `symbol_extraction_failed` and visible in the default failure view. The trusted classifier emits `recovery_ota` from the release type retained during metadata sync, or from the canonical recovery bundle identifier/release type in a ZIP or reconstructed AEA `Info.plist` when persisted metadata is unavailable. It emits `delta_ota` only when it obtains a non-empty `MobileAssetProperties.PrerequisiteBuild`: directly from the typed plist or through the documented temporary AEA-only `PrereqBuild` text fallback required by `ipsw` 3.1.711. It does not infer artifact type from CDN URL paths, `image_patches/`, or other archive listings. Classification logs identify whether extracted plist metadata or the fallback was used.
+Classification uses trusted metadata rather than extraction-failure symptoms:
+
+- `recovery_ota` comes from synced schema-1 provenance or release-type metadata. For historical rows and local files,
+  Symx falls back to the canonical recovery fields in a ZIP or reconstructed AEA `Info.plist`.
+- `delta_ota` comes from synced `delivery=delta` or prerequisite metadata. Historical rows and local files retain the
+  typed plist and AEA-only `PrereqBuild` text fallbacks.
+- A `payload-extract` failure and payload/BOM inventory are not enough to classify an OTA because transient failures
+  can produce the same evidence. These failures remain `symbol_extraction_failed` and visible in the default view.
+- CDN paths, `image_patches/`, and archive listings are never used to infer an artifact type.
+
+Classification logs record which trusted source was used.
 
 After a runner, macOS, `ipsw`, or AppleArchive tooling change, existing rows can be included in a curated admin extract rerun and reset to `mirrored`. They are outside the default failure view, so include `unsupported_ota_payload` in the admin state filter when reviewing them. The same explicit-filter requirement applies when retrying a misclassified `delta_ota` row.
 

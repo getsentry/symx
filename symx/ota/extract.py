@@ -28,7 +28,11 @@ from symx.directory_archive import (
 from symx.model import Arch
 from symx.fs import rmdir_if_exists
 from symx.tools import dyld_split, symsort as common_symsort
-from symx.ota.model.artifact_info import RECOVERY_OTA_RELEASE_TYPE, OtaArtifactInfo
+from symx.ota.model.artifact_info import (
+    RECOVERY_OTA_BUNDLE_IDENTIFIER,
+    RECOVERY_OTA_RELEASE_TYPE,
+    OtaArtifactInfo,
+)
 from symx.ota.model.ipsw_report import OtaDscReport, OtaDscReportFile
 from symx.ota.model.materialization import (
     OtaDscMaterializationAttempt,
@@ -439,14 +443,34 @@ def _read_aea_info_text_fallback(request: OtaExtractionRequest) -> OtaClassifica
 
 
 def _collect_ota_classification_evidence(request: OtaExtractionRequest) -> OtaClassificationEvidence:
-    """Read artifact metadata only after materialization finds no usable DSC."""
-    if request.platform == "recovery" or request.release_type == RECOVERY_OTA_RELEASE_TYPE:
+    """Prefer synced classification facts, then inspect the artifact only for historical rows."""
+    if (
+        request.platform == "recovery"
+        or request.asset_type == RECOVERY_OTA_BUNDLE_IDENTIFIER
+        or request.release_type == RECOVERY_OTA_RELEASE_TYPE
+    ):
         return OtaClassificationEvidence(
             platform=request.platform,
             info_succeeded=True,
-            prerequisite_build=None,
+            prerequisite_build=request.prerequisite_build,
             is_recovery=True,
             metadata_source="request-metadata",
+            delivery=request.delivery,
+            prerequisite_version=request.prerequisite_version,
+        )
+    if (
+        request.delivery is not None
+        or request.prerequisite_build is not None
+        or request.prerequisite_version is not None
+    ):
+        return OtaClassificationEvidence(
+            platform=request.platform,
+            info_succeeded=True,
+            prerequisite_build=request.prerequisite_build,
+            is_recovery=False,
+            metadata_source="request-metadata",
+            delivery=request.delivery,
+            prerequisite_version=request.prerequisite_version,
         )
     if zipfile.is_zipfile(request.local_ota):
         return _read_zip_ota_classification_evidence(request)
@@ -459,7 +483,9 @@ def _classify_ota_evidence(evidence: OtaClassificationEvidence) -> OtaClassifica
     """Apply pure policy to trusted request context and typed artifact metadata."""
     if evidence.platform == "recovery" or (evidence.info_succeeded and evidence.is_recovery):
         return OtaClassification.RECOVERY
-    if evidence.info_succeeded and evidence.prerequisite_build:
+    if evidence.info_succeeded and (
+        evidence.delivery == "delta" or evidence.prerequisite_build or evidence.prerequisite_version
+    ):
         return OtaClassification.DELTA
     return OtaClassification.UNKNOWN
 

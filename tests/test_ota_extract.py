@@ -17,6 +17,7 @@ from symx.ota.model.materialization import (
 )
 from symx.ota.model import (
     OtaArtifact,
+    OtaDelivery,
     OtaExtractError,
     OtaExtractionRequest,
     OtaExtractionResult,
@@ -39,6 +40,10 @@ def make_ota_artifact(
     version: str = "17.0",
     build: str = "21A100",
     release_type: str | None = None,
+    asset_type: str | None = None,
+    delivery: OtaDelivery | None = None,
+    prerequisite_build: str | None = None,
+    prerequisite_version: str | None = None,
 ) -> OtaArtifact:
     return OtaArtifact(
         id=id,
@@ -53,6 +58,10 @@ def make_ota_artifact(
         download_path=download_path,
         processing_state=processing_state,
         release_type=release_type,
+        asset_type=asset_type,
+        delivery=delivery,
+        prerequisite_build=prerequisite_build,
+        prerequisite_version=prerequisite_version,
     )
 
 
@@ -145,6 +154,7 @@ def test_extract_resets_missing_ota_to_indexed() -> None:
 
     assert storage.artifacts["key1"].processing_state == ArtifactProcessingState.INDEXED
     assert storage.artifacts["key1"].download_path is None
+    assert storage.artifacts["key1"].last_modified is not None
 
 
 def test_extract_marks_failed_extraction(tmp_path: Path) -> None:
@@ -248,7 +258,18 @@ def test_delta_ota_skipped(tmp_path: Path) -> None:
 
 def test_recovery_ota_skipped(tmp_path: Path) -> None:
     """Recovery OTAs are marked RECOVERY_OTA and skipped."""
-    storage = MockStorage({"key1": make_ota_artifact(id="key1", release_type="Darwin Recovery")})
+    storage = MockStorage(
+        {
+            "key1": make_ota_artifact(
+                id="key1",
+                release_type="Darwin Recovery",
+                asset_type="com.apple.MobileAsset.RecoveryOSUpdate",
+                delivery="delta",
+                prerequisite_build="20A99",
+                prerequisite_version="16.6",
+            )
+        }
+    )
     ota_file = tmp_path / "test.zip"
     ota_file.touch()
     storage.load_ota_returns = ota_file
@@ -259,7 +280,12 @@ def test_recovery_ota_skipped(tmp_path: Path) -> None:
 
     OtaExtract(storage, extractor=extractor).extract(FakeTimeout(timedelta(minutes=5)))
 
-    assert extractor.extractions[0].release_type == "Darwin Recovery"
+    request = extractor.extractions[0]
+    assert request.release_type == "Darwin Recovery"
+    assert request.asset_type == "com.apple.MobileAsset.RecoveryOSUpdate"
+    assert request.delivery == "delta"
+    assert request.prerequisite_build == "20A99"
+    assert request.prerequisite_version == "16.6"
     assert storage.artifacts["key1"].processing_state == ArtifactProcessingState.RECOVERY_OTA
 
 
