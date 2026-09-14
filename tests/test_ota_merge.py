@@ -28,6 +28,7 @@ def make_ota_artifact(
     devices: list[str] | None = None,
     download_path: str | None = None,
     processing_state: ArtifactProcessingState = ArtifactProcessingState.INDEXED,
+    release_type: str | None = None,
 ) -> OtaArtifact:
     if url is None:
         url = f"https://updates.cdn-apple.com/2023FallFCS/patches/{id}.zip"
@@ -43,6 +44,7 @@ def make_ota_artifact(
         devices=devices or [],
         download_path=download_path,
         processing_state=processing_state,
+        release_type=release_type,
         last_run=0,
     )
 
@@ -79,6 +81,27 @@ def test_merge_deduplicates_description_and_device_lists() -> None:
 
     assert set(ours["key1"].description) == {"desc1", "desc2", "desc3"}
     assert set(ours["key1"].devices) == {"iPhone11,2", "iPhone11,6", "iPhone12,1"}
+
+
+def test_merge_hydrates_release_type_without_changing_processing_state() -> None:
+    ours: OtaMetaData = {
+        "key1": make_ota_artifact(
+            id="key1",
+            processing_state=ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED,
+            release_type=None,
+        )
+    }
+    theirs: OtaMetaData = {
+        "key1": make_ota_artifact(
+            id="key1",
+            release_type="Darwin Recovery",
+        )
+    }
+
+    merge_meta_data(ours, theirs)
+
+    assert ours["key1"].release_type == "Darwin Recovery"
+    assert ours["key1"].processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
 
 
 def test_merge_preserves_our_processing_state_and_download_path() -> None:

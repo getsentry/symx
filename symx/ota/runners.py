@@ -55,6 +55,7 @@ def _set_artifact_context(key: str, ota: OtaArtifact) -> None:
             "processing_state": str(ota.processing_state),
             "devices": ota.devices,
             "hash": ota.hash,
+            "release_type": ota.release_type,
         },
     )
 

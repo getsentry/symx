@@ -2020,6 +2020,7 @@ def test_classify_ota_evidence_recognizes_prerequisite_delta() -> None:
         platform="tvos",
         info_succeeded=True,
         prerequisite_build="24J5346a",
+        is_recovery=False,
         metadata_source="test",
     )
 
@@ -2031,6 +2032,19 @@ def test_classify_ota_evidence_uses_trusted_recovery_platform() -> None:
         platform="recovery",
         info_succeeded=False,
         prerequisite_build=None,
+        is_recovery=False,
+        metadata_source="test",
+    )
+
+    assert _classify_ota_evidence(evidence) == OtaClassification.RECOVERY
+
+
+def test_classify_ota_evidence_uses_trusted_artifact_recovery_metadata() -> None:
+    evidence = OtaClassificationEvidence(
+        platform="tvos",
+        info_succeeded=True,
+        prerequisite_build=None,
+        is_recovery=True,
         metadata_source="test",
     )
 
@@ -2042,6 +2056,7 @@ def test_classify_ota_evidence_requires_successful_typed_metadata() -> None:
         platform="ios",
         info_succeeded=False,
         prerequisite_build="22A1",
+        is_recovery=True,
         metadata_source="test",
     )
 
@@ -2065,6 +2080,32 @@ def test_classify_ota_reads_prerequisite_build_from_root_info_plist(tmp_path: Pa
     )
 
     assert _classify_ota(request) == OtaClassification.DELTA
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {
+            "CFBundleIdentifier": "com.apple.MobileAsset.RecoveryOSUpdate",
+            "MobileAssetProperties": {},
+        },
+        {"MobileAssetProperties": {"ReleaseType": "Darwin Recovery"}},
+    ],
+)
+def test_classify_ota_reads_recovery_type_from_root_info_plist(tmp_path: Path, metadata: dict[str, object]) -> None:
+    artifact = tmp_path / "recovery.zip"
+    with zipfile.ZipFile(artifact, "w") as archive:
+        archive.writestr("Info.plist", plistlib.dumps(metadata))
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="tvos",
+        version="27.0",
+        build="24J360",
+        bundle_id="ota_test",
+    )
+
+    assert _classify_ota(request) == OtaClassification.RECOVERY
 
 
 def test_classify_ota_does_not_treat_full_cryptex_image_patches_as_delta(tmp_path: Path) -> None:
@@ -2129,8 +2170,46 @@ def test_classify_ota_reads_reconstructed_aea_info_plist(tmp_path: Path, monkeyp
     evidence = _collect_ota_classification_evidence(request)
 
     assert evidence.prerequisite_build == "24J5346a"
+    assert evidence.is_recovery is False
     assert evidence.metadata_source == "aea-extracted-info-plist"
     assert _classify_ota_evidence(evidence) == OtaClassification.DELTA
+
+
+def test_classify_ota_reads_reconstructed_aea_recovery_info_plist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "test.aea"
+    artifact.write_bytes(b"AEA1")
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="visionos",
+        version="27.0",
+        build="24M362",
+        bundle_id="ota_test",
+    )
+
+    def fake_run(args: list[str], **kwargs: object) -> CompletedProcess[bytes]:
+        output_root = Path(args[args.index("--output") + 1])
+        info_path = output_root / "24M362__RealityDevice17,1" / "Info.plist"
+        info_path.parent.mkdir(parents=True)
+        info_path.write_bytes(
+            plistlib.dumps(
+                {
+                    "CFBundleIdentifier": "com.apple.MobileAsset.RecoveryOSUpdate",
+                    "MobileAssetProperties": {"ReleaseType": "Darwin Recovery"},
+                }
+            )
+        )
+        return CompletedProcess(args=args, returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+
+    evidence = _collect_ota_classification_evidence(request)
+
+    assert evidence.is_recovery is True
+    assert evidence.metadata_source == "aea-extracted-info-plist"
+    assert _classify_ota_evidence(evidence) == OtaClassification.RECOVERY
 
 
 def test_classify_ota_keeps_conflicting_aea_info_plists_unknown(
@@ -2212,6 +2291,20 @@ def test_classify_ota_uses_recovery_platform_without_reading_artifact(tmp_path: 
         version="27.0",
         build="24A1",
         bundle_id="ota_test",
+    )
+
+    assert _classify_ota(request) == OtaClassification.RECOVERY
+
+
+def test_classify_ota_uses_recovery_release_type_without_reading_artifact(tmp_path: Path) -> None:
+    request = OtaExtractionRequest(
+        local_ota=tmp_path / "missing.ota",
+        work_dir=tmp_path / "work",
+        platform="tvos",
+        version="27.0",
+        build="24J360",
+        bundle_id="ota_test",
+        release_type="Darwin Recovery",
     )
 
     assert _classify_ota(request) == OtaClassification.RECOVERY

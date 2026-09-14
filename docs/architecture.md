@@ -168,12 +168,17 @@ instead of exceptions. `ipsw` owns the OTA cryptex mount lifecycle.
 Symx classifies an OTA only after `ipsw` cannot provide a supported primary DSC. The classifier uses these sources,
 in order:
 
-1. **Request metadata:** an OTA requested for the `recovery` platform is a recovery OTA.
-2. **ZIP metadata:** Symx reads the root `Info.plist` and validates the fields it needs. A non-empty
-   `MobileAssetProperties.PrerequisiteBuild` identifies a delta OTA.
-3. **AEA metadata:** Symx asks `ipsw` to extract `Info.plist` candidates into a temporary directory while preserving
+1. **Request metadata:** an OTA requested for the `recovery` platform, or carrying the `Darwin Recovery` release type
+   from OTA metadata sync, is a recovery OTA. Metadata refresh hydrates this field on existing rows without changing
+   processing state.
+2. **ZIP metadata:** When persisted release type is unavailable, Symx reads the root `Info.plist` and validates the
+   fields it needs. The canonical
+   `com.apple.MobileAsset.RecoveryOSUpdate` bundle identifier or `Darwin Recovery` release type identifies a recovery
+   OTA, while a non-empty `MobileAssetProperties.PrerequisiteBuild` identifies a delta OTA.
+3. **AEA metadata:** When persisted release type is unavailable, Symx asks `ipsw` to extract `Info.plist` candidates
+   into a temporary directory while preserving
    their paths. It accepts only small, regular files that contain the expected typed metadata, and all accepted
-   candidates must agree.
+   candidates must agree on the recovery and prerequisite facts.
 
 `ipsw` 3.1.711 does not include `PrerequisiteBuild` in its JSON output. Some AppleArchive versions may also fail to
 reconstruct the plist from an AEA. In that case, an AEA-only compatibility fallback reads the single
@@ -183,6 +188,7 @@ extracted plist or this fallback.
 The classifier follows two safety rules:
 
 - Paths such as `image_patches/` are not evidence that an OTA is a delta. Full cryptex OTAs can contain them.
+- CDN URL paths are not used to classify recovery artifacts; the classifier uses the typed artifact plist instead.
 - Missing, malformed, conflicting, or unavailable metadata produces `unknown`; Symx does not guess from file names or
   archive listings.
 

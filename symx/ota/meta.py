@@ -30,6 +30,7 @@ class AppleOtaMetaItem(BaseModel):
     hash_algorithm: str
     devices: list[str] = Field(default_factory=list)
     description: str | None = None
+    release_type: str | None = Field(default=None, alias="type")
 
 
 _APPLE_OTA_META_ITEMS = TypeAdapter(list[AppleOtaMetaItem])
@@ -86,6 +87,7 @@ def parse_download_meta_output(
                 download_path=None,
                 hash=meta_item.hash,
                 hash_algorithm=meta_item.hash_algorithm,
+                release_type=meta_item.release_type,
             )
 
 
@@ -165,6 +167,8 @@ def merge_meta_data(ours: OtaMetaData, theirs: OtaMetaData) -> None:
             # merge data that can change over time but has no effect on the identity of the artifact
             ours[their_key].description = merge_lists(our_item.description, their_item.description)
             ours[their_key].devices = merge_lists(our_item.devices, their_item.devices)
+            if their_item.release_type is not None:
+                ours[their_key].release_type = their_item.release_type
 
             # If we have
             # - a differing build or

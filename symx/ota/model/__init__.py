@@ -53,6 +53,7 @@ class OtaArtifact(BaseModel):
     devices: list[str]
     hash: str
     hash_algorithm: str
+    release_type: str | None = None
 
     # currently the run_id of the GHA Workflow so we can look it up
     # TODO: add a `last_modified` field like IPSW has and migrate old meta-data offline by
@@ -81,6 +82,7 @@ class OtaExtractionRequest:
     version: str
     build: str
     bundle_id: str
+    release_type: str | None = None
     owns_local_ota: bool = False
 
     @classmethod
@@ -99,6 +101,7 @@ class OtaExtractionRequest:
             version=artifact.version,
             build=artifact.build,
             bundle_id=f"ota_{meta_key}",
+            release_type=artifact.release_type,
             owns_local_ota=True,
         )
 
@@ -143,6 +146,7 @@ class OtaClassificationEvidence:
     platform: str
     info_succeeded: bool
     prerequisite_build: str | None
+    is_recovery: bool
     metadata_source: str
 
 
