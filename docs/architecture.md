@@ -102,8 +102,9 @@ Workflow: [`symx-ipsw-extract.yml`](../.github/workflows/symx-ipsw-extract.yml)
 4. For each mirrored source:
    - download the mirrored IPSW back from GCS,
    - verify it against the metadata,
-   - run the IPSW extractor; macOS uses the same shared `arm64e`, `arm64e_x1`, `x86_64`, and `x86_64h` DSC
-     architecture set as OTA extraction,
+   - run the IPSW extractor; macOS probes the same shared `arm64e`, `arm64e_x1`, `x86_64`, and `x86_64h` DSC
+     architecture set as OTA extraction, using typed outcomes to continue when a candidate is absent while preserving
+     invocation and materialization failures,
    - symsort the system image and the dyld shared cache content,
    - upload symbol files into `symbols/...`,
    - mark the source as `symbols_extracted` on success.

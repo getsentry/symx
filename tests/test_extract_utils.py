@@ -20,6 +20,12 @@ import pytest
 
 from symx.model import MACOS_DSC_ARCHITECTURES, Arch
 from symx.ipsw import extract as ipsw_extract
+from symx.ipsw.materialization import (
+    IpswDscMaterialized,
+    IpswDscNotPresent,
+    IpswDscUnavailable,
+    IpswDscUnavailableReason,
+)
 from symx.ipsw.model import IpswPlatform
 from symx.ipsw.extract import (
     IpswExtractionRequest,
@@ -469,7 +475,142 @@ def test_ipsw_extract_dsc_timeout_preserves_timeout_contract_and_diagnostics(
     assert message == f"ipsw extract timed out for {extractor.ipsw_path} (default)"
 
 
-def test_ipsw_extract_dsc_raises_detailed_error_when_extract_fails(
+def test_ipsw_extract_dsc_returns_requested_arch_absence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    extractor = _make_ipsw_extractor(tmp_path)
+
+    class FakePopen:
+        def __init__(self, command: list[str], stdout: object = None, stderr: object = None) -> None:
+            self.command = command
+            self.returncode = 1
+
+        def __enter__(self) -> "FakePopen":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+            return False
+
+        def communicate(self, timeout: int | None = None) -> tuple[bytes, bytes]:
+            return b"", b"no dyld_shared_cache files found matching the specified archs: [arm64e_x1]"
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
+
+    result = extractor._ipsw_extract_dsc(Arch.ARM64E_X1)
+
+    assert result == IpswDscNotPresent(
+        arch=Arch.ARM64E_X1,
+        message="no dyld_shared_cache files found matching the specified archs: [arm64e_x1]",
+    )
+
+
+def test_ipsw_symsort_dsc_skips_absent_architecture_after_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    processing_dir = tmp_path / "processing"
+    processing_dir.mkdir()
+    ipsw_path = tmp_path / "UniversalMac_26.5.1_25F90_Restore.ipsw"
+    ipsw_path.touch()
+    extractor = _IpswExtractionRun(
+        IpswExtractionRequest(IpswPlatform.MACOS, ipsw_path, processing_dir, version="26.5.1")
+    )
+    extractor.macos_dsc_architectures = [Arch.ARM64E, Arch.ARM64E_X1]
+    extract_dir = processing_dir / "extracted"
+    extract_dir.mkdir()
+    attempts: list[Arch] = []
+    symsort_inputs: list[Path] = []
+
+    def fake_extract(arch: Arch | None = None) -> IpswDscMaterialized | IpswDscNotPresent:
+        assert arch is not None
+        attempts.append(arch)
+        if arch == Arch.ARM64E_X1:
+            return IpswDscNotPresent(arch=arch, message="not present")
+        return IpswDscMaterialized(arch=arch, extract_dir=extract_dir)
+
+    def fake_split(materialized_dir: Path, arch: Arch | None = None) -> Path:
+        assert materialized_dir == extract_dir
+        assert arch == Arch.ARM64E
+        split_dir = processing_dir / "split_out"
+        (split_dir / str(arch)).mkdir(parents=True)
+        return split_dir
+
+    def fake_compress(directory: Path) -> Path:
+        archive = directory.parent / f"{directory.name}.tar.zst"
+        directory.rmdir()
+        archive.touch()
+        return archive
+
+    def fake_decompress(archive: Path, target: Path) -> None:
+        assert archive.is_file()
+        target.mkdir()
+
+    monkeypatch.setattr(extractor, "_ipsw_extract_dsc", fake_extract)
+    monkeypatch.setattr(extractor, "_ipsw_split", fake_split)
+    monkeypatch.setattr("symx.ipsw.extract._compress_directory", fake_compress)
+    monkeypatch.setattr("symx.ipsw.extract._decompress_archive", fake_decompress)
+    monkeypatch.setattr(
+        extractor,
+        "_symsort",
+        lambda split_dir, ignore_errors=False, record_input_tree=True: symsort_inputs.append(split_dir),
+    )
+
+    extractor._symsort_dsc()
+
+    assert attempts == [Arch.ARM64E, Arch.ARM64E_X1]
+    assert symsort_inputs == [processing_dir / "split_out"]
+    assert not ipsw_path.exists()
+
+
+def test_ipsw_symsort_dsc_fails_when_all_architectures_are_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    processing_dir = tmp_path / "processing"
+    processing_dir.mkdir()
+    ipsw_path = tmp_path / "UniversalMac_26.5.1_25F90_Restore.ipsw"
+    ipsw_path.touch()
+    extractor = _IpswExtractionRun(
+        IpswExtractionRequest(IpswPlatform.MACOS, ipsw_path, processing_dir, version="26.5.1")
+    )
+    extractor.macos_dsc_architectures = [Arch.ARM64E, Arch.ARM64E_X1]
+
+    def fake_absent(arch: Arch | None = None) -> IpswDscNotPresent:
+        assert arch is not None
+        return IpswDscNotPresent(arch=arch, message="not present")
+
+    monkeypatch.setattr(extractor, "_ipsw_extract_dsc", fake_absent)
+    monkeypatch.setattr(extractor, "_symsort", lambda *args, **kwargs: pytest.fail("must not symsort"))
+
+    with pytest.raises(IpswExtractError, match="none of the requested macOS architectures"):
+        extractor._symsort_dsc()
+
+    assert ipsw_path.exists()
+
+
+def test_ipsw_symsort_dsc_does_not_mask_unavailable_architecture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    processing_dir = tmp_path / "processing"
+    processing_dir.mkdir()
+    ipsw_path = tmp_path / "UniversalMac_27.0_26A428_Restore.ipsw"
+    ipsw_path.touch()
+    extractor = _IpswExtractionRun(IpswExtractionRequest(IpswPlatform.MACOS, ipsw_path, processing_dir, version="27.0"))
+    extractor.macos_dsc_architectures = [Arch.ARM64E_X1]
+    unavailable = IpswDscUnavailable(
+        arch=Arch.ARM64E_X1,
+        reason=IpswDscUnavailableReason.INVOCATION_FAILED,
+        message="arm64e_x1 mount failed",
+    )
+    monkeypatch.setattr(extractor, "_ipsw_extract_dsc", lambda arch=None: unavailable)
+    monkeypatch.setattr(extractor, "_symsort", lambda *args, **kwargs: pytest.fail("must not symsort"))
+
+    with pytest.raises(IpswExtractError, match="arm64e_x1 mount failed"):
+        extractor._symsort_dsc()
+
+    assert ipsw_path.exists()
+
+
+def test_ipsw_extract_dsc_returns_detailed_unavailable_when_extract_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     extractor = _make_ipsw_extractor(tmp_path)
@@ -493,11 +634,13 @@ def test_ipsw_extract_dsc_raises_detailed_error_when_extract_fails(
 
     monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
 
-    with pytest.raises(IpswExtractError, match="ipsw extract failed") as exc_info:
-        extractor._ipsw_extract_dsc()
+    result = extractor._ipsw_extract_dsc()
 
-    message = str(exc_info.value)
-    assert message == f"ipsw extract failed for {extractor.ipsw_path} (default) with exit code 1"
+    assert result == IpswDscUnavailable(
+        arch=None,
+        reason=IpswDscUnavailableReason.INVOCATION_FAILED,
+        message=f"ipsw extract failed for {extractor.ipsw_path} (default) with exit code 1",
+    )
 
 
 def test_ipsw_extract_dsc_passes_vendored_pem_db_when_available(
@@ -531,7 +674,7 @@ def test_ipsw_extract_dsc_passes_vendored_pem_db_when_available(
     monkeypatch.setattr("symx.ipsw.extract.vendored_ipsw_pem_db_path", lambda: pem_db)
     monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
 
-    assert extractor._ipsw_extract_dsc() == expected_extract_dir
+    assert extractor._ipsw_extract_dsc() == IpswDscMaterialized(arch=None, extract_dir=expected_extract_dir)
     assert commands == [
         [
             "ipsw",
@@ -924,7 +1067,7 @@ def test_ipsw_aea_preflight_retries_transient_fcs_key_lookup(tmp_path: Path, mon
     assert get_key_attempts() == 2
 
 
-def test_ipsw_extract_dsc_includes_stderr_summary_when_available(
+def test_ipsw_extract_dsc_unavailable_includes_stderr_summary_when_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     extractor = _make_ipsw_extractor(tmp_path)
@@ -951,13 +1094,15 @@ def test_ipsw_extract_dsc_includes_stderr_summary_when_available(
 
     monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
 
-    with pytest.raises(IpswExtractError, match="failed to mount DMG /tmp/test.dmg") as exc_info:
-        extractor._ipsw_extract_dsc()
+    result = extractor._ipsw_extract_dsc()
 
-    message = str(exc_info.value)
-    assert message == (
-        f"ipsw extract failed for {extractor.ipsw_path} (default) with exit code 1: "
-        "Error: failed to mount DMG /tmp/test.dmg"
+    assert result == IpswDscUnavailable(
+        arch=None,
+        reason=IpswDscUnavailableReason.INVOCATION_FAILED,
+        message=(
+            f"ipsw extract failed for {extractor.ipsw_path} (default) with exit code 1: "
+            "Error: failed to mount DMG /tmp/test.dmg"
+        ),
     )
 
 

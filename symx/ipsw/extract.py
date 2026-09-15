@@ -34,6 +34,13 @@ from symx.directory_archive import (
 )
 from symx.model import MACOS_DSC_ARCHITECTURES, Arch
 from symx.tools import dyld_split, symsort
+from symx.ipsw.materialization import (
+    IpswDscMaterializationAttempt,
+    IpswDscMaterialized,
+    IpswDscNotPresent,
+    IpswDscUnavailable,
+    IpswDscUnavailableReason,
+)
 from symx.ipsw.model import IpswPlatform
 
 logger = logging.getLogger(__name__)
@@ -693,7 +700,7 @@ class _IpswExtractionRun:
     def symbols_dir(self) -> Path:
         return self.processing_dir / "symbols"
 
-    def _ipsw_extract_dsc(self, arch: Arch | None = None) -> Path:
+    def _ipsw_extract_dsc(self, arch: Arch | None = None) -> IpswDscMaterializationAttempt:
         arch_label = str(arch) if arch else "default"
         with sentry_sdk.start_span(
             op="subprocess.ipsw_extract",
@@ -736,11 +743,24 @@ class _IpswExtractionRun:
 
                 span.set_data("ipsw_extract", _ipsw_command_data(command, stdout, stderr, [self.processing_dir]))
                 if process.returncode != 0:
+                    stderr_text = decode_subprocess_output(stderr).strip()
+                    if (
+                        arch is not None
+                        and "no dyld_shared_cache files found matching the specified archs" in stderr_text
+                    ):
+                        span.set_data("materialization_outcome", "not_present")
+                        return IpswDscNotPresent(arch=arch, message=stderr_text)
+
                     span.set_status("internal_error")
                     stderr_summary = _summarize_ipsw_stderr(stderr)
                     detail = f": {stderr_summary}" if stderr_summary else ""
-                    raise IpswExtractError(
-                        f"ipsw extract failed for {self.ipsw_path} ({arch_label}) with exit code {process.returncode}{detail}"
+                    return IpswDscUnavailable(
+                        arch=arch,
+                        reason=IpswDscUnavailableReason.INVOCATION_FAILED,
+                        message=(
+                            f"ipsw extract failed for {self.ipsw_path} ({arch_label}) "
+                            f"with exit code {process.returncode}{detail}"
+                        ),
                     )
 
             _log_directory_contents(self.processing_dir)
@@ -748,13 +768,18 @@ class _IpswExtractionRun:
             if extract_dir is None:
                 span.set_data("processing_dir", directory_data(self.processing_dir))
                 span.set_status("internal_error")
-                raise IpswExtractError(
-                    f"ipsw extract produced no dyld_shared_cache extraction directory for {self.ipsw_path} ({arch_label})"
+                return IpswDscUnavailable(
+                    arch=arch,
+                    reason=IpswDscUnavailableReason.NO_EXTRACT_DIR,
+                    message=(
+                        f"ipsw extract produced no dyld_shared_cache extraction directory "
+                        f"for {self.ipsw_path} ({arch_label})"
+                    ),
                 )
 
             span.set_data("extract_dir", directory_data(extract_dir))
             span.set_data("extract_output_tree", _directory_tree_stats(extract_dir).to_span_data())
-            return extract_dir
+            return IpswDscMaterialized(arch=arch, extract_dir=extract_dir)
 
     def run(self) -> Path:
         self._ipsw_aea_preflight()
@@ -783,12 +808,18 @@ class _IpswExtractionRun:
                         split_labels = self._split_rosetta_dscs()
                         split_dir = self.processing_dir / "split_out"
                     else:
-                        extract_dir = self._ipsw_extract_dsc(arch)
-                        _log_directory_contents(extract_dir)
-
-                        split_dir = self._ipsw_split(extract_dir, arch)
-                        _log_directory_contents(split_dir)
-                        split_labels = [str(arch)]
+                        match self._ipsw_extract_dsc(arch):
+                            case IpswDscNotPresent(message=message):
+                                arch_span.set_data("materialization_outcome", "not_present")
+                                logger.info("IPSW %s does not contain a %s DSC: %s", self.ipsw_path.name, arch, message)
+                                continue
+                            case IpswDscUnavailable(message=message):
+                                raise IpswExtractError(message)
+                            case IpswDscMaterialized(extract_dir=extract_dir):
+                                _log_directory_contents(extract_dir)
+                                split_dir = self._ipsw_split(extract_dir, arch)
+                                _log_directory_contents(split_dir)
+                                split_labels = [str(arch)]
 
                     for split_label in split_labels:
                         arch_split_dir = split_dir / split_label
@@ -798,7 +829,13 @@ class _IpswExtractionRun:
                             compressed_archives.append((archive_path, split_label))
                             logger.info("Finished compressing %s split to %s", split_label, archive_path)
 
-            # Delete IPSW file now that all required DSC architectures are extracted and compressed
+            if not compressed_archives:
+                raise IpswExtractError(
+                    "IPSW DSC materialization found none of the requested macOS architectures: "
+                    f"{', '.join(str(arch) for arch in self.macos_dsc_architectures)}"
+                )
+
+            # Delete IPSW file now that all present DSC architectures are extracted and compressed
             if self.ipsw_path.exists():
                 logger.info("Deleting IPSW file to save space: %s", self.ipsw_path)
                 self.ipsw_path.unlink()
@@ -811,8 +848,13 @@ class _IpswExtractionRun:
 
             # We accumulate each architecture as a sub-dir in split_dir and let symsorter process them together
         else:
-            extract_dir = self._ipsw_extract_dsc()
-            _log_directory_contents(extract_dir)
+            match self._ipsw_extract_dsc():
+                case IpswDscNotPresent():
+                    raise IpswExtractError("unfiltered IPSW DSC materialization returned an architecture absence")
+                case IpswDscUnavailable(message=message):
+                    raise IpswExtractError(message)
+                case IpswDscMaterialized(extract_dir=extract_dir):
+                    _log_directory_contents(extract_dir)
 
             # Delete IPSW also in the non-macOS path since this is our contract to the caller
             if self.ipsw_path.exists():
