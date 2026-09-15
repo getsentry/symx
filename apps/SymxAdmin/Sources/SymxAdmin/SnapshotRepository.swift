@@ -185,6 +185,17 @@ private func optionalInteger(_ statement: OpaquePointer, _ column: Int32) -> Int
 
 private func parseDate(_ value: String?) -> Date? {
   guard let value else { return nil }
-  return (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value))
-    ?? (try? Date.ISO8601FormatStyle().parse(value))
+  // IPSW metadata uses naive Python `datetime.isoformat()` values from UTC
+  // production runners, while OTA timestamps include an explicit offset.
+  for candidate in [value, "\(value)Z"] {
+    if let date = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+      .parse(candidate)
+    {
+      return date
+    }
+    if let date = try? Date.ISO8601FormatStyle().parse(candidate) {
+      return date
+    }
+  }
+  return nil
 }

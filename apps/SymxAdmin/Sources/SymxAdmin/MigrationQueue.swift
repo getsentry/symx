@@ -129,6 +129,7 @@ final class MigrationQueueModel {
     groups[key] = group
     diagnostics.record("migration", "dispatch queue=\(key.id) targets=\(group.entries.count)")
 
+    let submittedEntryIDs = Set(group.entries.map(\.id))
     let request = MigrationApplyRequest(
       store: key.store == .ipsw ? "ipsw" : "ota",
       action: key.action,
@@ -142,16 +143,22 @@ final class MigrationQueueModel {
       diagnostics.record(
         "migration", "result queue=\(key.id) status=\(result.status) message=\(result.message)")
       if result.status == "applied" || result.status == "applied_with_worker_warning" {
-        groups.removeValue(forKey: key)
-      } else {
-        group.isRunning = false
-        group.resultMessage = result.message
-        groups[key] = group
+        if let currentGroup = groups[key],
+          let remainingGroup = migrationGroupAfterSuccessfulApply(
+            currentGroup, submittedEntryIDs: submittedEntryIDs)
+        {
+          groups[key] = remainingGroup
+        } else {
+          groups.removeValue(forKey: key)
+        }
+      } else if let currentGroup = groups[key] {
+        groups[key] = migrationGroupAfterFailedApply(currentGroup, message: result.message)
       }
     } catch {
-      group.isRunning = false
-      group.resultMessage = error.localizedDescription
-      groups[key] = group
+      if let currentGroup = groups[key] {
+        groups[key] = migrationGroupAfterFailedApply(
+          currentGroup, message: error.localizedDescription)
+      }
       diagnostics.record("migration", "failed queue=\(key.id): \(error.localizedDescription)")
     }
   }
@@ -166,6 +173,26 @@ final class MigrationQueueModel {
       "added target queue=\(key.id) state=\(entry.currentState.rawValue)->\(entry.resultingState.rawValue)"
     )
   }
+}
+
+func migrationGroupAfterSuccessfulApply(
+  _ currentGroup: MigrationQueueGroup, submittedEntryIDs: Set<MigrationQueueEntry.ID>
+) -> MigrationQueueGroup? {
+  var group = currentGroup
+  group.entries.removeAll { submittedEntryIDs.contains($0.id) }
+  guard !group.entries.isEmpty else { return nil }
+  group.isRunning = false
+  group.resultMessage = nil
+  return group
+}
+
+func migrationGroupAfterFailedApply(
+  _ currentGroup: MigrationQueueGroup, message: String
+) -> MigrationQueueGroup {
+  var group = currentGroup
+  group.isRunning = false
+  group.resultMessage = message
+  return group
 }
 
 func commonMigrationActions(for rows: [IPSWSource]) -> [MigrationAction] {
@@ -300,6 +327,7 @@ private struct MigrationApplyService: Sendable {
     process.standardOutput = output
     process.standardError = output
     try process.run()
+    // Drain the pipe while the child runs; waiting first can deadlock if the pipe fills.
     let data = output.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
     guard process.terminationStatus == 0 else {

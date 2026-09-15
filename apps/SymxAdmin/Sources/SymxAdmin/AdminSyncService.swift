@@ -29,6 +29,7 @@ struct AdminSyncService: Sendable {
       throw SyncError.couldNotLaunch(error.localizedDescription)
     }
 
+    // Drain the pipe while the child runs; waiting first can deadlock if the pipe fills.
     let data = output.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
     let message = String(decoding: data, as: UTF8.self).trimmingCharacters(

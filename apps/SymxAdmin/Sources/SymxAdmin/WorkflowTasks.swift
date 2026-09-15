@@ -78,6 +78,7 @@ private struct WorkflowTaskService: Sendable {
     process.standardOutput = output
     process.standardError = output
     try process.run()
+    // Drain the pipe while the child runs; waiting first can deadlock if the pipe fills.
     let data = output.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
     guard process.terminationStatus == 0 else {

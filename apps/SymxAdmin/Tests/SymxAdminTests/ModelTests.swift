@@ -37,7 +37,7 @@ import Testing
   }
 }
 
-@Test func snapshotRepositoryLoadsCurrentOTATimestampColumn() throws {
+@Test func snapshotRepositoryLoadsCurrentTimestampColumns() throws {
   let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
   defer { try? FileManager.default.removeItem(at: directory) }
   let snapshotID = "fixture-snapshot"
@@ -66,6 +66,11 @@ import Testing
         last_modified TEXT, processing_state TEXT, artifact_key TEXT, file_name TEXT,
         link TEXT, sha1 TEXT, last_run INTEGER, mirror_path TEXT
     );
+    INSERT INTO ipsw_artifacts VALUES ('ipsw-key', 'iOS', '26.7', '23H24');
+    INSERT INTO ipsw_sources VALUES (
+        '2026-09-15T06:30:00.123456', 'mirrored', 'ipsw-key', 'fixture.ipsw',
+        'https://example.com/ipsw', 'def', 34938694500, 'gs://mirror/ipsw'
+    );
     CREATE TABLE ota_artifacts (
         ota_key TEXT, build TEXT, description_json TEXT, version TEXT, platform TEXT,
         artifact_id TEXT, url TEXT, devices_json TEXT, hash TEXT, hash_algorithm TEXT,
@@ -89,11 +94,16 @@ import Testing
   let snapshot = try SnapshotRepository(cacheURL: directory).load()
 
   #expect(snapshot.info.id == snapshotID)
-  let artifact = try #require(snapshot.otaArtifacts.first)
-  #expect(artifact.lastRun == 34_938_694_543)
-  let expectedTimestamp = try Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+  let ipsw = try #require(snapshot.ipswSources.first)
+  let expectedIPSWTimestamp = try Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+    .parse("2026-09-15T06:30:00.123456Z")
+  #expect(ipsw.lastModified == expectedIPSWTimestamp)
+
+  let ota = try #require(snapshot.otaArtifacts.first)
+  #expect(ota.lastRun == 34_938_694_543)
+  let expectedOTATimestamp = try Date.ISO8601FormatStyle(includingFractionalSeconds: true)
     .parse("2026-09-15T06:56:19.228617+00:00")
-  #expect(artifact.lastModified == expectedTimestamp)
+  #expect(ota.lastModified == expectedOTATimestamp)
 }
 
 @Test func snapshotFilteringUsesStateAndSearchAcrossCompleteInput() throws {
@@ -223,6 +233,33 @@ import Testing
   #expect(
     queue.groups[MigrationQueueKey(store: .ota, action: .queueMirror)]?.entries.first?
       .resultingState == .indexed)
+}
+
+@Test func migrationApplyCompletionPreservesItemsQueuedWhileRunning() throws {
+  let key = MigrationQueueKey(store: .ota, action: .queueMirror)
+  let submitted = MigrationQueueEntry(
+    id: "submitted", label: "Submitted", currentState: .mirroringFailed,
+    resultingState: .indexed, artifactKey: nil, link: nil, otaKey: "submitted"
+  )
+  let addedWhileRunning = MigrationQueueEntry(
+    id: "new", label: "New", currentState: .mirroringFailed,
+    resultingState: .indexed, artifactKey: nil, link: nil, otaKey: "new"
+  )
+  let current = MigrationQueueGroup(
+    key: key, entries: [submitted, addedWhileRunning], reason: "retry", isRunning: true)
+
+  let afterSuccess = try #require(
+    migrationGroupAfterSuccessfulApply(current, submittedEntryIDs: [submitted.id]))
+
+  #expect(afterSuccess.entries == [addedWhileRunning])
+  #expect(!afterSuccess.isRunning)
+  #expect(afterSuccess.resultMessage == nil)
+
+  let afterFailure = migrationGroupAfterFailedApply(current, message: "failed")
+
+  #expect(afterFailure.entries == current.entries)
+  #expect(!afterFailure.isRunning)
+  #expect(afterFailure.resultMessage == "failed")
 }
 
 @Test func missingManifestProducesUsefulError() throws {
