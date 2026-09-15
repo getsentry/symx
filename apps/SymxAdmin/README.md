@@ -29,6 +29,11 @@ concurrency guarantees stay in one implementation. The app invokes `uv` itself a
 shows failures in the window. It does **not** mutate GCS directly or download
 artifacts for extraction.
 
+Subprocess stdout and stderr are captured in separate temporary files to avoid
+pipe-buffer deadlocks. Workflow JSON and successful sync messages use stdout only;
+command failures include stderr followed by any stdout context. Migration results
+are still read from the backend's structured result file.
+
 ## Run
 
 Launch the app from the checkout:

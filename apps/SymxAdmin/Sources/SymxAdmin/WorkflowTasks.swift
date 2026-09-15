@@ -67,26 +67,20 @@ private struct WorkflowTaskService: Sendable {
     guard let root = CommandEnvironment.projectRoot() else {
       throw WorkflowTaskError.projectRootNotFound
     }
-    let process = Process()
-    let output = Pipe()
-    process.executableURL = gh
-    process.currentDirectoryURL = root
-    process.arguments = [
-      "run", "list", "--limit", "200", "--json",
-      "databaseId,status,conclusion,url,startedAt,updatedAt,displayTitle,workflowName",
-    ]
-    process.standardOutput = output
-    process.standardError = output
-    try process.run()
-    // Drain the pipe while the child runs; waiting first can deadlock if the pipe fills.
-    let data = output.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-      throw WorkflowTaskError.commandFailed(String(decoding: data, as: UTF8.self))
+    let result = try CommandEnvironment.run(
+      executable: gh,
+      currentDirectory: root,
+      arguments: [
+        "run", "list", "--limit", "200", "--json",
+        "databaseId,status,conclusion,url,startedAt,updatedAt,displayTitle,workflowName",
+      ]
+    )
+    guard result.terminationStatus == 0 else {
+      throw WorkflowTaskError.commandFailed(result.failureText)
     }
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
-    let relevant = try decoder.decode([WorkflowTask].self, from: data)
+    let relevant = try decoder.decode([WorkflowTask].self, from: result.stdout)
       .filter { names.contains($0.workflowName) }
       .sorted { ($0.startedAt ?? .distantPast) > ($1.startedAt ?? .distantPast) }
     let active = relevant.filter(\.isActive)

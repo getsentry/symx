@@ -1,6 +1,60 @@
 import Foundation
 
+struct CapturedCommandResult: Sendable {
+  let terminationStatus: Int32
+  let stdout: Data
+  let stderr: Data
+
+  var stdoutText: String { String(decoding: stdout, as: UTF8.self) }
+  var stderrText: String { String(decoding: stderr, as: UTF8.self) }
+
+  var failureText: String {
+    [stderrText, stdoutText]
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+      .joined(separator: "\n")
+  }
+}
+
 enum CommandEnvironment {
+  static func run(
+    executable: URL,
+    currentDirectory: URL,
+    arguments: [String]
+  ) throws -> CapturedCommandResult {
+    let directory = FileManager.default.temporaryDirectory.appending(
+      path: UUID().uuidString, directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    // Separate files keep stderr out of machine-readable stdout without bounded pipe buffers.
+    let stdoutURL = directory.appending(path: "stdout")
+    let stderrURL = directory.appending(path: "stderr")
+    try Data().write(to: stdoutURL)
+    try Data().write(to: stderrURL)
+    let stdoutHandle = try FileHandle(forWritingTo: stdoutURL)
+    defer { try? stdoutHandle.close() }
+    let stderrHandle = try FileHandle(forWritingTo: stderrURL)
+    defer { try? stderrHandle.close() }
+
+    let process = Process()
+    process.executableURL = executable
+    process.currentDirectoryURL = currentDirectory
+    process.arguments = arguments
+    process.standardOutput = stdoutHandle
+    process.standardError = stderrHandle
+    try process.run()
+    process.waitUntilExit()
+
+    try stdoutHandle.close()
+    try stderrHandle.close()
+    return CapturedCommandResult(
+      terminationStatus: process.terminationStatus,
+      stdout: try Data(contentsOf: stdoutURL),
+      stderr: try Data(contentsOf: stderrURL)
+    )
+  }
+
   static func executable(named name: String) -> URL? {
     let environmentPath = ProcessInfo.processInfo.environment["PATH", default: ""]
       .split(separator: ":")

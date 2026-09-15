@@ -11,34 +11,27 @@ struct AdminSyncService: Sendable {
       throw SyncError.uvNotFound
     }
 
-    let process = Process()
-    let output = Pipe()
-    process.executableURL = uv
-    process.currentDirectoryURL = projectRoot
-    process.arguments = [
-      "run", "--project", projectRoot.path,
-      "symx", "admin", "sync",
-      "--cache-dir", cacheURL.path,
-    ]
-    process.standardOutput = output
-    process.standardError = output
-
+    let result: CapturedCommandResult
     do {
-      try process.run()
+      result = try CommandEnvironment.run(
+        executable: uv,
+        currentDirectory: projectRoot,
+        arguments: [
+          "run", "--project", projectRoot.path,
+          "symx", "admin", "sync",
+          "--cache-dir", cacheURL.path,
+        ]
+      )
     } catch {
       throw SyncError.couldNotLaunch(error.localizedDescription)
     }
 
-    // Drain the pipe while the child runs; waiting first can deadlock if the pipe fills.
-    let data = output.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    let message = String(decoding: data, as: UTF8.self).trimmingCharacters(
-      in: .whitespacesAndNewlines)
-    guard process.terminationStatus == 0 else {
+    guard result.terminationStatus == 0 else {
+      let message = result.failureText
       throw SyncError.commandFailed(
-        message.isEmpty ? "uv exited with status \(process.terminationStatus)" : message)
+        message.isEmpty ? "uv exited with status \(result.terminationStatus)" : message)
     }
-    return message
+    return result.stdoutText.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 }
 

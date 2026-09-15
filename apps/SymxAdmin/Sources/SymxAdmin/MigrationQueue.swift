@@ -327,22 +327,16 @@ private struct MigrationApplyService: Sendable {
     let resultURL = directory.appending(path: "result.json")
     try JSONEncoder().encode(request).write(to: requestURL)
 
-    let process = Process()
-    let output = Pipe()
-    process.executableURL = uv
-    process.currentDirectoryURL = root
-    process.arguments = [
-      "run", "--project", root.path, "symx", "admin", "dispatch-batch",
-      "--request-path", requestURL.path, "--result-path", resultURL.path,
-    ]
-    process.standardOutput = output
-    process.standardError = output
-    try process.run()
-    // Drain the pipe while the child runs; waiting first can deadlock if the pipe fills.
-    let data = output.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-      throw MigrationServiceError.commandFailed(String(decoding: data, as: UTF8.self))
+    let result = try CommandEnvironment.run(
+      executable: uv,
+      currentDirectory: root,
+      arguments: [
+        "run", "--project", root.path, "symx", "admin", "dispatch-batch",
+        "--request-path", requestURL.path, "--result-path", resultURL.path,
+      ]
+    )
+    guard result.terminationStatus == 0 else {
+      throw MigrationServiceError.commandFailed(result.failureText)
     }
     return try JSONDecoder().decode(MigrationApplyResult.self, from: Data(contentsOf: resultURL))
   }
