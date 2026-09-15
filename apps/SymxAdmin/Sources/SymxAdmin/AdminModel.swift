@@ -11,6 +11,8 @@ final class AdminModel {
   private(set) var statusMessage: String?
   private(set) var ipswSources: [IPSWSource] = []
   private(set) var otaArtifacts: [OTAArtifact] = []
+  private(set) var overviewIPSW: [IPSWSource] = []
+  private(set) var overviewOTA: [OTAArtifact] = []
   private(set) var isFiltering = false
   private(set) var tableRevision = 0
   private(set) var ipswFacetFilter = ArtifactFacetFilter() {
@@ -39,6 +41,9 @@ final class AdminModel {
   var selectedStates = ProcessingState.defaultFailures {
     didSet { scheduleFiltering() }
   }
+  var dateRange = DateRangePreset.fourWeeks {
+    didSet { scheduleFiltering() }
+  }
 
   let cacheURL: URL
   let diagnostics = DiagnosticsLog()
@@ -51,9 +56,8 @@ final class AdminModel {
   }
 
   var failureCount: Int {
-    guard let snapshot else { return 0 }
-    return snapshot.ipswSources.count(where: { $0.state.isFailure })
-      + snapshot.otaArtifacts.count(where: { $0.state.isFailure })
+    overviewIPSW.count(where: { $0.state.isFailure })
+      + overviewOTA.count(where: { $0.state.isFailure })
   }
 
   func start() async {
@@ -190,6 +194,8 @@ final class AdminModel {
     guard let snapshot else {
       ipswSources = []
       otaArtifacts = []
+      overviewIPSW = []
+      overviewOTA = []
       return
     }
 
@@ -199,10 +205,13 @@ final class AdminModel {
     let otaFacets = otaFacetFilter
     let ipswSort = ipswSortOrder
     let otaSort = otaSortOrder
+    let selectedDateRange = dateRange
+    let modifiedSince = selectedDateRange.cutoff(relativeTo: .now)
     isFiltering = true
     diagnostics.record(
       "filter",
-      "requested states=\(states.count) search=\(search.isEmpty ? "<empty>" : search) "
+      "requested range=\(selectedDateRange.title) states=\(states.count) "
+        + "search=\(search.isEmpty ? "<empty>" : search) "
         + "ipsw=\(describe(ipswFacets)) ota=\(describe(otaFacets))"
     )
     filterTask = Task {
@@ -212,6 +221,7 @@ final class AdminModel {
           snapshot,
           states: states,
           search: search,
+          modifiedSince: modifiedSince,
           ipswFacets: ipswFacets,
           otaFacets: otaFacets,
           ipswSort: ipswSort,
@@ -226,6 +236,8 @@ final class AdminModel {
       // unrelated filtered result sets through its AppKit selection coordinator.
       ipswSources = result.ipsw
       otaArtifacts = result.ota
+      overviewIPSW = result.overviewIPSW
+      overviewOTA = result.overviewOTA
       ipswFacetOptions = result.ipswOptions
       otaFacetOptions = result.otaOptions
       tableRevision += 1
@@ -242,6 +254,8 @@ final class AdminModel {
 struct FilteredSnapshotRows: Sendable {
   let ipsw: [IPSWSource]
   let ota: [OTAArtifact]
+  let overviewIPSW: [IPSWSource]
+  let overviewOTA: [OTAArtifact]
   let ipswOptions: ArtifactFacetOptions
   let otaOptions: ArtifactFacetOptions
 }
@@ -250,19 +264,27 @@ func filterSnapshot(
   _ snapshot: Snapshot,
   states: Set<ProcessingState>,
   search: String,
+  modifiedSince: Date? = nil,
   ipswFacets: ArtifactFacetFilter = ArtifactFacetFilter(),
   otaFacets: ArtifactFacetFilter = ArtifactFacetFilter(),
   ipswSort: [IPSWSortComparator] = [IPSWSortComparator(.lastModified, order: .reverse)],
   otaSort: [OTASortComparator] = [OTASortComparator(.lastModified, order: .reverse)]
 ) -> FilteredSnapshotRows {
+  let overviewIPSW = snapshot.ipswSources.filter {
+    isInDateRange($0.lastModified, since: modifiedSince)
+  }
+  let overviewOTA = snapshot.otaArtifacts.filter {
+    isInDateRange($0.lastModified, since: modifiedSince)
+  }
+
   // Facet choices come from rows that can actually be displayed under the shared
-  // state/search constraints. Each downstream facet then applies its parents.
-  let ipswCandidates = snapshot.ipswSources.filter { row in
+  // date/state/search constraints. Each downstream facet then applies its parents.
+  let ipswCandidates = overviewIPSW.filter { row in
     states.contains(row.state)
       && matches(
         search, fields: row.fileName, row.artifactKey, row.platform, row.version, row.build)
   }
-  let otaCandidates = snapshot.otaArtifacts.filter { row in
+  let otaCandidates = overviewOTA.filter { row in
     states.contains(row.state)
       && matches(search, fields: row.artifactID, row.otaKey, row.platform, row.version, row.build)
   }
@@ -277,6 +299,8 @@ func filterSnapshot(
   return FilteredSnapshotRows(
     ipsw: ipsw,
     ota: ota,
+    overviewIPSW: overviewIPSW,
+    overviewOTA: overviewOTA,
     ipswOptions: facetOptions(
       ipswCandidates.map { ($0.platform, $0.version, $0.build) },
       filter: ipswFacets
@@ -286,6 +310,12 @@ func filterSnapshot(
       filter: otaFacets
     )
   )
+}
+
+private func isInDateRange(_ lastModified: Date?, since cutoff: Date?) -> Bool {
+  guard let cutoff else { return true }
+  guard let lastModified else { return false }
+  return lastModified >= cutoff
 }
 
 private func facetOptions(

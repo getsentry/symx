@@ -220,7 +220,8 @@ swift run
 ```
 
 It reads the same local snapshot, can trigger a sync, provides complete searchable
-and sortable IPSW/OTA tables, shows relevant workflow runs, and applies curated
+and sortable IPSW/OTA tables with a global modification-time preset (four weeks by
+default), shows relevant workflow runs, and applies curated
 rerun queues through GitHub Actions. See [`apps/SymxAdmin/README.md`](../apps/SymxAdmin/README.md)
 for its current feature list and model contract.
 

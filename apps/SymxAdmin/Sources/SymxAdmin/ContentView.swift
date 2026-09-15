@@ -9,7 +9,7 @@ struct ContentView: View {
   @State private var selectedOTA: Set<OTAArtifact.ID> = []
   @State private var suspendedIPSWSelection: Set<IPSWSource.ID>?
   @State private var suspendedOTASelection: Set<OTAArtifact.ID>?
-  @State private var showDiagnostics = true
+  @State private var showDiagnostics = false
 
   var body: some View {
     VStack(spacing: 0) {
@@ -90,6 +90,9 @@ struct ContentView: View {
         .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search artifacts")
         .toolbar {
           ToolbarItemGroup {
+            DateRangeMenu(model: model) {
+              suspendTableSelection()
+            }
             StateFilterMenu(model: model) {
               suspendTableSelection()
             }
@@ -207,6 +210,32 @@ struct ContentView: View {
   }
 }
 
+private struct DateRangeMenu: View {
+  @Bindable var model: AdminModel
+  let willChange: () -> Void
+
+  var body: some View {
+    Menu {
+      ForEach(DateRangePreset.allCases) { range in
+        Button {
+          guard model.dateRange != range else { return }
+          willChange()
+          model.dateRange = range
+        } label: {
+          if model.dateRange == range {
+            Label(range.title, systemImage: "checkmark")
+          } else {
+            Text(range.title)
+          }
+        }
+      }
+    } label: {
+      Label(model.dateRange.title, systemImage: "calendar.badge.clock")
+    }
+    .help("Filter all artifact views by modification time")
+  }
+}
+
 private struct StateFilterMenu: View {
   @Bindable var model: AdminModel
   let willChange: () -> Void
@@ -301,10 +330,22 @@ private struct FacetFilterButton: View {
     Button {
       isPresented.toggle()
     } label: {
-      Label(
-        filterLabel,
-        systemImage: selection.isEmpty
-          ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
+      Label {
+        Text(filterLabel)
+      } icon: {
+        ZStack {
+          Image(
+            systemName: selection.isEmpty
+              ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+          Circle()
+            .fill(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+            .frame(width: 13, height: 13)
+          Text(facet.abbreviation)
+            .font(.system(size: 9, weight: .black, design: .rounded))
+            .foregroundStyle(Color.primary)
+        }
+        .frame(width: 20, height: 20)
+      }
     }
     .help("Filter by \(title.lowercased())")
     .popover(isPresented: $isPresented, arrowEdge: .bottom) {
@@ -377,11 +418,14 @@ private struct OverviewView: View {
             title: "Failures", value: model.failureCount.formatted(),
             systemImage: "exclamationmark.triangle.fill", tint: .orange)
           MetricCard(
-            title: "IPSW sources", value: snapshot.ipswSources.count.formatted(),
+            title: "IPSW sources", value: model.overviewIPSW.count.formatted(),
             systemImage: "shippingbox.fill", tint: .blue)
           MetricCard(
-            title: "OTA artifacts", value: snapshot.otaArtifacts.count.formatted(),
+            title: "OTA artifacts", value: model.overviewOTA.count.formatted(),
             systemImage: "antenna.radiowaves.left.and.right", tint: .purple)
+          MetricCard(
+            title: "Time range", value: model.dateRange.title,
+            systemImage: "calendar.badge.clock", tint: .green)
         }
 
         GroupBox("Active snapshot") {
@@ -400,7 +444,7 @@ private struct OverviewView: View {
           .padding(8)
         }
 
-        StateSummary(snapshot: snapshot)
+        StateSummary(ipswSources: model.overviewIPSW, otaArtifacts: model.overviewOTA)
       }
       .padding(24)
     }
@@ -432,7 +476,8 @@ private struct MetricCard: View {
 }
 
 private struct StateSummary: View {
-  let snapshot: Snapshot
+  let ipswSources: [IPSWSource]
+  let otaArtifacts: [OTAArtifact]
 
   var body: some View {
     GroupBox("Processing states") {
@@ -444,8 +489,8 @@ private struct StateSummary: View {
         }
         Divider()
         ForEach(ProcessingState.allCases) { state in
-          let ipsw = snapshot.ipswSources.count { $0.state == state }
-          let ota = snapshot.otaArtifacts.count { $0.state == state }
+          let ipsw = ipswSources.count { $0.state == state }
+          let ota = otaArtifacts.count { $0.state == state }
           if ipsw > 0 || ota > 0 {
             GridRow {
               StateBadge(state: state)

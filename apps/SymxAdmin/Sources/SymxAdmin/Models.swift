@@ -40,6 +40,36 @@ enum ProcessingState: String, CaseIterable, Codable, Hashable, Identifiable, Sen
   var isFailure: Bool { Self.defaultFailures.contains(self) }
 }
 
+enum DateRangePreset: String, CaseIterable, Identifiable, Sendable {
+  case last24Hours
+  case lastWeek
+  case fourWeeks
+  case threeMonths
+  case allTime
+
+  var id: Self { self }
+
+  var title: String {
+    switch self {
+    case .last24Hours: "Last 24 hours"
+    case .lastWeek: "Last week"
+    case .fourWeeks: "Last 4 weeks"
+    case .threeMonths: "Last 3 months"
+    case .allTime: "All time"
+    }
+  }
+
+  func cutoff(relativeTo now: Date) -> Date? {
+    switch self {
+    case .last24Hours: now.addingTimeInterval(-86_400)
+    case .lastWeek: now.addingTimeInterval(-7 * 86_400)
+    case .fourWeeks: now.addingTimeInterval(-28 * 86_400)
+    case .threeMonths: Calendar(identifier: .gregorian).date(byAdding: .month, value: -3, to: now)
+    case .allTime: nil
+    }
+  }
+}
+
 struct SnapshotInfo: Sendable {
   let id: String
   let createdAt: Date?
@@ -115,6 +145,14 @@ enum ArtifactFacet: Hashable, Sendable {
   case platform
   case version
   case build
+
+  var abbreviation: String {
+    switch self {
+    case .platform: "P"
+    case .version: "V"
+    case .build: "B"
+    }
+  }
 }
 
 struct IPSWSortComparator: SortComparator, Hashable, Sendable {

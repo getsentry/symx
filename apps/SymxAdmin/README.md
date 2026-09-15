@@ -12,10 +12,11 @@ The app currently provides:
 
 - the active snapshot and generation metadata,
 - overview and processing-state counts,
+- a global modification-time preset applied to aggregates and artifact lists, defaulting to the last four weeks,
 - searchable IPSW source and OTA artifact tables over complete result sets,
 - independent cascading platform, version, and build filters for each artifact store,
 - naturally sortable artifact-table columns,
-- a copyable runtime diagnostics pane for filter, sort, selection, scroll, snapshot, and sync events,
+- an on-demand copyable diagnostics pane for filter, sort, selection, scroll, snapshot, and sync events,
 - an auto-refreshing window for active and recently finished artifact/admin workflow runs,
 - multi-artifact selection with context menus offering only common valid migrations,
 - independently executable curated migration queues,

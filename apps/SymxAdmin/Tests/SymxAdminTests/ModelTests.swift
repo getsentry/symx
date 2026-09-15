@@ -153,6 +153,58 @@ import Testing
   #expect(excluded.otaOptions.platforms == ["macOS"])
 }
 
+@Test func globalDateCutoffFiltersListsAndOverviewRows() throws {
+  let cutoff = Date(timeIntervalSince1970: 1_000)
+  let recentIPSW = IPSWSource(
+    lastModified: Date(timeIntervalSince1970: 1_100), state: .indexed, platform: "iOS",
+    version: "26", build: "A", artifactKey: "recent-ipsw", fileName: "recent.ipsw",
+    link: try #require(URL(string: "https://example.com/recent.ipsw")), sha1: nil,
+    lastRun: 1, mirrorPath: nil
+  )
+  let oldIPSW = IPSWSource(
+    lastModified: Date(timeIntervalSince1970: 900), state: .symbolExtractionFailed,
+    platform: "iOS", version: "25", build: "B", artifactKey: "old-ipsw",
+    fileName: "old.ipsw", link: try #require(URL(string: "https://example.com/old.ipsw")),
+    sha1: nil, lastRun: 2, mirrorPath: nil
+  )
+  let recentOTA = OTAArtifact(
+    lastRun: 3, lastModified: Date(timeIntervalSince1970: 1_200),
+    state: .symbolExtractionFailed, platform: "iOS", version: "26", build: "C",
+    otaKey: "recent-ota", artifactID: "RecentOTA",
+    url: try #require(URL(string: "https://example.com/recent.zip")), hash: "abc",
+    hashAlgorithm: "sha256", downloadPath: nil
+  )
+  let undatedOTA = OTAArtifact(
+    lastRun: 4, lastModified: nil, state: .symbolExtractionFailed, platform: "iOS",
+    version: "24", build: "D", otaKey: "undated-ota", artifactID: "UndatedOTA",
+    url: try #require(URL(string: "https://example.com/undated.zip")), hash: "def",
+    hashAlgorithm: "sha256", downloadPath: nil
+  )
+  let snapshot = Snapshot(
+    info: SnapshotInfo(
+      id: "fixture", createdAt: nil, workflowRunID: nil, workflowRunURL: nil,
+      ipswGeneration: 1, otaGeneration: 2),
+    ipswSources: [recentIPSW, oldIPSW], otaArtifacts: [recentOTA, undatedOTA]
+  )
+
+  let result = filterSnapshot(
+    snapshot, states: [.symbolExtractionFailed], search: "", modifiedSince: cutoff)
+
+  #expect(result.overviewIPSW == [recentIPSW])
+  #expect(result.overviewOTA == [recentOTA])
+  #expect(result.ipsw.isEmpty)
+  #expect(result.ota == [recentOTA])
+}
+
+@MainActor
+@Test func dateRangeDefaultsToFourWeeks() {
+  let now = Date(timeIntervalSince1970: 3_000_000)
+
+  #expect(AdminModel().dateRange == .fourWeeks)
+  #expect(DateRangePreset.fourWeeks.cutoff(relativeTo: now) == now.addingTimeInterval(-28 * 86_400))
+  #expect(DateRangePreset.allTime.cutoff(relativeTo: now) == nil)
+}
+
 @Test func tableComparatorsSortNaturallyInBothDirections() throws {
   let older = OTAArtifact(
     lastRun: 20, lastModified: Date(timeIntervalSince1970: 100),
