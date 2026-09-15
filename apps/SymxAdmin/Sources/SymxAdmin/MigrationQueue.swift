@@ -118,11 +118,11 @@ final class MigrationQueueModel {
     diagnostics.record("migration", "cleared queue=\(key.id)")
   }
 
-  func apply(_ key: MigrationQueueKey, snapshot: SnapshotInfo) async {
+  func apply(_ key: MigrationQueueKey, snapshot: SnapshotInfo) async -> Bool {
     guard var group = groups[key], !group.entries.isEmpty,
       !group.reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     else {
-      return
+      return false
     }
     group.isRunning = true
     group.resultMessage = nil
@@ -142,7 +142,7 @@ final class MigrationQueueModel {
       let result = try await Task.detached { try MigrationApplyService().apply(request) }.value
       diagnostics.record(
         "migration", "result queue=\(key.id) status=\(result.status) message=\(result.message)")
-      if result.status == "applied" || result.status == "applied_with_worker_warning" {
+      if migrationStatusChangedRemoteMetadata(result.status) {
         if let currentGroup = groups[key],
           let remainingGroup = migrationGroupAfterSuccessfulApply(
             currentGroup, submittedEntryIDs: submittedEntryIDs)
@@ -151,15 +151,18 @@ final class MigrationQueueModel {
         } else {
           groups.removeValue(forKey: key)
         }
+        return true
       } else if let currentGroup = groups[key] {
         groups[key] = migrationGroupAfterFailedApply(currentGroup, message: result.message)
       }
+      return false
     } catch {
       if let currentGroup = groups[key] {
         groups[key] = migrationGroupAfterFailedApply(
           currentGroup, message: error.localizedDescription)
       }
       diagnostics.record("migration", "failed queue=\(key.id): \(error.localizedDescription)")
+      return false
     }
   }
 
@@ -173,6 +176,10 @@ final class MigrationQueueModel {
       "added target queue=\(key.id) state=\(entry.currentState.rawValue)->\(entry.resultingState.rawValue)"
     )
   }
+}
+
+func migrationStatusChangedRemoteMetadata(_ status: String) -> Bool {
+  status == "applied" || status == "applied_with_worker_warning"
 }
 
 func migrationGroupAfterSuccessfulApply(

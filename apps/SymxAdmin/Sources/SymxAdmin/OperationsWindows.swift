@@ -113,12 +113,13 @@ struct MigrationQueueView: View {
       if let key = confirmation {
         Button("Apply \(key.title)", role: .destructive) {
           confirmation = nil
-          guard let snapshot = model.snapshot?.info else { return }
+          guard !model.isSyncing, let snapshot = model.snapshot?.info else { return }
           Task {
-            await queue.apply(key, snapshot: snapshot)
-            if queue.groups[key] == nil { await model.sync() }
+            let metadataChanged = await queue.apply(key, snapshot: snapshot)
+            if metadataChanged { await model.sync() }
           }
         }
+        .disabled(model.isSyncing)
       }
       Button("Cancel", role: .cancel) { confirmation = nil }
     } message: {
@@ -171,7 +172,7 @@ private struct MigrationGroupView: View {
           Button("Apply Queue", systemImage: "paperplane.fill", action: apply)
             .buttonStyle(.borderedProminent)
             .disabled(
-              group.isRunning
+              group.isRunning || model.isSyncing
                 || group.reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
       }

@@ -287,6 +287,14 @@ import Testing
       .resultingState == .indexed)
 }
 
+@Test func appliedMigrationStatusesRequireSnapshotRefresh() {
+  #expect(migrationStatusChangedRemoteMetadata("applied"))
+  #expect(migrationStatusChangedRemoteMetadata("applied_with_worker_warning"))
+  #expect(!migrationStatusChangedRemoteMetadata("stale_generation"))
+  #expect(!migrationStatusChangedRemoteMetadata("validation_failed"))
+  #expect(!migrationStatusChangedRemoteMetadata("internal_error"))
+}
+
 @Test func migrationApplyCompletionPreservesItemsQueuedWhileRunning() throws {
   let key = MigrationQueueKey(store: .ota, action: .queueMirror)
   let submitted = MigrationQueueEntry(
