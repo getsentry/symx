@@ -118,17 +118,21 @@ final class MigrationQueueModel {
     diagnostics.record("migration", "cleared queue=\(key.id)")
   }
 
-  func apply(_ key: MigrationQueueKey, snapshot: SnapshotInfo) async -> Bool {
-    guard var group = groups[key], !group.entries.isEmpty,
+  func beginApplyIfPossible(_ key: MigrationQueueKey) -> MigrationQueueGroup? {
+    guard var group = groups[key], !group.isRunning, !group.entries.isEmpty,
       !group.reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     else {
-      return false
+      return nil
     }
     group.isRunning = true
     group.resultMessage = nil
     groups[key] = group
     diagnostics.record("migration", "dispatch queue=\(key.id) targets=\(group.entries.count)")
+    return group
+  }
 
+  func apply(_ key: MigrationQueueKey, snapshot: SnapshotInfo) async -> Bool {
+    guard let group = beginApplyIfPossible(key) else { return false }
     let submittedEntryIDs = Set(group.entries.map(\.id))
     let request = MigrationApplyRequest(
       store: key.store == .ipsw ? "ipsw" : "ota",

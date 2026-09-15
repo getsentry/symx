@@ -287,6 +287,27 @@ import Testing
       .resultingState == .indexed)
 }
 
+@MainActor
+@Test func migrationQueueAllowsOnlyOneInFlightApplyPerGroup() throws {
+  let diagnostics = DiagnosticsLog()
+  let queue = MigrationQueueModel(diagnostics: diagnostics)
+  let key = MigrationQueueKey(store: .ota, action: .queueMirror)
+  let ota = OTAArtifact(
+    lastRun: 2, lastModified: nil, state: .mirroringFailed, platform: "iOS", version: "26",
+    build: "A", otaKey: "ota-key", artifactID: "test-ota",
+    url: try #require(URL(string: "https://example.com/ota")), hash: "abc",
+    hashAlgorithm: "sha256", downloadPath: nil
+  )
+  queue.add(ota, action: .queueMirror)
+  queue.setReason("retry", for: key)
+
+  let claimedGroup = try #require(queue.beginApplyIfPossible(key))
+
+  #expect(claimedGroup.entries.map(\.id) == [ota.id])
+  #expect(queue.groups[key]?.isRunning == true)
+  #expect(queue.beginApplyIfPossible(key) == nil)
+}
+
 @Test func appliedMigrationStatusesRequireSnapshotRefresh() {
   #expect(migrationStatusChangedRemoteMetadata("applied"))
   #expect(migrationStatusChangedRemoteMetadata("applied_with_worker_warning"))
