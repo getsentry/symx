@@ -18,7 +18,7 @@ from subprocess import CompletedProcess
 
 import pytest
 
-from symx.model import Arch
+from symx.model import MACOS_DSC_ARCHITECTURES, Arch
 from symx.ipsw import extract as ipsw_extract
 from symx.ipsw.model import IpswPlatform
 from symx.ipsw.extract import (
@@ -58,7 +58,6 @@ from symx.ota.model import (
 )
 from symx.tools import symsort as tool_symsort
 from symx.ota.extract import (
-    MACOS_OTA_DSC_ARCHITECTURES,
     _classify_ota,
     _classify_ota_evidence,
     _collect_ota_classification_evidence,
@@ -100,17 +99,21 @@ def test_generate_bundle_id_no_commas() -> None:
 # --- macOS DSC architecture policy tests ---
 
 
-def test_macos_dsc_architectures_include_x86_64_for_macos_27_metadata() -> None:
+def test_macos_dsc_architectures_include_all_supported_architectures_for_macos_27_metadata() -> None:
     assert ipsw_extract._macos_dsc_architectures("27.0") == [
         Arch.ARM64E,
+        Arch.ARM64E_X1,
         Arch.X86_64,
+        Arch.X86_64H,
     ]
 
 
-def test_macos_dsc_architectures_keep_x86_64_before_macos_27_metadata() -> None:
+def test_macos_dsc_architectures_are_not_version_gated_before_macos_27_metadata() -> None:
     assert ipsw_extract._macos_dsc_architectures("26.5.1") == [
         Arch.ARM64E,
+        Arch.ARM64E_X1,
         Arch.X86_64,
+        Arch.X86_64H,
     ]
 
 
@@ -1487,6 +1490,26 @@ def test_extract_ota_rejects_duplicate_report_paths(tmp_path: Path, monkeypatch:
         extract_ota(request)
 
 
+def test_extract_ota_accepts_arm64e_x1_primary_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    request = _ota_materialization_request(tmp_path)
+    arm64e_x1_path = "24R364__Watch8,3/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e_x1"
+    _touch_reported_file(request.output_root, arm64e_x1_path)
+    report = _ota_dsc_report(
+        complete=True,
+        files=[{"path": arm64e_x1_path, "arch": "arm64e_x1", "source": "ota-asset"}],
+    )
+    monkeypatch.setattr(
+        "symx.ota.extract.subprocess.run",
+        lambda args, *, stdin, capture_output: CompletedProcess(args=args, returncode=0, stdout=report, stderr=b""),
+    )
+
+    result = extract_ota(request)
+
+    assert isinstance(result, OtaDscMaterializationResult)
+    assert len(result.dscs) == 1
+    assert result.dscs == (OtaDscSource(arch=Arch.ARM64E_X1, artifact=request.output_root / arm64e_x1_path),)
+
+
 def test_extract_ota_accepts_x86_64h_primary_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     request = _ota_materialization_request(tmp_path, Arch.X86_64H)
     x86_64h_path = "24G720__MacOS/System/Library/dyld/dyld_shared_cache_x86_64h"
@@ -1645,11 +1668,12 @@ def test_extract_symbols_processes_macos_architectures_sequentially(
 
     assert isinstance(result, OtaSymbolsExtracted)
     assert result.symbol_dirs == (request.work_dir / "symbols" / request.bundle_id,)
-    assert attempts == list(MACOS_OTA_DSC_ARCHITECTURES)
-    assert split_arches == [Arch.ARM64E, Arch.X86_64H]
+    assert attempts == list(MACOS_DSC_ARCHITECTURES)
+    assert split_arches == [Arch.ARM64E, Arch.ARM64E_X1, Arch.X86_64H]
     assert len(symsort_inputs) == 1
     assert [path.name for path in symsort_inputs[0]] == [
         "26.6.1_25G76_arm64e",
+        "26.6.1_25G76_arm64e_x1",
         "26.6.1_25G76_x86_64h",
     ]
     assert all(not root.exists() for root in materialization_roots)
@@ -1686,10 +1710,12 @@ def test_extract_symbols_macos_real_failure_after_success_is_not_masked(
 
     def fake_extract(
         materialization_request: OtaDscMaterializationRequest,
-    ) -> OtaDscMaterializationResult | OtaDscUnavailable:
+    ) -> OtaDscMaterializationResult | OtaDscNotPresent | OtaDscUnavailable:
         arch = materialization_request.requested_arch
         if arch == Arch.X86_64:
             return unavailable
+        if arch == Arch.ARM64E_X1:
+            return _arch_not_present(arch)
         assert arch == Arch.ARM64E
         dsc = materialization_request.output_root / "dyld_shared_cache_arm64e"
         dsc.touch()
@@ -1760,7 +1786,7 @@ def test_extract_symbols_macos_classifies_once_when_all_architectures_are_absent
     result = extract_symbols(request)
 
     assert result == OtaExtractionSkipped(reason=OtaExtractionSkipReason.RECOVERY)
-    assert attempts == list(MACOS_OTA_DSC_ARCHITECTURES)
+    assert attempts == list(MACOS_DSC_ARCHITECTURES)
     assert classified == [request]
     assert artifact.exists()
 

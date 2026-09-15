@@ -32,7 +32,7 @@ from symx.directory_archive import (
     compress_directory,
     decompress_archive,
 )
-from symx.model import Arch
+from symx.model import MACOS_DSC_ARCHITECTURES, Arch
 from symx.tools import dyld_split, symsort
 from symx.ipsw.model import IpswPlatform
 
@@ -1220,7 +1220,7 @@ def _macos_dsc_architectures(version: str | None) -> list[Arch]:
             f"Cannot determine required macOS DSC architectures: missing or unparseable macOS version {version_label}"
         )
 
-    return [Arch.ARM64E, Arch.X86_64]
+    return list(MACOS_DSC_ARCHITECTURES)
 
 
 def generate_bundle_id(file_name: str) -> str:

@@ -130,7 +130,8 @@ uv run symx ipsw extract-file /path/to/file.ipsw -p iOS -o /tmp/symx-ipsw
 What it does:
 
 - validates `ipsw` and `./symsorter`,
-- runs the IPSW extraction pipeline locally,
+- runs the IPSW extraction pipeline locally; macOS requests the shared `arm64e`, `arm64e_x1`, `x86_64`, and
+  `x86_64h` DSC architecture set sequentially,
 - uses the vendored IPSW PEM DB snapshot before any live Apple FCS-key lookup,
 - performs an AEA preflight on the selected IPSW DMG member before the higher-level `ipsw` mount/extract helpers,
 - prints the output directory containing the symsorter result.
@@ -144,7 +145,7 @@ uv run symx ota extract-file /path/to/file.zip -p ios -V 18.2 -b 22C152 -o /tmp/
 What it does:
 
 - validates `ipsw` and `./symsorter`,
-- for macOS, requests `arm64e`, `x86_64`, and `x86_64h` sequentially with exactly one `--dyld-arch` per operation;
+- for macOS, requests `arm64e`, `arm64e_x1`, `x86_64`, and `x86_64h` sequentially with exactly one `--dyld-arch` per operation;
   other platforms use the existing unfiltered operation,
 - strictly parses each schema-1 report and validates every reported regular file beneath that attempt's temporary
   output root,

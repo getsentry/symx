@@ -30,6 +30,7 @@ class Timeout:
 
 class Arch(StrEnum):
     ARM64E = "arm64e"
+    ARM64E_X1 = "arm64e_x1"
     ARM64 = "arm64"
     ARM64_32 = "arm64_32"
     ARMV7 = "armv7"
@@ -37,6 +38,9 @@ class Arch(StrEnum):
     ARMV7S = "armv7s"
     X86_64 = "x86_64"
     X86_64H = "x86_64h"
+
+
+MACOS_DSC_ARCHITECTURES = (Arch.ARM64E, Arch.ARM64E_X1, Arch.X86_64, Arch.X86_64H)
 
 
 class ArtifactProcessingState(StrEnum):

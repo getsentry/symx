@@ -25,7 +25,7 @@ from symx.directory_archive import (
     compress_directory,
     decompress_archive,
 )
-from symx.model import Arch
+from symx.model import MACOS_DSC_ARCHITECTURES, Arch
 from symx.fs import rmdir_if_exists
 from symx.tools import dyld_split, symsort as common_symsort
 from symx.ota.model.artifact_info import (
@@ -75,7 +75,6 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 _LEADING_IPSW_GLYPH_RE = re.compile(r"^\s*[•⨯]\s*")
 _PREREQUISITE_BUILD_LINE_RE = re.compile(r"^PrereqBuild\s*=\s*(\S+)\s*$", re.MULTILINE)
 IPSW_OTA_DSC_JSON_CONTRACT_RELEASE = "3.1.707"
-MACOS_OTA_DSC_ARCHITECTURES = (Arch.ARM64E, Arch.X86_64, Arch.X86_64H)
 
 
 class PayloadListingProbeResult(TypedDict):
@@ -859,7 +858,7 @@ def _process_macos_ota(request: OtaExtractionRequest) -> OtaExtractionResult:
     primary_error = False
 
     try:
-        for arch in MACOS_OTA_DSC_ARCHITECTURES:
+        for arch in MACOS_DSC_ARCHITECTURES:
             with sentry_sdk.start_span(
                 op="ota.extract.dsc_arch",
                 name=f"Materialize+split OTA DSC {arch}",
@@ -907,7 +906,7 @@ def _process_macos_ota(request: OtaExtractionRequest) -> OtaExtractionResult:
                 report=absent[-1].report,
                 message=(
                     "OTA DSC materialization found none of the requested macOS architectures: "
-                    f"{', '.join(str(arch) for arch in MACOS_OTA_DSC_ARCHITECTURES)}"
+                    f"{', '.join(str(arch) for arch in MACOS_DSC_ARCHITECTURES)}"
                 ),
             )
             return _resolve_unavailable_materialization(request, unavailable)
