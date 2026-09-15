@@ -7,6 +7,7 @@ import typer
 
 from symx.admin.actions import ApplyBatchRequest, ApplyBatchStatus
 from symx.admin.db import DEFAULT_FAILURE_STATES, default_cache_dir
+from symx.admin.executor import AdminApplyError, run_apply
 from symx.admin.remote import append_apply_summary, execute_apply_request, write_apply_result
 from symx.admin.sync import AdminSyncError, run_sync
 from symx.admin.tui import launch_tui
@@ -59,6 +60,21 @@ def sync_command(
             f"ipsw_generation={result.ipsw_generation}; ota_generation={result.ota_generation}"
         )
     )
+
+
+@admin_app.command("dispatch-batch", hidden=True)
+def dispatch_batch_command(
+    request_path: Path = typer.Option(..., "--request-path", help="Path to a serialized apply request"),
+    result_path: Path = typer.Option(..., "--result-path", help="Where to write the apply result JSON"),
+) -> None:
+    try:
+        request = ApplyBatchRequest.from_json(request_path.read_text())
+        result = run_apply(request, status_callback=lambda message: typer.echo(message, err=True))
+    except (OSError, ValueError, AdminApplyError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    write_apply_result(result_path, result)
 
 
 @admin_app.command("apply-batch", hidden=True)

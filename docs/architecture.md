@@ -30,7 +30,8 @@ Symx is built out of five main components:
 5. **Local admin tooling**
    - dispatches GitHub Actions workflows to fetch remote metadata and apply curated rerun batches,
    - materializes a local SQLite snapshot,
-   - powers the current failure-focused TUI for inspection, downloads, and curated reruns.
+   - powers both the native macOS app and the failure-focused TUI,
+   - keeps artifact downloads for local reproduction in the TUI for now.
 
 ### 1.2 The three domains
 
@@ -530,12 +531,13 @@ This keeps the architecture simple, but it also means:
 
 ## 7. Current admin surface
 
-The admin tooling in `symx/admin/` is intentionally narrower than a general-purpose state editor.
+The shared backend in `symx/admin/` is intentionally narrower than a general-purpose
+state editor. It powers both the native app in `apps/SymxAdmin/` and the existing TUI.
 
-Current capabilities include:
+Current capabilities across those clients include:
 
 - sync remote metadata into a local SQLite snapshot,
-- inspect IPSW/OTA failure rows,
-- resolve OTA `last_run` IDs into GitHub run metadata,
-- download a selected artifact for local reproduction,
+- inspect and filter complete IPSW/OTA result sets in the native app,
+- inspect failure-focused IPSW/OTA tables and download selected artifacts in the TUI,
+- inspect relevant active and recently finished GitHub workflow runs in the native app,
 - build and apply curated rerun batches that queue eligible rows back to `indexed` or `mirrored`.

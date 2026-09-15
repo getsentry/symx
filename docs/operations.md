@@ -28,6 +28,7 @@ uv run symx --help
 
 Needed for:
 
+- the native app under `apps/SymxAdmin`
 - `uv run symx admin`
 - `uv run symx admin sync`
 - direct GitHub Actions inspection with `gh`
@@ -36,6 +37,7 @@ Requirements:
 
 - `gh` CLI installed
 - `gh auth login` completed with access to this repository
+- for the native app, macOS 26 and Swift 6.3.3 from Xcode 26.6
 
 These commands do **not** need direct GCP credentials locally, because the actual metadata fetch happens inside a GitHub Actions workflow.
 
@@ -192,7 +194,7 @@ Use these primarily for:
 - one-off reproduction of a production workflow with explicit intent,
 - validating changes before wiring them into GitHub Actions.
 
-## 2.3 Admin workflow and TUI
+## 2.3 Admin workflow and clients
 
 ### Sync the local snapshot cache
 
@@ -208,7 +210,22 @@ What happens:
 4. Symx builds a SQLite snapshot under `~/.cache/symx/admin/snapshots/<snapshot_id>/snapshot.db`.
 5. `manifest.json` is updated to point to the active snapshot.
 
-### Start the TUI
+### Start the native macOS app
+
+The app currently targets macOS 26 and Swift 6.3.3 from Xcode 26.6:
+
+```bash
+cd apps/SymxAdmin
+swift run
+```
+
+It reads the same local snapshot, can trigger a sync, provides complete searchable
+and sortable IPSW/OTA tables with a global modification-time preset (four weeks by
+default), shows relevant workflow runs, and applies curated
+rerun queues through GitHub Actions. See [`apps/SymxAdmin/README.md`](../apps/SymxAdmin/README.md)
+for its current feature list and model contract.
+
+### Start the TUI fallback
 
 ```bash
 uv run symx admin
@@ -409,19 +426,20 @@ gh run view <run-id> --log | grep -n "Traceback" -C 3
 
 <a id="admin-tui-and-local-snapshots"></a>
 
-## 4.2 Admin TUI and local snapshots
+## 4.2 Admin clients and local snapshots
 
-The admin surface is the easiest way to inspect current failure rows without manually pulling JSON from GCS.
+The native app and TUI are the easiest ways to inspect current rows without manually
+pulling JSON from GCS. They share the same cache and workflow-driven mutation path.
 
 ### Typical workflow
 
-1. `uv run symx admin sync`
-2. `uv run symx admin`
-3. inspect IPSW or OTA failure rows
-4. press `d` in the TUI to queue a download for the selected row, or `e` / `m` to build a curated rerun batch
-5. reproduce with `extract-file`, or apply the batch with `a` if a rerun is the right next step
+1. open the native app from `apps/SymxAdmin` with `swift run`, or run `uv run symx admin`
+2. let the client sync, or explicitly run `uv run symx admin sync`
+3. inspect IPSW or OTA rows
+4. build and apply a curated rerun queue when a retry is the right next step
+5. use `d` in the TUI when an artifact must be downloaded for local `extract-file` reproduction
 
-### Default failure states shown by the TUI
+### Default failure states shown by both clients
 
 The default filter is:
 
@@ -438,6 +456,10 @@ The shared vocabulary still includes the manual/operator-only `ignored` state, b
 - active snapshots: `~/.cache/symx/admin/snapshots/`
 - downloaded artifacts: `~/.cache/symx/admin/downloads/`
 - GitHub run cache used by the TUI: `~/.cache/symx/admin/github_runs.json`
+
+The native app opens `snapshot.db` read-only. Both clients delegate sync and curated
+metadata mutations to the Python admin backend; shared metadata changes remain
+workflow-executed and generation-matched.
 
 <a id="sentry"></a>
 

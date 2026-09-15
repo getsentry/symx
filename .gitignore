@@ -25,3 +25,6 @@ ota_image_meta*.json
 *.ipsw
 *.zip
 *.aea
+
+# SwiftPM
+.build/

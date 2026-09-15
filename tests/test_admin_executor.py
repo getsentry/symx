@@ -2,6 +2,8 @@ import json
 import subprocess
 from pathlib import Path
 
+from typer.testing import CliRunner
+
 from symx.admin.actions import (
     AdminActionKind,
     AdminStore,
@@ -10,6 +12,7 @@ from symx.admin.actions import (
     ApplyBatchStatus,
     OtaTarget,
 )
+from symx.admin.app import admin_app
 from symx.admin.executor import ADMIN_APPLY_ARTIFACT, ADMIN_APPLY_RESULT_FILE, run_apply
 
 
@@ -43,6 +46,48 @@ class _FakeGh:
         if self.artifacts_by_run.get(run_id, False):
             artifacts.append({"name": ADMIN_APPLY_ARTIFACT})
         return subprocess.CompletedProcess(["gh", *args], 0, json.dumps({"artifacts": artifacts}), "")
+
+
+def test_dispatch_batch_command_writes_machine_readable_result(monkeypatch, tmp_path: Path) -> None:
+    request = ApplyBatchRequest(
+        store=AdminStore.OTA,
+        action=AdminActionKind.QUEUE_MIRROR,
+        snapshot_id="ipsw-101__ota-202",
+        base_generation=202,
+        reason="retry mirror",
+        targets=(OtaTarget(ota_key="ota-key"),),
+    )
+    expected = ApplyBatchResult(
+        status=ApplyBatchStatus.APPLIED,
+        store=request.store,
+        action=request.action,
+        snapshot_id=request.snapshot_id,
+        base_generation=request.base_generation,
+        remote_generation=202,
+        targets=request.targets,
+        reason=request.reason,
+        applied_count=1,
+        message="applied",
+        worker=None,
+    )
+    request_path = tmp_path / "request.json"
+    result_path = tmp_path / "result.json"
+    request_path.write_text(request.to_json())
+    monkeypatch.setattr("symx.admin.app.run_apply", lambda request, status_callback: expected)
+
+    invocation = CliRunner().invoke(
+        admin_app,
+        [
+            "dispatch-batch",
+            "--request-path",
+            str(request_path),
+            "--result-path",
+            str(result_path),
+        ],
+    )
+
+    assert invocation.exit_code == 0, invocation.output
+    assert ApplyBatchResult.from_json(result_path.read_text()) == expected
 
 
 def test_run_apply_returns_structured_stale_generation_result(monkeypatch) -> None:
