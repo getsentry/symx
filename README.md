@@ -7,7 +7,7 @@ In practice, Symx is **not** a long-running service. Today it consists of:
 - scheduled and manually-triggered **GitHub Actions workflows**,
 - a shared **Google Cloud Storage** bucket that holds metadata, mirrored artifacts, and uploaded symbols,
 - **Sentry** for traces, logs, and metrics,
-- a local **admin TUI/CLI** for inspecting failure states, downloading artifacts for reproduction, and queueing curated reruns.
+- local **admin clients**—a native macOS app plus the existing TUI/CLI—for inspecting failure states and queueing curated reruns.
 
 ## Documentation map
 
@@ -75,7 +75,7 @@ More detail, including the "who processes what when" walkthrough and the state d
 | [`symx-ota-mirror.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ota-mirror.yml)               | Ubuntu              | Refresh OTA metadata and mirror indexed OTAs    |
 | [`symx-ota-extract.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-ota-extract.yml)             | macOS               | Extract symbols from mirrored OTAs              |
 | [`symx-simulator-extract.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-simulator-extract.yml) | GitHub macOS matrix | Upload simulator-cache symbols                  |
-| [`symx-admin-meta-sync.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-admin-meta-sync.yml)     | Ubuntu              | Build admin snapshot inputs for the local TUI   |
+| [`symx-admin-meta-sync.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-admin-meta-sync.yml)     | Ubuntu              | Build snapshot inputs for local admin clients   |
 | [`symx-admin-apply.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-admin-apply.yml)             | Ubuntu              | Apply curated admin rerun batches               |
 | [`symx-coverage-pages.yml`](https://github.com/getsentry/symx/blob/main/.github/workflows/symx-coverage-pages.yml)       | Ubuntu              | Publish the coverage stats page to GitHub Pages |
 
@@ -86,7 +86,7 @@ The workflow files in [`.github/workflows/`](.github/workflows/) are the authori
 
 ### 1. Install dependencies
 
-Symx uses `uv` for everything.
+Symx uses `uv` for its Python application and tools. The native admin app uses SwiftPM directly.
 
 Helpful install/download links:
 
@@ -104,6 +104,7 @@ uv sync --dev
 
 - **Admin / workflow inspection only**
   - `gh` installed and authenticated
+  - for the native app: macOS 26 and Swift 6.3.3 from Xcode 26.6 (the currently tested operator toolchain)
 - **GCS-backed runs** (`ipsw meta-sync`, `ipsw mirror`, `ipsw extract`, `ota mirror`, `ota extract`, `sim extract`)
   - `gcloud` credentials available via ADC / `GOOGLE_APPLICATION_CREDENTIALS`
   - a storage URI such as `gs://my-bucket` or `gs://my-project@my-bucket`
@@ -123,13 +124,20 @@ gh run list --workflow "Extract OTA symbols" --status failure --limit 20
 gh run view <run-id> --log
 ```
 
-Open the admin TUI:
+Open the native macOS admin app:
+
+```bash
+cd apps/SymxAdmin
+swift run
+```
+
+The existing TUI remains available as a fallback:
 
 ```bash
 uv run symx admin
 ```
 
-Sync the admin cache without starting the TUI:
+Sync the admin cache without starting either client:
 
 ```bash
 uv run symx admin sync
@@ -165,13 +173,13 @@ The shortest useful operator loop is usually:
 
 1. inspect failing or slow runs in GitHub Actions,
 2. look at the corresponding Sentry transaction,
-3. sync a local admin snapshot with `symx admin sync` or open `symx admin`,
-4. download the failing artifact from the admin TUI and reproduce with `extract-file` locally.
+3. inspect a local admin snapshot in the native app or TUI (either client can sync it),
+4. when needed, download the failing artifact from the TUI and reproduce with `extract-file` locally.
 
 Useful entry points:
 
 - GitHub Actions inspection: [docs/operations.md#github-actions](docs/operations.md#github-actions)
-- Admin TUI and local SQLite snapshot: [docs/operations.md#admin-tui-and-local-snapshots](docs/operations.md#admin-tui-and-local-snapshots)
+- Admin clients and local SQLite snapshots: [docs/operations.md#admin-tui-and-local-snapshots](docs/operations.md#admin-tui-and-local-snapshots)
 - Sentry tags, transactions, and metrics: [docs/operations.md#sentry](docs/operations.md#sentry)
 - Failure-state diagrams: [docs/architecture.md#artifact-state-model](docs/architecture.md#artifact-state-model)
 - GitHub Actions dependency pins and bumping: [docs/gha-dependencies.md](docs/gha-dependencies.md)
@@ -195,13 +203,14 @@ A few things are important to know up front:
 | `symx/ota/`          | OTA metadata retrieval, mirroring, extraction, storage backends   |
 | `symx/sim/`          | simulator-runtime extraction                                      |
 | `symx/admin/`        | local admin cache, SQLite snapshot builder, TUI, download helpers |
+| `apps/SymxAdmin/`    | native macOS admin app over the shared local snapshot             |
 | `symx/stats/`        | snapshot-based reporting and HTML generation                      |
 | `.github/workflows/` | production scheduling and deployment wiring                       |
 | `tests/`             | unit tests                                                        |
 
 ## Development and verification
 
-Use `uv` for all local commands.
+Use `uv` for all Python commands. Use the declared SwiftPM toolchain for the native admin app.
 
 Before considering a change "done", run the full check suite:
 
@@ -210,4 +219,12 @@ uv run ruff check --fix
 uv run ruff format
 uv run pyright
 uv run pytest
+```
+
+The native admin package has an additional local check:
+
+```bash
+cd apps/SymxAdmin
+swift format lint --strict --recursive --parallel Sources Tests Package.swift
+swift test
 ```

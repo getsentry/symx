@@ -2,9 +2,10 @@
 
 ## Package & Dependency Management
 
-- Always use `uv` for running the application, dev tools, and managing dependencies.
+- Always use `uv` for running the Python application, Python dev tools, and managing Python dependencies.
 - Use `uv run` to invoke any Python tool (`pytest`, `pyright`, `ruff`, etc.).
-- Use `uv add` / `uv remove` for dependency changes.
+- Use `uv add` / `uv remove` for Python dependency changes.
+- Use SwiftPM directly for the native admin app under `apps/SymxAdmin` (`swift run`, `swift test`).
 
 ## Clarification & Interaction
 
@@ -141,6 +142,14 @@ uv run ruff check --fix
 uv run ruff format
 uv run pyright
 uv run pytest
+```
+
+For changes to the native admin app, also run:
+
+```sh
+cd apps/SymxAdmin
+swift format lint --strict --recursive --parallel Sources Tests Package.swift
+swift test
 ```
 
 Markdown-only changes do not require the full verification suite.
