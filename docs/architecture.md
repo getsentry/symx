@@ -102,7 +102,9 @@ Workflow: [`symx-ipsw-extract.yml`](../.github/workflows/symx-ipsw-extract.yml)
 4. For each mirrored source:
    - download the mirrored IPSW back from GCS,
    - verify it against the metadata,
-   - run the IPSW extractor,
+   - run the IPSW extractor; macOS probes the same shared `arm64e`, `arm64e_x1`, `x86_64`, and `x86_64h` DSC
+     architecture set as OTA extraction, using typed outcomes to continue when a candidate is absent while preserving
+     invocation and materialization failures,
    - symsort the system image and the dyld shared cache content,
    - upload symbol files into `symbols/...`,
    - mark the source as `symbols_extracted` on success.
@@ -147,7 +149,7 @@ Workflow: [`symx-ota-extract.yml`](../.github/workflows/symx-ota-extract.yml)
 3. `iter_mirror()` continuously reloads OTA metadata from GCS and always yields the newest mirrored OTA first.
 4. For each mirrored OTA:
    - download the mirrored OTA from GCS,
-   - for macOS, request `arm64e`, `x86_64`, and `x86_64h` from `ipsw` one at a time; other platforms retain one
+   - for macOS, request `arm64e`, `arm64e_x1`, `x86_64`, and `x86_64h` from `ipsw` one at a time; other platforms retain one
      unfiltered materialization operation,
    - parse every schema-1 report into strict typed models and independently validate every reported path as a
      regular file beneath that attempt's output root,

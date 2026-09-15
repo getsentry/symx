@@ -18,8 +18,14 @@ from subprocess import CompletedProcess
 
 import pytest
 
-from symx.model import Arch
+from symx.model import MACOS_DSC_ARCHITECTURES, Arch
 from symx.ipsw import extract as ipsw_extract
+from symx.ipsw.materialization import (
+    IpswDscMaterialized,
+    IpswDscNotPresent,
+    IpswDscUnavailable,
+    IpswDscUnavailableReason,
+)
 from symx.ipsw.model import IpswPlatform
 from symx.ipsw.extract import (
     IpswExtractionRequest,
@@ -58,7 +64,6 @@ from symx.ota.model import (
 )
 from symx.tools import symsort as tool_symsort
 from symx.ota.extract import (
-    MACOS_OTA_DSC_ARCHITECTURES,
     _classify_ota,
     _classify_ota_evidence,
     _collect_ota_classification_evidence,
@@ -100,17 +105,21 @@ def test_generate_bundle_id_no_commas() -> None:
 # --- macOS DSC architecture policy tests ---
 
 
-def test_macos_dsc_architectures_include_x86_64_for_macos_27_metadata() -> None:
+def test_macos_dsc_architectures_include_all_supported_architectures_for_macos_27_metadata() -> None:
     assert ipsw_extract._macos_dsc_architectures("27.0") == [
         Arch.ARM64E,
+        Arch.ARM64E_X1,
         Arch.X86_64,
+        Arch.X86_64H,
     ]
 
 
-def test_macos_dsc_architectures_keep_x86_64_before_macos_27_metadata() -> None:
+def test_macos_dsc_architectures_are_not_version_gated_before_macos_27_metadata() -> None:
     assert ipsw_extract._macos_dsc_architectures("26.5.1") == [
         Arch.ARM64E,
+        Arch.ARM64E_X1,
         Arch.X86_64,
+        Arch.X86_64H,
     ]
 
 
@@ -466,7 +475,142 @@ def test_ipsw_extract_dsc_timeout_preserves_timeout_contract_and_diagnostics(
     assert message == f"ipsw extract timed out for {extractor.ipsw_path} (default)"
 
 
-def test_ipsw_extract_dsc_raises_detailed_error_when_extract_fails(
+def test_ipsw_extract_dsc_returns_requested_arch_absence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    extractor = _make_ipsw_extractor(tmp_path)
+
+    class FakePopen:
+        def __init__(self, command: list[str], stdout: object = None, stderr: object = None) -> None:
+            self.command = command
+            self.returncode = 1
+
+        def __enter__(self) -> "FakePopen":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+            return False
+
+        def communicate(self, timeout: int | None = None) -> tuple[bytes, bytes]:
+            return b"", b"no dyld_shared_cache files found matching the specified archs: [arm64e_x1]"
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
+
+    result = extractor._ipsw_extract_dsc(Arch.ARM64E_X1)
+
+    assert result == IpswDscNotPresent(
+        arch=Arch.ARM64E_X1,
+        message="no dyld_shared_cache files found matching the specified archs: [arm64e_x1]",
+    )
+
+
+def test_ipsw_symsort_dsc_skips_absent_architecture_after_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    processing_dir = tmp_path / "processing"
+    processing_dir.mkdir()
+    ipsw_path = tmp_path / "UniversalMac_26.5.1_25F90_Restore.ipsw"
+    ipsw_path.touch()
+    extractor = _IpswExtractionRun(
+        IpswExtractionRequest(IpswPlatform.MACOS, ipsw_path, processing_dir, version="26.5.1")
+    )
+    extractor.macos_dsc_architectures = [Arch.ARM64E, Arch.ARM64E_X1]
+    extract_dir = processing_dir / "extracted"
+    extract_dir.mkdir()
+    attempts: list[Arch] = []
+    symsort_inputs: list[Path] = []
+
+    def fake_extract(arch: Arch | None = None) -> IpswDscMaterialized | IpswDscNotPresent:
+        assert arch is not None
+        attempts.append(arch)
+        if arch == Arch.ARM64E_X1:
+            return IpswDscNotPresent(arch=arch, message="not present")
+        return IpswDscMaterialized(arch=arch, extract_dir=extract_dir)
+
+    def fake_split(materialized_dir: Path, arch: Arch | None = None) -> Path:
+        assert materialized_dir == extract_dir
+        assert arch == Arch.ARM64E
+        split_dir = processing_dir / "split_out"
+        (split_dir / str(arch)).mkdir(parents=True)
+        return split_dir
+
+    def fake_compress(directory: Path) -> Path:
+        archive = directory.parent / f"{directory.name}.tar.zst"
+        directory.rmdir()
+        archive.touch()
+        return archive
+
+    def fake_decompress(archive: Path, target: Path) -> None:
+        assert archive.is_file()
+        target.mkdir()
+
+    monkeypatch.setattr(extractor, "_ipsw_extract_dsc", fake_extract)
+    monkeypatch.setattr(extractor, "_ipsw_split", fake_split)
+    monkeypatch.setattr("symx.ipsw.extract._compress_directory", fake_compress)
+    monkeypatch.setattr("symx.ipsw.extract._decompress_archive", fake_decompress)
+    monkeypatch.setattr(
+        extractor,
+        "_symsort",
+        lambda split_dir, ignore_errors=False, record_input_tree=True: symsort_inputs.append(split_dir),
+    )
+
+    extractor._symsort_dsc()
+
+    assert attempts == [Arch.ARM64E, Arch.ARM64E_X1]
+    assert symsort_inputs == [processing_dir / "split_out"]
+    assert not ipsw_path.exists()
+
+
+def test_ipsw_symsort_dsc_fails_when_all_architectures_are_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    processing_dir = tmp_path / "processing"
+    processing_dir.mkdir()
+    ipsw_path = tmp_path / "UniversalMac_26.5.1_25F90_Restore.ipsw"
+    ipsw_path.touch()
+    extractor = _IpswExtractionRun(
+        IpswExtractionRequest(IpswPlatform.MACOS, ipsw_path, processing_dir, version="26.5.1")
+    )
+    extractor.macos_dsc_architectures = [Arch.ARM64E, Arch.ARM64E_X1]
+
+    def fake_absent(arch: Arch | None = None) -> IpswDscNotPresent:
+        assert arch is not None
+        return IpswDscNotPresent(arch=arch, message="not present")
+
+    monkeypatch.setattr(extractor, "_ipsw_extract_dsc", fake_absent)
+    monkeypatch.setattr(extractor, "_symsort", lambda *args, **kwargs: pytest.fail("must not symsort"))
+
+    with pytest.raises(IpswExtractError, match="none of the requested macOS architectures"):
+        extractor._symsort_dsc()
+
+    assert ipsw_path.exists()
+
+
+def test_ipsw_symsort_dsc_does_not_mask_unavailable_architecture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    processing_dir = tmp_path / "processing"
+    processing_dir.mkdir()
+    ipsw_path = tmp_path / "UniversalMac_27.0_26A428_Restore.ipsw"
+    ipsw_path.touch()
+    extractor = _IpswExtractionRun(IpswExtractionRequest(IpswPlatform.MACOS, ipsw_path, processing_dir, version="27.0"))
+    extractor.macos_dsc_architectures = [Arch.ARM64E_X1]
+    unavailable = IpswDscUnavailable(
+        arch=Arch.ARM64E_X1,
+        reason=IpswDscUnavailableReason.INVOCATION_FAILED,
+        message="arm64e_x1 mount failed",
+    )
+    monkeypatch.setattr(extractor, "_ipsw_extract_dsc", lambda arch=None: unavailable)
+    monkeypatch.setattr(extractor, "_symsort", lambda *args, **kwargs: pytest.fail("must not symsort"))
+
+    with pytest.raises(IpswExtractError, match="arm64e_x1 mount failed"):
+        extractor._symsort_dsc()
+
+    assert ipsw_path.exists()
+
+
+def test_ipsw_extract_dsc_returns_detailed_unavailable_when_extract_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     extractor = _make_ipsw_extractor(tmp_path)
@@ -490,11 +634,13 @@ def test_ipsw_extract_dsc_raises_detailed_error_when_extract_fails(
 
     monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
 
-    with pytest.raises(IpswExtractError, match="ipsw extract failed") as exc_info:
-        extractor._ipsw_extract_dsc()
+    result = extractor._ipsw_extract_dsc()
 
-    message = str(exc_info.value)
-    assert message == f"ipsw extract failed for {extractor.ipsw_path} (default) with exit code 1"
+    assert result == IpswDscUnavailable(
+        arch=None,
+        reason=IpswDscUnavailableReason.INVOCATION_FAILED,
+        message=f"ipsw extract failed for {extractor.ipsw_path} (default) with exit code 1",
+    )
 
 
 def test_ipsw_extract_dsc_passes_vendored_pem_db_when_available(
@@ -528,7 +674,7 @@ def test_ipsw_extract_dsc_passes_vendored_pem_db_when_available(
     monkeypatch.setattr("symx.ipsw.extract.vendored_ipsw_pem_db_path", lambda: pem_db)
     monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
 
-    assert extractor._ipsw_extract_dsc() == expected_extract_dir
+    assert extractor._ipsw_extract_dsc() == IpswDscMaterialized(arch=None, extract_dir=expected_extract_dir)
     assert commands == [
         [
             "ipsw",
@@ -921,7 +1067,7 @@ def test_ipsw_aea_preflight_retries_transient_fcs_key_lookup(tmp_path: Path, mon
     assert get_key_attempts() == 2
 
 
-def test_ipsw_extract_dsc_includes_stderr_summary_when_available(
+def test_ipsw_extract_dsc_unavailable_includes_stderr_summary_when_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     extractor = _make_ipsw_extractor(tmp_path)
@@ -948,13 +1094,15 @@ def test_ipsw_extract_dsc_includes_stderr_summary_when_available(
 
     monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
 
-    with pytest.raises(IpswExtractError, match="failed to mount DMG /tmp/test.dmg") as exc_info:
-        extractor._ipsw_extract_dsc()
+    result = extractor._ipsw_extract_dsc()
 
-    message = str(exc_info.value)
-    assert message == (
-        f"ipsw extract failed for {extractor.ipsw_path} (default) with exit code 1: "
-        "Error: failed to mount DMG /tmp/test.dmg"
+    assert result == IpswDscUnavailable(
+        arch=None,
+        reason=IpswDscUnavailableReason.INVOCATION_FAILED,
+        message=(
+            f"ipsw extract failed for {extractor.ipsw_path} (default) with exit code 1: "
+            "Error: failed to mount DMG /tmp/test.dmg"
+        ),
     )
 
 
@@ -1487,6 +1635,26 @@ def test_extract_ota_rejects_duplicate_report_paths(tmp_path: Path, monkeypatch:
         extract_ota(request)
 
 
+def test_extract_ota_accepts_arm64e_x1_primary_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    request = _ota_materialization_request(tmp_path)
+    arm64e_x1_path = "24R364__Watch8,3/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e_x1"
+    _touch_reported_file(request.output_root, arm64e_x1_path)
+    report = _ota_dsc_report(
+        complete=True,
+        files=[{"path": arm64e_x1_path, "arch": "arm64e_x1", "source": "ota-asset"}],
+    )
+    monkeypatch.setattr(
+        "symx.ota.extract.subprocess.run",
+        lambda args, *, stdin, capture_output: CompletedProcess(args=args, returncode=0, stdout=report, stderr=b""),
+    )
+
+    result = extract_ota(request)
+
+    assert isinstance(result, OtaDscMaterializationResult)
+    assert len(result.dscs) == 1
+    assert result.dscs == (OtaDscSource(arch=Arch.ARM64E_X1, artifact=request.output_root / arm64e_x1_path),)
+
+
 def test_extract_ota_accepts_x86_64h_primary_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     request = _ota_materialization_request(tmp_path, Arch.X86_64H)
     x86_64h_path = "24G720__MacOS/System/Library/dyld/dyld_shared_cache_x86_64h"
@@ -1645,11 +1813,12 @@ def test_extract_symbols_processes_macos_architectures_sequentially(
 
     assert isinstance(result, OtaSymbolsExtracted)
     assert result.symbol_dirs == (request.work_dir / "symbols" / request.bundle_id,)
-    assert attempts == list(MACOS_OTA_DSC_ARCHITECTURES)
-    assert split_arches == [Arch.ARM64E, Arch.X86_64H]
+    assert attempts == list(MACOS_DSC_ARCHITECTURES)
+    assert split_arches == [Arch.ARM64E, Arch.ARM64E_X1, Arch.X86_64H]
     assert len(symsort_inputs) == 1
     assert [path.name for path in symsort_inputs[0]] == [
         "26.6.1_25G76_arm64e",
+        "26.6.1_25G76_arm64e_x1",
         "26.6.1_25G76_x86_64h",
     ]
     assert all(not root.exists() for root in materialization_roots)
@@ -1686,10 +1855,12 @@ def test_extract_symbols_macos_real_failure_after_success_is_not_masked(
 
     def fake_extract(
         materialization_request: OtaDscMaterializationRequest,
-    ) -> OtaDscMaterializationResult | OtaDscUnavailable:
+    ) -> OtaDscMaterializationResult | OtaDscNotPresent | OtaDscUnavailable:
         arch = materialization_request.requested_arch
         if arch == Arch.X86_64:
             return unavailable
+        if arch == Arch.ARM64E_X1:
+            return _arch_not_present(arch)
         assert arch == Arch.ARM64E
         dsc = materialization_request.output_root / "dyld_shared_cache_arm64e"
         dsc.touch()
@@ -1760,7 +1931,7 @@ def test_extract_symbols_macos_classifies_once_when_all_architectures_are_absent
     result = extract_symbols(request)
 
     assert result == OtaExtractionSkipped(reason=OtaExtractionSkipReason.RECOVERY)
-    assert attempts == list(MACOS_OTA_DSC_ARCHITECTURES)
+    assert attempts == list(MACOS_DSC_ARCHITECTURES)
     assert classified == [request]
     assert artifact.exists()
 
