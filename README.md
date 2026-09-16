@@ -11,11 +11,13 @@ In practice, Symx is **not** a long-running service. Today it consists of:
 
 ## Documentation map
 
+- [Apple artifact and extraction terminology](docs/domain-terminology.md) — start here for terms such as DSC, primary, cache family, SystemOS image, and materialization
 - [Architecture and state model](docs/architecture.md)
 - [Operations, local setup, deployment, and debugging](docs/operations.md)
 - [Coverage stats page](https://getsentry.github.io/symx/)
 
-If you only read one thing after this README, read **[docs/architecture.md](docs/architecture.md)**.
+If you only read one thing after this README, read **[docs/architecture.md](docs/architecture.md)**. Keep the
+[domain terminology](docs/domain-terminology.md) open when an Apple firmware or extraction term is unfamiliar.
 
 ## What Symx does
 

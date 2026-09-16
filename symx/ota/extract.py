@@ -811,7 +811,7 @@ def _resolve_unavailable_materialization(
     request: OtaExtractionRequest,
     unavailable: OtaDscUnavailable,
 ) -> OtaExtractionSkipped:
-    if unavailable.exhausted_sources_without_primary:
+    if unavailable.exhausted_sources_without_primary or unavailable.has_only_dsc_validation_failures:
         classification = _classify_ota(request)
         if classification == OtaClassification.DELTA:
             return OtaExtractionSkipped(reason=OtaExtractionSkipReason.DELTA)

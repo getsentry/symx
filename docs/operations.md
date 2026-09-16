@@ -1,6 +1,6 @@
 # Operations, deployment, and debugging
 
-This document is the practical companion to [architecture.md](architecture.md). It covers how to run Symx locally, how the current deployment is wired, and how to inspect and debug production behavior.
+This document is the practical companion to [architecture.md](architecture.md). It covers how to run Symx locally, how the current deployment is wired, and how to inspect and debug production behavior. See [domain-terminology.md](domain-terminology.md) for the Apple artifact and extraction vocabulary used by both documents.
 
 ## 1. Local setup
 
@@ -150,8 +150,10 @@ What it does:
 - for macOS, requests `arm64e`, `arm64e_x1`, `x86_64`, and `x86_64h` sequentially with exactly one `--dyld-arch` per operation;
   other platforms use the existing unfiltered operation,
 - strictly parses each schema-1 report and validates every reported regular file beneath that attempt's temporary
-  output root,
+  output root; `ipsw` verifies that each reported DSC architecture has at least one usable primary cache family,
 - distinguishes a requested architecture that is absent from any source-attributed, partial, or other real failure,
+- treats reports containing only `dsc-validation` failures as expected skips only when trusted metadata confirms a
+  delta or recovery artifact; full and unknown artifacts remain failures,
 - splits and compresses each successful macOS architecture before removing its materialization directory,
 - restores all successful split archives and symsorts them in one invocation,
 - preserves the caller-owned OTA file on both success and failure,
@@ -630,7 +632,8 @@ What Symx does:
 
 Likely causes:
 
-- `ipsw` extraction failure, including an incomplete `payload-extract` report that may be transient
+- `ipsw` extraction failure, including an incomplete `payload-extract` report that may be transient or a cache-family
+  `dsc-validation` failure on a full/unknown artifact
 - `dyld_split` failure
 - `symsorter` failure
 - unexpected artifact layout differences
@@ -661,6 +664,8 @@ Classification uses trusted metadata rather than extraction-failure symptoms:
   typed plist and AEA-only `PrereqBuild` text fallbacks.
 - A `payload-extract` failure and payload/BOM inventory are not enough to classify an OTA because transient failures
   can produce the same evidence. These failures remain `symbol_extraction_failed` and visible in the default view.
+- A report whose errors are exclusively `dsc-validation` can use the same trusted delta/recovery metadata; mixed
+  validation and extraction errors remain failures, as do validation failures on full or unknown artifacts.
 - CDN paths, `image_patches/`, and archive listings are never used to infer an artifact type.
 
 Classification logs record which trusted source was used.

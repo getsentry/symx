@@ -2625,6 +2625,145 @@ def test_extract_symbols_classifies_delta_after_reconstruction_inputs_are_skippe
     assert classified_requests == [request]
 
 
+def test_extract_symbols_classifies_delta_after_dsc_family_validation_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "test.aea"
+    artifact.touch()
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="tvos",
+        version="27.0",
+        build="24J361",
+        bundle_id="ota_test",
+        delivery="delta",
+        prerequisite_build="22K160",
+    )
+    report = OtaDscReport.model_validate_json(
+        _ota_dsc_report(
+            complete=False,
+            files=[
+                {
+                    "path": "24J361__AppleTV14,1/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e",
+                    "arch": "arm64e",
+                    "source": "payloadv2",
+                }
+            ],
+            errors=[
+                {
+                    "phase": "dsc-validation",
+                    "source": "payloadv2",
+                    "message": "cache family is missing dyld_shared_cache_arm64e.31",
+                }
+            ],
+        )
+    )
+    unavailable = OtaDscUnavailable(
+        reason=OtaDscUnavailableReason.INCOMPLETE,
+        report=report,
+        message="OTA DSC materialization was incomplete",
+    )
+    monkeypatch.setattr("symx.ota.extract.extract_ota", lambda materialization_request: unavailable)
+
+    result = extract_symbols(request)
+
+    assert result == OtaExtractionSkipped(reason=OtaExtractionSkipReason.DELTA)
+
+
+def test_extract_symbols_keeps_dsc_family_validation_failure_for_full_ota(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "test.aea"
+    artifact.touch()
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="tvos",
+        version="27.0",
+        build="24J361",
+        bundle_id="ota_test",
+        delivery="full",
+    )
+    report = OtaDscReport.model_validate_json(
+        _ota_dsc_report(
+            complete=False,
+            files=[
+                {
+                    "path": "24J361__AppleTV14,1/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e",
+                    "arch": "arm64e",
+                    "source": "payloadv2",
+                }
+            ],
+            errors=[
+                {
+                    "phase": "dsc-validation",
+                    "source": "payloadv2",
+                    "message": "cache family is missing dyld_shared_cache_arm64e.31",
+                }
+            ],
+        )
+    )
+    unavailable = OtaDscUnavailable(
+        reason=OtaDscUnavailableReason.INCOMPLETE,
+        report=report,
+        message="OTA DSC materialization was incomplete",
+    )
+    monkeypatch.setattr("symx.ota.extract.extract_ota", lambda materialization_request: unavailable)
+
+    with pytest.raises(OtaDscMaterializationError) as exc_info:
+        extract_symbols(request)
+
+    assert exc_info.value.unavailable is unavailable
+
+
+def test_extract_symbols_keeps_mixed_validation_and_extraction_failure_for_delta(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "test.aea"
+    artifact.touch()
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform="tvos",
+        version="27.0",
+        build="24J361",
+        bundle_id="ota_test",
+        delivery="delta",
+        prerequisite_build="22K160",
+    )
+    report = OtaDscReport.model_validate_json(
+        _ota_dsc_report(
+            complete=False,
+            files=[],
+            errors=[
+                {
+                    "phase": "dsc-validation",
+                    "source": "payloadv2",
+                    "message": "cache family is missing dyld_shared_cache_arm64e.31",
+                },
+                {
+                    "phase": "payload-extract",
+                    "source": "payload.026",
+                    "message": "aa extraction failed",
+                },
+            ],
+        )
+    )
+    unavailable = OtaDscUnavailable(
+        reason=OtaDscUnavailableReason.INCOMPLETE,
+        report=report,
+        message="OTA DSC materialization was incomplete",
+    )
+    monkeypatch.setattr("symx.ota.extract.extract_ota", lambda materialization_request: unavailable)
+    monkeypatch.setattr("symx.ota.extract._probe_payload_dsc_inventory", lambda artifact: None)
+
+    with pytest.raises(OtaDscMaterializationError) as exc_info:
+        extract_symbols(request)
+
+    assert exc_info.value.unavailable is unavailable
+
+
 def test_extract_symbols_keeps_unknown_no_primary_outcome_as_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

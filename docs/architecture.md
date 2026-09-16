@@ -1,6 +1,6 @@
 # Architecture and state model
 
-This document explains how Symx works today: what gets processed, when state changes, where data lives, and which design choices shape the current system.
+This document explains how Symx works today: what gets processed, when state changes, where data lives, and which design choices shape the current system. Apple firmware and extraction terms used here are defined centrally in [domain-terminology.md](domain-terminology.md).
 
 ## 1. System model
 
@@ -153,11 +153,14 @@ Workflow: [`symx-ota-extract.yml`](../.github/workflows/symx-ota-extract.yml)
    - for macOS, request `arm64e`, `arm64e_x1`, `x86_64`, and `x86_64h` from `ipsw` one at a time; other platforms retain one
      unfiltered materialization operation,
    - parse every schema-1 report into strict typed models and independently validate every reported path as a
-     regular file beneath that attempt's output root,
+     regular file beneath that attempt's output root; `ipsw` also validates that each reported DSC architecture has
+     at least one primary whose complete cache family can be opened,
    - normalize each valid report into a typed materialization outcome: supported primary DSCs, requested architecture
      absent, or unavailable input with an explicit `incomplete`/`no_supported_primary` reason,
    - treat an empty report containing only unattributed `dsc-discovery` errors as that requested architecture being
      absent; files plus errors or a source-attributed error produce an `incomplete` outcome,
+   - when every structured error is `dsc-validation`, classify only from trusted artifact metadata: confirmed delta
+     and recovery artifacts become their expected skip outcomes, while full or unknown artifacts remain failures,
    - split each macOS architecture while its materialized cache and subcaches are present, compress the split
      directory, and remove that attempt's materialization before starting the next architecture,
    - after all macOS attempts, restore every successful split archive and symsort them together,
@@ -176,8 +179,9 @@ instead of exceptions. `ipsw` owns the OTA cryptex mount lifecycle.
 
 ### Classifying an OTA that has no usable DSC
 
-Symx classifies an OTA only after `ipsw` cannot provide a supported primary DSC. The classifier uses these sources,
-in order:
+Symx classifies an OTA after `ipsw` either cannot provide a supported primary DSC or reports only cache-family
+`dsc-validation` failures. It does not reclassify mixed validation/extraction failures. The classifier uses these
+sources, in order:
 
 1. **Request metadata:** an OTA requested for the `recovery` platform, or carrying either the
    `com.apple.MobileAsset.RecoveryOSUpdate` provenance asset type or `Darwin Recovery` release type from metadata sync,
@@ -206,8 +210,8 @@ The classifier follows two safety rules:
   archive listings.
 
 `delta` and `recovery` are expected skip outcomes that the storage runner persists as terminal states. An `unknown`
-result preserves the original unavailable-materialization failure. For macOS, classification runs once only after all
-requested architectures are absent.
+result preserves the original unavailable-materialization failure. A full artifact with an invalid family also
+remains failed. For macOS, classification runs once only after all requested architectures are absent or unusable.
 
 A GCS extraction request owns its downloaded temporary OTA and removes it after the final macOS materialization
 attempt, before restoring split archives for symsort. `ota extract-file` does not own its input and always preserves
