@@ -265,8 +265,6 @@ def extract(
                             ipsw_storage.upload_symbols(
                                 result.prefix,
                                 result.bundle_id,
-                                artifact,
-                                source_idx,
                                 result.symbols_dir,
                             )
 

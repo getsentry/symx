@@ -206,11 +206,9 @@ class OtaGcsStorage(OtaStorage):
 
         raise RuntimeError("Failed to bulk update meta-data")
 
-    def upload_symbols(self, input_dir: Path, ota_meta_key: str, ota_meta: OtaArtifact, bundle_id: str) -> None:
-        upload_symbol_binaries(self.bucket, ota_meta.platform, bundle_id, input_dir)
-        ota_meta.processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
-        ota_meta.update_last_run()
-        self.update_meta_item(ota_meta_key, ota_meta)
+    def upload_symbols(self, prefix: str, bundle_id: str, binary_dir: Path) -> None:
+        """Upload files only; the extraction runner owns the final artifact state."""
+        upload_symbol_binaries(self.bucket, prefix, bundle_id, binary_dir)
 
 
 def init_storage(storage: str) -> OtaGcsStorage | None:

@@ -3,6 +3,7 @@
 from datetime import date, timedelta
 from pathlib import Path
 
+import pytest
 from pydantic import HttpUrl
 
 from symx.model import ArtifactProcessingState
@@ -110,7 +111,8 @@ class TestExtractRunner:
         # Symbols were uploaded
         assert len(storage.uploaded_symbols) == 1
 
-        # State updated to SYMBOLS_EXTRACTED
+        # Only the outer runner persists the final source state.
+        assert storage.meta_updates == [artifact.key]
         updated = storage.get_artifact(artifact.key)
         assert updated is not None
         assert updated.sources[0].processing_state == ArtifactProcessingState.SYMBOLS_EXTRACTED
@@ -134,7 +136,25 @@ class TestExtractRunner:
         assert updated is not None
         assert updated.sources[0].processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
 
-        # Meta was still updated and local dir cleaned
+        # Meta was still updated once and local dir cleaned
+        assert storage.meta_updates == [artifact.key]
+        assert storage.clean_local_dir_count == 1
+
+    def test_upload_failure_marks_failed_once(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        storage = InMemoryIpswStorage(tmp_path)
+        artifact = _make_mirrored_artifact(storage)
+
+        def fail_upload(prefix: str, bundle_id: str, binary_dir: Path) -> None:
+            assert storage.meta_updates == []
+            assert artifact.sources[0].processing_state == ArtifactProcessingState.MIRRORED
+            raise RuntimeError("upload failed")
+
+        monkeypatch.setattr(storage, "upload_symbols", fail_upload)
+
+        extract(storage, FakeTimeout(timedelta(minutes=60)), extractor=FakeExtractor())
+
+        assert storage.meta_updates == [artifact.key]
+        assert artifact.sources[0].processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
         assert storage.clean_local_dir_count == 1
 
     def test_mirror_corrupt_when_download_fails(self, tmp_path: Path) -> None:

@@ -54,7 +54,7 @@ class InMemoryOtaStorage:
         self.artifacts[ota_meta_key] = ota_meta
         return self.artifacts
 
-    def upload_symbols(self, input_dir: Path, ota_meta_key: str, ota_meta: OtaArtifact, bundle_id: str) -> None:
+    def upload_symbols(self, prefix: str, bundle_id: str, binary_dir: Path) -> None:
         raise NotImplementedError
 
 

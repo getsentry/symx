@@ -8,6 +8,8 @@ without actual file downloads or subprocess calls.
 from datetime import timedelta
 from pathlib import Path
 
+import pytest
+
 from symx.model import ArtifactProcessingState
 from symx.ota.model.ipsw_report import OtaDscReport, OtaDscReportError
 from symx.ota.model.materialization import (
@@ -72,6 +74,7 @@ class MockStorage:
         self.artifacts = artifacts or {}
         self.load_ota_returns: Path | None = None
         self.uploaded_symbols: list[tuple[str, str]] = []
+        self.meta_updates: list[tuple[str, ArtifactProcessingState]] = []
 
     def save_meta(self, theirs: OtaMetaData) -> OtaMetaData:
         self.artifacts.update(theirs)
@@ -90,11 +93,12 @@ class MockStorage:
         return "mock"
 
     def update_meta_item(self, ota_meta_key: str, ota_meta: OtaArtifact) -> OtaMetaData:
+        self.meta_updates.append((ota_meta_key, ota_meta.processing_state))
         self.artifacts[ota_meta_key] = ota_meta
         return self.artifacts
 
-    def upload_symbols(self, input_dir: Path, ota_meta_key: str, ota_meta: OtaArtifact, bundle_id: str) -> None:
-        self.uploaded_symbols.append((ota_meta_key, bundle_id))
+    def upload_symbols(self, prefix: str, bundle_id: str, binary_dir: Path) -> None:
+        self.uploaded_symbols.append((prefix, bundle_id))
 
 
 class FakeOtaExtractor:
@@ -237,7 +241,49 @@ def test_successful_extraction(tmp_path: Path) -> None:
     assert request.bundle_id == "ota_key1"
     assert request.owns_local_ota is True
     assert len(storage.uploaded_symbols) == 1
-    assert storage.uploaded_symbols[0] == ("key1", "ota_key1")
+    assert storage.uploaded_symbols[0] == ("ios", "ota_key1")
+    assert storage.meta_updates == [("key1", ArtifactProcessingState.SYMBOLS_EXTRACTED)]
+
+
+@pytest.mark.parametrize("upload_fails", [False, True])
+def test_all_symbol_directories_upload_before_success_is_persisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, upload_fails: bool
+) -> None:
+    artifact = make_ota_artifact(id="key1")
+    storage = MockStorage({"key1": artifact})
+    ota_file = tmp_path / "test.zip"
+    ota_file.touch()
+    storage.load_ota_returns = ota_file
+    symbol_dirs = (tmp_path / "symbols-one", tmp_path / "symbols-two")
+    for symbol_dir in symbol_dirs:
+        symbol_dir.mkdir()
+    extractor = FakeOtaExtractor(result=OtaSymbolsExtracted(symbol_dirs=symbol_dirs))
+    uploaded_dirs: list[Path] = []
+
+    def upload(prefix: str, bundle_id: str, binary_dir: Path) -> None:
+        assert prefix == artifact.platform
+        assert bundle_id == "ota_key1"
+        assert storage.meta_updates == []
+        assert artifact.processing_state == ArtifactProcessingState.MIRRORED
+        uploaded_dirs.append(binary_dir)
+        if upload_fails and binary_dir == symbol_dirs[-1]:
+            raise RuntimeError("upload failed")
+
+    monkeypatch.setattr(storage, "upload_symbols", upload)
+    runner = OtaExtract(storage, extractor=extractor)
+    timer = FakeTimeout(timedelta(minutes=5))
+
+    if upload_fails:
+        # Preserve OTA's existing fail-fast behavior for non-extraction errors.
+        # Earlier uploaded directories must not leave a premature success state.
+        with pytest.raises(RuntimeError, match="upload failed"):
+            runner.extract(timer)
+        assert storage.meta_updates == []
+        assert artifact.processing_state == ArtifactProcessingState.MIRRORED
+    else:
+        runner.extract(timer)
+        assert storage.meta_updates == [("key1", ArtifactProcessingState.SYMBOLS_EXTRACTED)]
+    assert uploaded_dirs == list(symbol_dirs)
 
 
 def test_delta_ota_skipped(tmp_path: Path) -> None:

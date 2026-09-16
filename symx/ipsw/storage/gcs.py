@@ -246,18 +246,9 @@ class IpswGcsStorage(IpswStorage):
                 span.set_data("downloaded_bytes", local_ipsw_path.stat().st_size)
             return local_ipsw_path
 
-    def upload_symbols(
-        self,
-        prefix: str,
-        bundle_id: str,
-        artifact: IpswArtifact,
-        source_idx: int,
-        binary_dir: Path,
-    ) -> None:
+    def upload_symbols(self, prefix: str, bundle_id: str, binary_dir: Path) -> None:
+        """Upload files only; the extraction runner owns the final source state."""
         upload_symbol_binaries(self.bucket, prefix, bundle_id, binary_dir)
-        artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
-        artifact.sources[source_idx].update_last_run()
-        self.update_meta_item(artifact)
 
     def clean_local_dir(self) -> None:
         for item in self.local_dir.iterdir():
