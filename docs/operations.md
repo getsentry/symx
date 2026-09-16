@@ -135,8 +135,18 @@ What it does:
 - runs the IPSW extraction pipeline locally; macOS probes the shared `arm64e`, `arm64e_x1`, `x86_64`, and
   `x86_64h` DSC architecture set sequentially, skipping absent candidates without masking real extraction failures,
 - uses the vendored IPSW PEM DB snapshot before any live Apple FCS-key lookup,
-- performs an AEA preflight on the selected IPSW DMG member before the higher-level `ipsw` mount/extract helpers,
+- plans every distinct SystemOS image from BuildManifest and carries a validated `--device` selector through both
+  mount and DSC extraction when needed; shared Rosetta images are handled independently, not once per device,
+- performs an AEA preflight for each encrypted SystemOS member before the higher-level `ipsw` mount/extract helpers,
+- accumulates one source bundle using image-qualified splits and bounded restore/symsort batches,
+- **consumes/deletes the input IPSW** after all image consumers finish: use a disposable copy/APFS clone, not your
+  master file, a symlink, or a hard link,
 - prints the output directory containing the symsorter result.
+
+If mount cleanup cannot confirm detach, extraction stops and retains its owned workspace instead of recursively
+removing a potentially live mount. Inspect the logged workspace and `hdiutil info`; do not manually delete its mount
+or backing files until detach is confirmed. The worker still attempts the final failed-source metadata update but
+will not proceed to another source. Ordinary extraction failures retain the existing failed-source/continue policy.
 
 ### OTA
 

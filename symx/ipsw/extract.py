@@ -1,6 +1,6 @@
 import json
 import logging
-import plistlib
+import os
 import re
 import shutil
 import signal
@@ -9,16 +9,16 @@ import subprocess
 import tempfile
 import time
 import zipfile
+from collections import deque
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, TypeGuard
+from typing import IO, TypeGuard
 from urllib.parse import urlparse
 
 import sentry_sdk
-from pydantic import BaseModel, ConfigDict, Field
 
 from symx.diagnostics import (
     decode_subprocess_output,
@@ -32,7 +32,16 @@ from symx.directory_archive import (
     compress_directory,
     decompress_archive,
 )
-from symx.model import MACOS_DSC_ARCHITECTURES, Arch
+from symx.model import Arch
+from symx.ipsw.errors import IpswExtractError, IpswExtractTimeoutError, IpswMountCleanupError
+from symx.ipsw.image_plan import (
+    IpswDscAttemptRequest,
+    IpswImageTarget,
+    build_extraction_plan,
+    macos_dsc_architectures,
+    read_build_manifest,
+)
+from symx.ipsw.mounts import image_workspace
 from symx.tools import dyld_split, symsort
 from symx.ipsw.materialization import (
     IpswDscMaterializationAttempt,
@@ -46,14 +55,12 @@ from symx.ipsw.model import IpswPlatform
 logger = logging.getLogger(__name__)
 
 _MOUNT_POINT_RE = re.compile(r".*Press Ctrl\+C to unmount '(.*)'")
-_EXTRACTED_MOUNT_ARTIFACT_RE = re.compile(r"^Extracted (.+?)(?: from .*)?$")
 _SYMSORTER_SORTED_DEBUG_FILES_RE = re.compile(r"^Sorted (\d+) debug files$")
 _SYMSORTER_CREATED_SOURCE_BUNDLES_RE = re.compile(r"^Created (\d+) source bundles$")
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 _LEADING_IPSW_GLYPH_RE = re.compile(r"^\s*[•⨯]\s*")
 
 _SYS_MOUNT_CLEANUP_TIMEOUT_SECONDS = 60
-_RESERVED_PROCESSING_DIR_NAMES = frozenset({"split_out", "symbols", "sys_mount"})
 _ERROR_SUMMARY_MARKERS = (
     "error",
     "failed",
@@ -79,8 +86,6 @@ _TRANSIENT_FCS_KEY_ERROR_MARKERS = (
     "temporary failure",
     "tls handshake timeout",
 )
-_VERSION_MAJOR_RE = re.compile(r"^(\d+)")
-_MACOS_ROSETTA_DSC_MIN_MAJOR_VERSION = 27
 _ROSETTA_DSC_SOURCES = (
     ("x86_64", Path("System/Library/dyld/dyld_shared_cache_x86_64")),
     ("x86_64_x86Support", Path("System/x86Support/System/Library/dyld/dyld_shared_cache_x86_64")),
@@ -141,15 +146,6 @@ class DirectoryTreeStatsDelta:
 
 
 @dataclass(frozen=True)
-class SysImageMount:
-    process: subprocess.Popen[str]
-    requested_mount_point: Path
-    active_mount_point: Path | None
-    extracted_artifact_paths: list[Path]
-    error: str | None = None
-
-
-@dataclass(frozen=True)
 class IpswProductMetadata:
     version: str | None = None
     build: str | None = None
@@ -157,59 +153,9 @@ class IpswProductMetadata:
 
 
 @dataclass(frozen=True)
-class IpswDmgPaths:
-    system: str | None
-    filesystem: str | None
-    rosetta: str | None
-    selected: str | None
-
-    def to_span_data(self) -> dict[str, str | None]:
-        return {
-            "system": self.system,
-            "filesystem": self.filesystem,
-            "rosetta": self.rosetta,
-            "selected": self.selected,
-        }
-
-
-@dataclass(frozen=True)
 class DscSplitSource:
     label: str
     artifact: Path
-
-
-class _IpswBuildManifestModel(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-
-class IpswManifestComponentInfo(_IpswBuildManifestModel):
-    path: str | None = Field(None, alias="Path")
-
-
-class IpswManifestComponent(_IpswBuildManifestModel):
-    info: IpswManifestComponentInfo | None = Field(None, alias="Info")
-
-
-class IpswBuildIdentityManifest(_IpswBuildManifestModel):
-    cryptex_system_os: IpswManifestComponent | None = Field(None, alias="Cryptex1,SystemOS")
-    cryptex_rosetta_os: IpswManifestComponent | None = Field(None, alias="Cryptex1,RosettaOS")
-    os: IpswManifestComponent | None = Field(None, alias="OS")
-
-
-class IpswBuildIdentityInfo(_IpswBuildManifestModel):
-    variant: str | None = Field(None, alias="Variant")
-
-
-class IpswBuildIdentity(_IpswBuildManifestModel):
-    manifest: IpswBuildIdentityManifest | None = Field(None, alias="Manifest")
-    info: IpswBuildIdentityInfo | None = Field(None, alias="Info")
-
-
-class IpswBuildManifest(_IpswBuildManifestModel):
-    product_version: str | None = Field(None, alias="ProductVersion")
-    product_build_version: str | None = Field(None, alias="ProductBuildVersion")
-    supported_product_types: tuple[str, ...] = Field(default_factory=tuple, alias="SupportedProductTypes")
-    build_identities: tuple[IpswBuildIdentity, ...] | None = Field(None, alias="BuildIdentities")
 
 
 @dataclass(frozen=True)
@@ -264,13 +210,6 @@ def _ipsw_command_data(
         "stderr_summary": _summarize_ipsw_stderr(stderr),
         "directories": [directory_data(directory) for directory in directories],
     }
-
-
-def _output_line_count(output: str | bytes | None) -> int:
-    text = decode_subprocess_output(output)
-    if not text:
-        return 0
-    return len(text.splitlines())
 
 
 def _directory_tree_stats(directory: Path) -> DirectoryTreeStats:
@@ -358,158 +297,93 @@ def _parse_symsorter_summary(stdout: str | bytes | None, stderr: str | bytes | N
     return summary
 
 
-def _record_mount_process_output(
-    span: Any,
-    stdout_key: str,
-    stderr_key: str,
-    stdout: str | bytes | None,
-    stderr: str | bytes | None,
-) -> None:
-    span.set_data(stdout_key, truncate_text(stdout))
-    span.set_data(stderr_key, truncate_text(stderr))
-    span.set_data(f"{stdout_key}_line_count", _output_line_count(stdout))
-    span.set_data(f"{stderr_key}_line_count", _output_line_count(stderr))
-
-
-def _terminate_sys_mount_process(mount_proc: subprocess.Popen[str], span: Any) -> None:
-    returncode_before_cleanup = mount_proc.poll()
-    span.set_data("returncode_before_cleanup", returncode_before_cleanup)
-
-    if returncode_before_cleanup is not None:
-        span.set_data("already_exited", True)
-        return
-
-    span.set_data("sent_signal", "SIGINT")
-    mount_proc.send_signal(signal.SIGINT)
+def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
+    # All callers start a private session. Reap children too, including an
+    # hdiutil process interrupted before ipsw installed its SIGINT handler.
     try:
-        # Drain remaining output while waiting, so a full stdout pipe cannot block unmount teardown.
-        remaining_stdout, remaining_stderr = mount_proc.communicate(timeout=_SYS_MOUNT_CLEANUP_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired as error:
-        span.set_status("internal_error")
-        span.set_data("sigint_timeout_seconds", _SYS_MOUNT_CLEANUP_TIMEOUT_SECONDS)
-        span.set_data("timed_out_after_sigint", True)
-        _record_mount_process_output(
-            span,
-            "partial_stdout_after_sigint",
-            "partial_stderr_after_sigint",
-            error.output,
-            error.stderr,
-        )
-        logger.warning("Mount process did not terminate after SIGINT, killing it")
-        mount_proc.kill()
-        span.set_data("killed", True)
-        remaining_stdout, remaining_stderr = mount_proc.communicate()
-        span.set_data("returncode_after_kill", mount_proc.returncode)
-        _record_mount_process_output(
-            span,
-            "remaining_stdout_after_kill",
-            "remaining_stderr_after_kill",
-            remaining_stdout,
-            remaining_stderr,
-        )
-        return
-
-    span.set_data("timed_out_after_sigint", False)
-    span.set_data("returncode_after_sigint", mount_proc.returncode)
-    _record_mount_process_output(
-        span,
-        "remaining_stdout_after_sigint",
-        "remaining_stderr_after_sigint",
-        remaining_stdout,
-        remaining_stderr,
-    )
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 
 
-def _cleanup_sys_mount_directory(mount_point: Path, span: Any) -> None:
-    span.set_data("mount_point_exists_before_directory_cleanup", mount_point.exists())
-    if mount_point.exists():
-        logger.warning("Mount point still exists after unmount, attempting cleanup", extra={"mount_point": mount_point})
+@contextmanager
+def _owned_process(
+    command: list[str], *, stdout: int | IO[str], stderr: int, cwd: Path, env: dict[str, str]
+) -> Generator[subprocess.Popen[bytes], None, None]:
+    process = subprocess.Popen(command, start_new_session=True, stdout=stdout, stderr=stderr, cwd=cwd, env=env)
+    primary: BaseException | None = None
+
+    try:
+        yield process
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
         try:
-            shutil.rmtree(mount_point)
-        except Exception as e:
-            span.set_status("internal_error")
-            logger.error("Failed to clean up mount point", extra={"mount_point": mount_point, "exception": e})
-    span.set_data("mount_point_exists_after_directory_cleanup", mount_point.exists())
+            if process.poll() is None:
+                process.send_signal(signal.SIGINT)
+
+                try:
+                    process.communicate(timeout=_SYS_MOUNT_CLEANUP_TIMEOUT_SECONDS)
+                except subprocess.TimeoutExpired:
+                    logger.warning("IPSW process did not stop after SIGINT; killing its process group")
+
+            _kill_process_group(process)
+            process.communicate(timeout=_SYS_MOUNT_CLEANUP_TIMEOUT_SECONDS)
+        except BaseException as cleanup_error:
+            error = IpswMountCleanupError(f"Cannot stop IPSW process; retaining its workspace: {cleanup_error}")
+
+            if primary is not None:
+                error.add_note(f"Process cleanup error: {cleanup_error}")
+                raise error from primary
+            raise error from cleanup_error
 
 
-def _cleanup_sys_image_mount(mount: SysImageMount) -> None:
-    with sentry_sdk.start_span(op="subprocess.ipsw_mount_cleanup", name="Unmount sys image") as span:
-        span.set_data("requested_mount_point", str(mount.requested_mount_point))
-        if mount.active_mount_point is not None:
-            span.set_data("active_mount_point", str(mount.active_mount_point))
+def _wait_for_sys_mount(
+    process: subprocess.Popen[bytes], log_path: Path, mount_point: Path, image: IpswImageTarget
+) -> list[str]:
+    """Wait for the expected mount point and return a bounded output preview.
 
-        _terminate_sys_mount_process(mount.process, span)
-        _cleanup_sys_mount_directory(mount.requested_mount_point, span)
+    The caller owns the process and workspace, including cleanup on failure.
+    Reading a regular file does not wait for ipsw to emit more output.
+    """
+    deadline = time.monotonic() + 20 * 60
+    recent: deque[str] = deque(maxlen=20)
+    with log_path.open() as log_input:
+        while True:
+            if time.monotonic() >= deadline:
+                raise IpswExtractTimeoutError(f"ipsw mount sys timed out for {image.member}")
 
-    for extracted_mount_artifact_path in mount.extracted_artifact_paths:
-        _cleanup_mount_artifact(extracted_mount_artifact_path)
-        if extracted_mount_artifact_path.suffix == ".aea":
-            _cleanup_mount_artifact(
-                extracted_mount_artifact_path.with_suffix(""),
-                description="decrypted DMG artifact left by ipsw mount",
-            )
+            line = log_input.readline()
+            if not line:
+                if process.poll() is not None:
+                    detail = _summarize_ipsw_stderr("\n".join(recent)) or "no mount readiness reported"
+                    raise IpswExtractError(f"ipsw mount sys failed for {image.member}: {detail}")
+                time.sleep(0.05)
+                continue
+
+            recent.append(line.rstrip())
+            match = _MOUNT_POINT_RE.match(_strip_ansi(line))
+            if not match:
+                continue
+
+            active = Path(match[1])
+            if active.resolve() != mount_point.resolve():
+                raise IpswExtractError(f"ipsw reported an unowned mount point: {active}")
+            return list(recent)
 
 
 def _is_object_mapping(value: object) -> TypeGuard[Mapping[object, object]]:
     return isinstance(value, dict)
 
 
-def _manifest_component_path(component: IpswManifestComponent | None) -> str | None:
-    if component is None or component.info is None:
-        return None
-    return component.info.path or None
-
-
-def _read_ipsw_build_manifest(ipsw_path: Path) -> IpswBuildManifest:
-    with zipfile.ZipFile(ipsw_path) as archive:
-        build_manifest_obj: object = plistlib.loads(archive.read("BuildManifest.plist"))
-
-    return IpswBuildManifest.model_validate(build_manifest_obj)
-
-
 def inspect_ipsw_product_metadata(ipsw_path: Path) -> IpswProductMetadata:
-    build_manifest = _read_ipsw_build_manifest(ipsw_path)
+    build_manifest = read_build_manifest(ipsw_path)
     return IpswProductMetadata(
         version=build_manifest.product_version,
         build=build_manifest.product_build_version,
         devices=build_manifest.supported_product_types,
     )
-
-
-def inspect_ipsw_dmg_paths(ipsw_path: Path) -> IpswDmgPaths:
-    build_manifest = _read_ipsw_build_manifest(ipsw_path)
-    if build_manifest.build_identities is None:
-        raise ValueError(f"BuildManifest.plist has no BuildIdentities list in {ipsw_path}")
-
-    system_dmg: str | None = None
-    rosetta_dmg: str | None = None
-    filesystem_dmgs: list[str] = []
-
-    for build_identity in build_manifest.build_identities:
-        manifest = build_identity.manifest
-        if manifest is None:
-            continue
-
-        if system_dmg is None:
-            system_dmg = _manifest_component_path(manifest.cryptex_system_os)
-        if rosetta_dmg is None:
-            rosetta_dmg = _manifest_component_path(manifest.cryptex_rosetta_os)
-
-        filesystem_dmg = _manifest_component_path(manifest.os)
-        if filesystem_dmg is None:
-            continue
-
-        variant = build_identity.info.variant if build_identity.info is not None else None
-        if variant is not None and "Recovery" in variant:
-            continue
-
-        if filesystem_dmg not in filesystem_dmgs:
-            filesystem_dmgs.append(filesystem_dmg)
-
-    filesystem_dmg = filesystem_dmgs[0] if len(filesystem_dmgs) == 1 else None
-    selected_dmg = system_dmg if system_dmg is not None else filesystem_dmg
-
-    return IpswDmgPaths(system=system_dmg, filesystem=filesystem_dmg, rosetta=rosetta_dmg, selected=selected_dmg)
 
 
 def _extract_ipsw_member(ipsw_path: Path, member_name: str, output_path: Path) -> Path:
@@ -569,15 +443,23 @@ def extract_ipsw(request: IpswExtractionRequest) -> Path:
 
 class _IpswExtractionRun:
     def __init__(self, request: IpswExtractionRequest):
+        # Subprocesses run in private working directories, never the caller's
+        # cwd. Make paths absolute without dereferencing the input's final
+        # symlink: consuming that path must never unlink a different target.
+        request = replace(
+            request, ipsw_path=request.ipsw_path.absolute(), processing_dir=request.processing_dir.resolve()
+        )
         self.request = request
         self.bundle_id = generate_bundle_id(request.ipsw_path.name)
         self.prefix = map_platform_to_prefix(request.platform)
         self.platform = request.platform
-        self.macos_dsc_architectures = (
-            _macos_dsc_architectures(request.version) if request.platform == IpswPlatform.MACOS else ()
-        )
+
+        if request.platform == IpswPlatform.MACOS:
+            macos_dsc_architectures(request.version)
+
         if not request.processing_dir.is_dir():
             raise ValueError(f"IPSW processing path is expected to be a directory: {request.processing_dir}")
+
         self.processing_dir = request.processing_dir
         _log_directory_contents(self.processing_dir)
 
@@ -585,34 +467,16 @@ class _IpswExtractionRun:
             raise ValueError(f"IPSW path is expected to be a file: {request.ipsw_path}")
 
         self.ipsw_path = request.ipsw_path
-        self._aea_preflight_complete = False
+        self._aea_preflight_complete: set[str] = set()
 
-    def _ipsw_aea_preflight(self) -> None:
-        if self._aea_preflight_complete:
+    def _ipsw_aea_preflight(self, image: IpswImageTarget) -> None:
+        selected_dmg = image.member
+        if selected_dmg in self._aea_preflight_complete or not selected_dmg.endswith(".aea"):
             return
 
         with sentry_sdk.start_span(op="ipsw.preflight.aea", name="IPSW AEA preflight") as span:
             span.set_data("ipsw_path", str(self.ipsw_path))
-
-            try:
-                dmg_paths = inspect_ipsw_dmg_paths(self.ipsw_path)
-            except Exception as error:
-                span.set_data("preflight_error", f"failed to inspect IPSW DMG metadata: {error}")
-                logger.warning("Failed to inspect IPSW AEA metadata for %s: %s", self.ipsw_path.name, error)
-                self._aea_preflight_complete = True
-                return
-
-            span.set_data("ipsw_dmg_paths", dmg_paths.to_span_data())
-            selected_dmg = dmg_paths.selected
-            if selected_dmg is None or not selected_dmg.endswith(".aea"):
-                self._aea_preflight_complete = True
-                return
-
-            probe_data: dict[str, object] = {
-                "selected_dmg": selected_dmg,
-                "system_dmg": dmg_paths.system,
-                "filesystem_dmg": dmg_paths.filesystem,
-            }
+            probe_data: dict[str, object] = {"selected_dmg": selected_dmg, "image_kind": str(image.kind)}
             pem_db_path = vendored_ipsw_pem_db_path()
             if pem_db_path is not None:
                 probe_data["pem_db_path"] = str(pem_db_path)
@@ -621,24 +485,14 @@ class _IpswExtractionRun:
                 temp_dir = Path(tmpdir)
                 extracted_aea = temp_dir / Path(selected_dmg).name
 
-                try:
-                    _extract_ipsw_member(self.ipsw_path, selected_dmg, extracted_aea)
-                except Exception as error:
-                    span.set_data("preflight_error", f"failed to extract AEA member {selected_dmg}: {error}")
-                    logger.warning(
-                        "Failed to extract IPSW AEA preflight member %s from %s: %s",
-                        selected_dmg,
-                        self.ipsw_path.name,
-                        error,
-                    )
-                    self._aea_preflight_complete = True
-                    return
+                _extract_ipsw_member(self.ipsw_path, selected_dmg, extracted_aea)
 
                 info_command = ["ipsw", "--no-color", "fw", "aea", "--info", str(extracted_aea)]
                 info_result = subprocess.run(info_command, capture_output=True)
                 info_command_data = _ipsw_command_data(info_command, info_result.stdout, info_result.stderr, [temp_dir])
                 info_command_data.update(probe_data)
                 span.set_data("aea_info", info_command_data)
+
                 if info_result.returncode != 0:
                     span.set_status("internal_error")
                     summary = _summarize_ipsw_stderr(info_result.stderr) or "ipsw fw aea --info failed"
@@ -690,18 +544,23 @@ class _IpswExtractionRun:
                     ) or "ipsw fw aea --key failed"
                     raise IpswExtractError(
                         f"IPSW AEA preflight failed for {self.ipsw_path}: "
-                        f"selected_dmg={selected_dmg}; system_dmg={dmg_paths.system}; "
-                        f"filesystem_dmg={dmg_paths.filesystem}; fcs_key={fcs_key_id or '<unknown>'}; "
+                        f"selected_dmg={selected_dmg}; fcs_key={fcs_key_id or '<unknown>'}; "
                         f"vendored_db_hit={vendored_db_hit}; {summary}"
                     )
 
-        self._aea_preflight_complete = True
+        self._aea_preflight_complete.add(selected_dmg)
 
     def symbols_dir(self) -> Path:
         return self.processing_dir / "symbols"
 
-    def _ipsw_extract_dsc(self, arch: Arch | None = None) -> IpswDscMaterializationAttempt:
+    def _ipsw_extract_dsc(self, attempt: IpswDscAttemptRequest) -> IpswDscMaterializationAttempt:
+        arch = attempt.arch
         arch_label = str(arch) if arch else "default"
+        output_dir = attempt.output_dir
+        output_dir.mkdir()
+        temp_dir = attempt.work_dir / "tmp"
+        temp_dir.mkdir()
+
         with sentry_sdk.start_span(
             op="subprocess.ipsw_extract",
             name=f"ipsw extract DSC ({arch_label})",
@@ -715,8 +574,9 @@ class _IpswExtractionRun:
                 str(self.ipsw_path),
                 "-d",
                 "-o",
-                str(self.processing_dir),
+                str(output_dir),
                 "-V",
+                *attempt.image.selector_args,
             ]
 
             pem_db_path = vendored_ipsw_pem_db_path()
@@ -729,19 +589,25 @@ class _IpswExtractionRun:
 
             stdout: bytes | None = None
             stderr: bytes | None = None
-            with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+            with _owned_process(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=attempt.work_dir,
+                env={**os.environ, "TMPDIR": str(temp_dir)},
+            ) as process:
                 try:
                     # IPSW extraction is typically finished in a couple of minutes. Everything beyond 20 minutes is probably
                     # stuck because the dmg mounter asks for a password or something similar.
                     stdout, stderr = process.communicate(timeout=(60 * 20))
                 except subprocess.TimeoutExpired:
-                    process.kill()
-                    stdout, stderr = process.communicate()
-                    span.set_data("ipsw_extract", _ipsw_command_data(command, stdout, stderr, [self.processing_dir]))
+                    _kill_process_group(process)
+                    stdout, stderr = process.communicate(timeout=_SYS_MOUNT_CLEANUP_TIMEOUT_SECONDS)
+                    span.set_data("ipsw_extract", _ipsw_command_data(command, stdout, stderr, [output_dir]))
                     span.set_status("deadline_exceeded")
                     raise IpswExtractTimeoutError(f"ipsw extract timed out for {self.ipsw_path} ({arch_label})")
 
-                span.set_data("ipsw_extract", _ipsw_command_data(command, stdout, stderr, [self.processing_dir]))
+                span.set_data("ipsw_extract", _ipsw_command_data(command, stdout, stderr, [output_dir]))
                 if process.returncode != 0:
                     stderr_text = decode_subprocess_output(stderr).strip()
                     if (
@@ -763,10 +629,9 @@ class _IpswExtractionRun:
                         ),
                     )
 
-            _log_directory_contents(self.processing_dir)
-            extract_dir = find_extraction_dir(self.processing_dir)
-            if extract_dir is None:
-                span.set_data("processing_dir", directory_data(self.processing_dir))
+            extract_dir = output_dir
+            if not any(extract_dir.iterdir()):
+                span.set_data("processing_dir", directory_data(output_dir))
                 span.set_status("internal_error")
                 return IpswDscUnavailable(
                     arch=arch,
@@ -782,128 +647,119 @@ class _IpswExtractionRun:
             return IpswDscMaterialized(arch=arch, extract_dir=extract_dir)
 
     def run(self) -> Path:
-        self._ipsw_aea_preflight()
-        with sentry_sdk.start_span(op="ipsw.extract.sys_image", name="Symsort sys image"):
-            self._symsort_sys_image()
-        with sentry_sdk.start_span(op="ipsw.extract.dsc", name=f"Extract+split+symsort DSC ({self.platform})"):
-            self._symsort_dsc()
-        _log_directory_contents(self.symbols_dir())
+        plan = build_extraction_plan(self.request)
+        for image in (*plan.system_images, *plan.rosetta_images):
+            logger.info(
+                "IPSW image planned kind=%s member=%s selector=%s products=%d %s boards=%d %s",
+                image.kind,
+                image.member,
+                image.selector,
+                len(image.products),
+                image.products[:8],
+                len(image.boards),
+                image.boards[:8],
+            )
+
+        if plan.unmatched_devices:
+            logger.info(
+                "IPSW unmatched source devices: count=%d examples=%s",
+                len(plan.unmatched_devices),
+                plan.unmatched_devices[:8],
+            )
+
+        archives: list[tuple[Path, Path]] = []
+        for image in plan.system_images:
+            self._ipsw_aea_preflight(image)
+            self._symsort_sys_image(image)
+            image_archives: list[tuple[Path, Path]] = []
+
+            for attempt in plan.attempts_for(image):
+                image_archives.extend(self._materialize_and_archive(attempt))
+
+            if not image_archives:
+                raise IpswExtractError(
+                    f"IPSW image {image.member}: none of the requested architectures has a usable DSC"
+                )
+
+            archives.extend(image_archives)
+        for image in plan.rosetta_images:
+            for attempt in plan.attempts_for(image):
+                if attempt.arch == Arch.X86_64:
+                    archives.extend(self._split_rosetta_dscs(attempt))
+                else:
+                    archives.extend(self._materialize_and_archive(attempt))
+
+        # Source ownership, not image/architecture ownership. No IPSW consumer
+        # remains; release the input before restoring one split batch at a time.
+        logger.info("Deleting consumed IPSW file to save space: %s", self.ipsw_path)
+        self.ipsw_path.unlink()
+        for archive, output in archives:
+            _decompress_archive(archive, output)
+            archive.unlink()
+            self._symsort(output)
+            shutil.rmtree(output)
+
+        for name in ("split_out", "dsc", "mounts"):
+            directory = self.processing_dir / name
+            if directory.exists():
+                shutil.rmtree(directory)
 
         return self.symbols_dir()
 
-    def _symsort_dsc(self) -> None:
-        split_dir = self.processing_dir / "split_out"
-        if self.platform == IpswPlatform.MACOS:
-            compressed_archives: list[tuple[Path, str]] = []
+    def _materialize_and_archive(self, attempt: IpswDscAttemptRequest) -> list[tuple[Path, Path]]:
+        with sentry_sdk.start_span(op="ipsw.extract.dsc_arch", name=f"{attempt.image.member} / {attempt.arch}") as span:
+            span.set_data("image", attempt.image.member)
+            span.set_data("selector", attempt.image.selector)
+            span.set_data("architecture", str(attempt.arch))
+            with image_workspace(attempt.work_dir):
+                match self._ipsw_extract_dsc(attempt):
+                    case IpswDscNotPresent(message=message):
+                        if attempt.arch is None:
+                            raise IpswExtractError(
+                                "unfiltered IPSW DSC materialization returned an architecture absence"
+                            )
 
-            for arch in self.macos_dsc_architectures:
-                logger.info("Extracting and processing DSC for %s", arch)
-                with sentry_sdk.start_span(op="ipsw.extract.dsc_arch", name=f"Extract+split DSC {arch}") as arch_span:
-                    arch_span.set_data("arch", str(arch))
-                    arch_span.set_data("version", self.request.version)
-                    arch_span.set_data("build", self.request.build)
+                        span.set_data("outcome", "not_present")
+                        logger.info(
+                            "IPSW DSC absent image=%s arch=%s: %s",
+                            attempt.image.member,
+                            attempt.arch,
+                            _summarize_ipsw_stderr(message) or truncate_text(message),
+                        )
+                        return []
+                    case IpswDscUnavailable(message=message):
+                        raise IpswExtractError(message)
+                    case IpswDscMaterialized(extract_dir=extract_dir):
+                        span.set_data("outcome", "materialized")
+                        return self._ipsw_split(extract_dir, attempt)
 
-                    rosetta_dmg_path = self._rosetta_dmg_path_for_x86_64_dsc() if arch == Arch.X86_64 else None
-                    if rosetta_dmg_path is not None:
-                        split_labels = self._split_rosetta_dscs()
-                        split_dir = self.processing_dir / "split_out"
-                    else:
-                        match self._ipsw_extract_dsc(arch):
-                            case IpswDscNotPresent(message=message):
-                                arch_span.set_data("materialization_outcome", "not_present")
-                                logger.info("IPSW %s does not contain a %s DSC: %s", self.ipsw_path.name, arch, message)
-                                continue
-                            case IpswDscUnavailable(message=message):
-                                raise IpswExtractError(message)
-                            case IpswDscMaterialized(extract_dir=extract_dir):
-                                _log_directory_contents(extract_dir)
-                                split_dir = self._ipsw_split(extract_dir, arch)
-                                _log_directory_contents(split_dir)
-                                split_labels = [str(arch)]
+    def _archive_split(self, cache: Path, relative: Path, attempt: IpswDscAttemptRequest) -> tuple[Path, Path]:
+        # Include the exact image, architecture AND cache location. Two images
+        # can contain different UUIDs at the same /usr/lib/... path.
+        output = self.processing_dir / "split_out" / attempt.image.key / str(attempt.arch or "default") / relative
+        self._ipsw_split_dsc_file(cache, output)
+        archive = _compress_directory(output)
+        logger.info(
+            "IPSW split archived image=%s arch=%s cache=%s archive=%s",
+            attempt.image.member,
+            attempt.arch,
+            relative,
+            archive,
+        )
+        return archive, output
 
-                    for split_label in split_labels:
-                        arch_split_dir = split_dir / split_label
-                        if arch_split_dir.exists():
-                            with sentry_sdk.start_span(op="ipsw.compress", name=f"Compress {split_label} split"):
-                                archive_path = _compress_directory(arch_split_dir)
-                            compressed_archives.append((archive_path, split_label))
-                            logger.info("Finished compressing %s split to %s", split_label, archive_path)
-
-            if not compressed_archives:
-                raise IpswExtractError(
-                    "IPSW DSC materialization found none of the requested macOS architectures: "
-                    f"{', '.join(str(arch) for arch in self.macos_dsc_architectures)}"
-                )
-
-            # Delete IPSW file now that all present DSC architectures are extracted and compressed
-            if self.ipsw_path.exists():
-                logger.info("Deleting IPSW file to save space: %s", self.ipsw_path)
-                self.ipsw_path.unlink()
-
-            # Decompress all archives before final symsort processing
-            for archive_path, split_label in compressed_archives:
-                with sentry_sdk.start_span(op="ipsw.decompress", name=f"Decompress {split_label} split"):
-                    _decompress_archive(archive_path, split_dir / split_label)
-                archive_path.unlink()  # Remove the compressed archive after extraction
-
-            # We accumulate each architecture as a sub-dir in split_dir and let symsorter process them together
-        else:
-            match self._ipsw_extract_dsc():
-                case IpswDscNotPresent():
-                    raise IpswExtractError("unfiltered IPSW DSC materialization returned an architecture absence")
-                case IpswDscUnavailable(message=message):
-                    raise IpswExtractError(message)
-                case IpswDscMaterialized(extract_dir=extract_dir):
-                    _log_directory_contents(extract_dir)
-
-            # Delete IPSW also in the non-macOS path since this is our contract to the caller
-            if self.ipsw_path.exists():
-                logger.info("Deleting IPSW file to save space: %s", self.ipsw_path)
-                self.ipsw_path.unlink()
-
-            split_dir = self._ipsw_split(extract_dir)
-            _log_directory_contents(split_dir)
-        self._symsort(split_dir)
-        # we have very limited space on the GHA runners, so get rid of processed input data
-        shutil.rmtree(split_dir)
-
-    def _sys_mount_point(self) -> Path:
-        return self.processing_dir / "sys_mount"
-
-    def _symsort_sys_image(self) -> None:
-        with self._mounted_sys_image() as active_mount_point:
+    def _symsort_sys_image(self, image: IpswImageTarget) -> None:
+        with self._mounted_sys_image(image) as active_mount_point:
             self._symsort(active_mount_point, ignore_errors=True, record_input_tree=False)
 
     @contextmanager
-    def _mounted_sys_image(self) -> Generator[Path, None, None]:
-        mount = self._prepare_sys_image_mount()
-        try:
-            if mount.error is not None:
-                raise IpswExtractError(mount.error)
-            if mount.active_mount_point is None:
-                raise IpswExtractError(f"Could not determine sys image mount point for {self.ipsw_path}")
-
-            yield mount.active_mount_point
-        finally:
-            _cleanup_sys_image_mount(mount)
-
-    def _prepare_sys_image_mount(self) -> SysImageMount:
-        mount_point = self._sys_mount_point()
-        if mount_point.exists():
-            logger.warning("Removing stale sys image mount point before mount", extra={"mount_point": mount_point})
-            if mount_point.is_dir():
-                shutil.rmtree(mount_point)
-            else:
-                mount_point.unlink()
-
-        mount_output_lines: list[str] = []
-        extracted_mount_artifact_paths: list[Path] = []
-        active_mount_point: Path | None = None
-        mount_error: str | None = None
-
-        with sentry_sdk.start_span(op="subprocess.ipsw_mount", name="Mount sys image") as mount_span:
-            mount_span.set_data("requested_mount_point", str(mount_point))
-            mount_command = [
+    def _mounted_sys_image(self, image: IpswImageTarget) -> Generator[Path, None, None]:
+        root = self.processing_dir / "mounts" / image.key
+        with image_workspace(root):
+            mount_point = root / "mount"
+            temp_dir = root / "tmp"
+            temp_dir.mkdir()
+            command = [
                 "ipsw",
                 "mount",
                 "sys",
@@ -911,201 +767,79 @@ class _IpswExtractionRun:
                 "-V",
                 "--mount-point",
                 str(mount_point),
+                *image.selector_args,
             ]
-            pem_db_path = vendored_ipsw_pem_db_path()
-            if pem_db_path is not None:
-                mount_command.extend(["--pem-db", str(pem_db_path)])
 
-            mount_proc = subprocess.Popen(
-                mount_command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                bufsize=1,
-                text=True,
-            )
+            if pem_db := vendored_ipsw_pem_db_path():
+                command.extend(["--pem-db", str(pem_db)])
 
-            # Read only until ipsw reports the mount point. Cleanup drains the remaining output later.
-            while mount_proc.stdout:
-                line = mount_proc.stdout.readline()
-                if not line:
-                    break
-                mount_output_lines.append(line.rstrip())
-
-                extracted_mount_artifact_path = _parse_extracted_mount_artifact_path(line)
-                if (
-                    extracted_mount_artifact_path is not None
-                    and extracted_mount_artifact_path not in extracted_mount_artifact_paths
+            with sentry_sdk.start_span(op="subprocess.ipsw_mount", name=f"Mount {image.member}") as span:
+                span.set_data("image", image.member)
+                span.set_data("selector", image.selector)
+                # A regular file avoids both pipe backpressure and unbounded
+                # readline during acquisition. Polling has a readiness deadline.
+                log_path = root / "mount.log"
+                with (
+                    log_path.open("w") as log_output,
+                    _owned_process(
+                        command,
+                        stdout=log_output,
+                        stderr=subprocess.STDOUT,
+                        cwd=root,
+                        env={**os.environ, "TMPDIR": str(temp_dir)},
+                    ) as process,
                 ):
-                    extracted_mount_artifact_paths.append(extracted_mount_artifact_path)
+                    preview = _wait_for_sys_mount(process, log_path, mount_point, image)
+                    span.set_data("mount_output_preview", preview)
+                    logger.info("IPSW mounted image=%s selector=%s mount=%s", image.member, image.selector, mount_point)
+                    yield mount_point
 
-                mount_point_match = _MOUNT_POINT_RE.match(line)
-                if not mount_point_match:
-                    continue
+    def _split_rosetta_dscs(self, attempt: IpswDscAttemptRequest) -> list[tuple[Path, Path]]:
+        image = attempt.image
+        with image_workspace(attempt.work_dir) as root:
+            dmg = root / Path(image.member).name
+            _extract_ipsw_member(self.ipsw_path, image.member, dmg)
+            mount_point = root / "mount"
+            mount_point.mkdir()
 
-                active_mount_point = Path(mount_point_match.group(1))
-                break
-
-            mount_span.set_data("mount_output_line_count", len(mount_output_lines))
-            if mount_output_lines:
-                mount_span.set_data("mount_output_preview", mount_output_lines[:20])
-
-            if active_mount_point:
-                mount_span.set_data("mount_point", str(active_mount_point))
-            else:
-                mount_output = "\n".join(mount_output_lines)
-                mount_summary = _summarize_ipsw_stderr(mount_output)
-                mount_span.set_data("mount_output_summary", mount_summary)
-                mount_span.set_status("internal_error")
-                if mount_summary:
-                    mount_error = f"ipsw mount sys failed for {self.ipsw_path}: {mount_summary}"
-                else:
-                    mount_error = f"Could not determine sys image mount point for {self.ipsw_path}"
-
-        return SysImageMount(
-            process=mount_proc,
-            requested_mount_point=mount_point,
-            active_mount_point=active_mount_point,
-            extracted_artifact_paths=extracted_mount_artifact_paths,
-            error=mount_error,
-        )
-
-    def _rosetta_dmg_path(self) -> str | None:
-        return inspect_ipsw_dmg_paths(self.ipsw_path).rosetta
-
-    def _rosetta_dmg_path_for_x86_64_dsc(self) -> str | None:
-        if not _macos_x86_64_dsc_requires_rosetta(self.request.version):
-            return None
-
-        try:
-            rosetta_dmg_path = self._rosetta_dmg_path()
-        except Exception as error:
-            raise IpswExtractError(
-                f"Cannot determine RosettaOS DMG path required for macOS {self.request.version} x86_64 DSC: {error}"
-            ) from error
-
-        if rosetta_dmg_path is None:
-            raise IpswExtractError(
-                f"macOS {self.request.version} x86_64 DSC requires Cryptex1,RosettaOS in BuildManifest"
-            )
-
-        if rosetta_dmg_path.endswith(".aea"):
-            raise IpswExtractError(
-                f"macOS {self.request.version} x86_64 DSC requires RosettaOS DMG, "
-                f"but it is AEA encrypted and cannot be mounted directly: {rosetta_dmg_path}"
-            )
-
-        return rosetta_dmg_path
-
-    def _split_rosetta_dscs(self) -> list[str]:
-        rosetta_dmg_member = self._rosetta_dmg_path()
-        if rosetta_dmg_member is None:
-            raise IpswExtractError(f"IPSW BuildManifest has no RosettaOS DMG for {self.ipsw_path}")
-        if rosetta_dmg_member.endswith(".aea"):
-            raise IpswExtractError(
-                f"RosettaOS DMG is AEA encrypted and cannot be mounted directly: {rosetta_dmg_member}"
-            )
-
-        with sentry_sdk.start_span(op="ipsw.extract.rosetta_dsc", name="Extract+split RosettaOS DSC") as span:
-            span.set_data("rosetta_dmg_member", rosetta_dmg_member)
-            with tempfile.TemporaryDirectory(suffix="_ipsw_rosetta_dmg") as tmpdir:
-                temp_dir = Path(tmpdir)
-                rosetta_dmg = temp_dir / Path(rosetta_dmg_member).name
-                _extract_ipsw_member(self.ipsw_path, rosetta_dmg_member, rosetta_dmg)
-                span.set_data("rosetta_dmg", directory_data(rosetta_dmg))
-
-                with self._mounted_readonly_dmg(rosetta_dmg) as mount_point:
-                    sources = _find_rosetta_dsc_sources(mount_point)
-                    span.set_data("rosetta_dsc_sources", {source.label: str(source.artifact) for source in sources})
-                    if not sources:
-                        span.set_status("internal_error")
-                        raise IpswExtractError(
-                            f"RosettaOS DMG contains no supported dyld_shared_cache files: {rosetta_dmg}"
-                        )
-
-                    split_labels: list[str] = []
-                    for source in sources:
-                        self._ipsw_split_dsc_file(source.artifact, source.label, split_label=source.label)
-                        split_labels.append(source.label)
-
-                    return split_labels
-
-    @contextmanager
-    def _mounted_readonly_dmg(self, dmg: Path) -> Generator[Path, None, None]:
-        mount_point = Path(tempfile.mkdtemp(prefix=f"{dmg.stem}_mount_"))
-        with sentry_sdk.start_span(op="subprocess.hdiutil_mount", name=f"Mount DMG {dmg.name}") as span:
             command = ["hdiutil", "attach", "-readonly", "-nobrowse", "-mountpoint", str(mount_point), str(dmg)]
-            result = subprocess.run(command, capture_output=True)
-            span.set_data("hdiutil_attach", _ipsw_command_data(command, result.stdout, result.stderr, [mount_point]))
+            result = subprocess.run(command, capture_output=True, timeout=20 * 60)
             if result.returncode != 0:
-                span.set_status("internal_error")
-                shutil.rmtree(mount_point, ignore_errors=True)
-                raise IpswExtractError(f"hdiutil attach failed for {dmg}")
+                raise IpswExtractError(f"hdiutil attach failed for {image.member}")
 
-        try:
-            yield mount_point
-        finally:
-            with sentry_sdk.start_span(op="subprocess.hdiutil_detach", name=f"Unmount DMG {dmg.name}") as span:
-                command = ["hdiutil", "detach", str(mount_point)]
-                result = subprocess.run(command, capture_output=True)
-                span.set_data(
-                    "hdiutil_detach", _ipsw_command_data(command, result.stdout, result.stderr, [mount_point])
-                )
-                if result.returncode != 0:
-                    span.set_status("internal_error")
-                    logger.warning("hdiutil detach failed for %s", mount_point)
-            if mount_point.exists():
-                shutil.rmtree(mount_point, ignore_errors=True)
+            # The workspace owns cleanup, including partial acquisition failure.
+            sources = _find_rosetta_dsc_sources(mount_point)
+            if not sources:
+                raise IpswExtractError(f"RosettaOS DMG contains no supported dyld_shared_cache files: {image.member}")
 
-    def _ipsw_split(self, extract_dir: Path, arch: Arch | None = None) -> Path:
-        dsc_root_file = None
-        for item in extract_dir.iterdir():
-            if item.is_file() and not item.suffix:  # check if it is a file and has no extension
-                dsc_root_file = item
-                break
+            return [
+                self._archive_split(source.artifact, source.artifact.relative_to(mount_point), attempt)
+                for source in sources
+            ]
 
-        if dsc_root_file is None:
+    def _ipsw_split(self, extract_dir: Path, attempt: IpswDscAttemptRequest) -> list[tuple[Path, Path]]:
+        names = {f"dyld_shared_cache_{arch}" for arch in ((attempt.arch,) if attempt.arch else tuple(Arch))}
+        primaries = sorted(
+            path
+            for path in extract_dir.rglob("dyld_shared_cache_*")
+            if path.name in names and path.is_file() and not path.is_symlink()
+        )
+        if not primaries:
             raise IpswExtractError(f"Failed to find dyld_shared_cache root-file in {extract_dir}")
 
-        arch_label = str(arch) if arch is not None else "default"
-        return self._ipsw_split_dsc_file(
-            dsc_root_file,
-            arch_label,
-            split_label=str(arch) if arch is not None else None,
-            cleanup_dir=extract_dir,
-        )
+        return [self._archive_split(path, path.relative_to(extract_dir), attempt) for path in primaries]
 
-    def _ipsw_split_dsc_file(
-        self,
-        dsc_root_file: Path,
-        arch_label: str,
-        split_label: str | None = None,
-        cleanup_dir: Path | None = None,
-    ) -> Path:
-        with sentry_sdk.start_span(op="ipsw.dyld_split", name=f"Split IPSW DSC ({arch_label})") as span:
-            split_dir = self.processing_dir / "split_out"
-            if split_label is not None:
-                # each arch/cache gets its own sub-dir, so that the split-dir can be symsorted in one go
-                split_dir_arch = split_dir / split_label
-            else:
-                split_dir_arch = split_dir
-
-            if cleanup_dir is not None:
-                span.set_data("extract_dir", directory_data(cleanup_dir))
+    def _ipsw_split_dsc_file(self, dsc_root_file: Path, output: Path) -> None:
+        with sentry_sdk.start_span(op="ipsw.dyld_split", name=f"Split IPSW DSC {dsc_root_file.name}") as span:
             span.set_data("dsc_root_file", str(dsc_root_file))
-            result = dyld_split(dsc_root_file, split_dir_arch)
+            result = dyld_split(dsc_root_file, output)
             span.set_data("dyld_split", subprocess_result_data(result))
-            span.set_data("split_dir", directory_data(split_dir_arch))
-            span.set_data("split_output_tree", _directory_tree_stats(split_dir_arch).to_span_data())
+            span.set_data("split_output_tree", _directory_tree_stats(output).to_span_data())
+            logger.info("IPSW split cache=%s output=%s returncode=%s", dsc_root_file, output, result.returncode)
 
             if result.returncode != 0:
                 span.set_status("internal_error")
                 raise IpswExtractError(f"ipsw dyld split failed for {dsc_root_file}")
-
-            if cleanup_dir is not None:
-                # we have very limited space on the GHA runners, so get rid of processed input data
-                shutil.rmtree(cleanup_dir)
-
-            return split_dir
 
     def _symsort(self, split_dir: Path, ignore_errors: bool = False, record_input_tree: bool = True) -> None:
         output_dir = self.symbols_dir()
@@ -1135,14 +869,6 @@ class _IpswExtractionRun:
                 raise IpswExtractError(f"Symsorter failed for bundle {self.bundle_id}")
 
 
-class IpswExtractError(Exception):
-    pass
-
-
-class IpswExtractTimeoutError(IpswExtractError, TimeoutError):
-    pass
-
-
 def _find_rosetta_dsc_sources(mount_point: Path) -> list[DscSplitSource]:
     sources: list[DscSplitSource] = []
     for label, relative_path in _ROSETTA_DSC_SOURCES:
@@ -1152,56 +878,12 @@ def _find_rosetta_dsc_sources(mount_point: Path) -> list[DscSplitSource]:
     return sources
 
 
-def find_extraction_dir(processing_dir: Path) -> Path | None:
-    """
-    Find the DSC extraction directory in the processing directory.
-
-    After ipsw extract, the DSC ends up in a directory with an unpredictable name.
-    We find it by looking for the only directory that isn't one of symx's reserved
-    processing directories.
-    """
-    for item in processing_dir.iterdir():
-        if item.is_dir() and item.name not in _RESERVED_PROCESSING_DIR_NAMES:
-            logger.info(
-                "Found IPSW dyld extraction directory",
-                extra={"directory": item},
-            )
-            return item
-    return None
-
-
 def _strip_ansi(text: str) -> str:
     return _ANSI_ESCAPE_RE.sub("", text)
 
 
 def _normalize_ipsw_output_line(line: str) -> str:
     return _LEADING_IPSW_GLYPH_RE.sub("", line).strip()
-
-
-def _parse_extracted_mount_artifact_path(line: str) -> Path | None:
-    normalized_line = _normalize_ipsw_output_line(_strip_ansi(line))
-    match = _EXTRACTED_MOUNT_ARTIFACT_RE.match(normalized_line)
-    if not match:
-        return None
-    return Path(match.group(1))
-
-
-def _cleanup_mount_artifact(path: Path, description: str = "mount artifact left by ipsw mount") -> None:
-    if not path.exists():
-        return
-
-    logger.warning("Removing %s", description, extra={"artifact_path": path})
-    try:
-        if path.is_dir():
-            shutil.rmtree(path)
-        else:
-            path.unlink()
-    except Exception as e:
-        logger.error(
-            "Failed to remove %s",
-            description,
-            extra={"artifact_path": path, "exception": e},
-        )
 
 
 @lru_cache(maxsize=1)
@@ -1237,32 +919,6 @@ def _summarize_ipsw_stderr(stderr: str | bytes | None) -> str | None:
             return line
 
     return None
-
-
-def _version_major(version: str | None) -> int | None:
-    if version is None:
-        return None
-
-    version_match = _VERSION_MAJOR_RE.match(version)
-    if version_match is None:
-        return None
-    return int(version_match.group(1))
-
-
-def _macos_x86_64_dsc_requires_rosetta(version: str | None) -> bool:
-    major_version = _version_major(version)
-    return major_version is not None and major_version >= _MACOS_ROSETTA_DSC_MIN_MAJOR_VERSION
-
-
-def _macos_dsc_architectures(version: str | None) -> list[Arch]:
-    major_version = _version_major(version)
-    if major_version is None:
-        version_label = "<missing>" if version is None else repr(version)
-        raise IpswExtractError(
-            f"Cannot determine required macOS DSC architectures: missing or unparseable macOS version {version_label}"
-        )
-
-    return list(MACOS_DSC_ARCHITECTURES)
 
 
 def generate_bundle_id(file_name: str) -> str:

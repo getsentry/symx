@@ -8,6 +8,7 @@ import typer
 from symx.gcs import parse_gcs_url
 from symx.tools import validate_shell_deps
 from symx.ipsw.model import IpswPlatform
+from symx.ipsw.mounts import extraction_directory
 from symx.ipsw.extract import IpswExtractionRequest, extract_ipsw
 from symx.ipsw.runners import (
     import_meta_from_appledb,
@@ -73,8 +74,9 @@ def extract(
     """
     Extract all mirrored artifacts and upload their binaries to the symbol store.
     """
-    with tempfile.TemporaryDirectory() as processing_dir:
-        storage_backend = init_storage(Path(processing_dir), storage)
+    with extraction_directory() as processing_dir:
+        storage_backend = init_storage(processing_dir, storage)
+
         if storage_backend:
             from symx.model import Timeout
 
