@@ -91,19 +91,7 @@ class InMemoryIpswStorage:
         shutil.copy2(mirror_file, local_path)
         return local_path
 
-    def upload_symbols(
-        self,
-        prefix: str,
-        bundle_id: str,
-        artifact: IpswArtifact,
-        source_idx: int,
-        binary_dir: Path,
-    ) -> None:
-        from symx.model import ArtifactProcessingState
-
-        artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
-        artifact.sources[source_idx].update_last_run()
-        self.update_meta_item(artifact)
+    def upload_symbols(self, prefix: str, bundle_id: str, binary_dir: Path) -> None:
         self.uploaded_symbols.append((prefix, bundle_id))
 
     def clean_local_dir(self) -> None:

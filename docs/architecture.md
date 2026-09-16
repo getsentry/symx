@@ -279,6 +279,16 @@ Important behaviors:
 - duplicates are skipped rather than overwritten,
 - rerunning an existing bundle is intentionally additive: existing symbol files stay untouched, missing files can still be uploaded, and Symx never overwrites symbols already present in the store.
 
+The IPSW and OTA `upload_symbols()` storage adapters only upload files. They do not change processing state,
+update timestamps, or save metadata. The extraction runners own those decisions: success is persisted once per
+IPSW source or OTA artifact, after all symbol directories have uploaded. The metadata update still uses the
+existing generation-match and retry logic; one logical update can require multiple attempts on conflict.
+
+Uploads are not a multi-object transaction. A failure can leave some create-only symbol objects behind for an
+additive retry. Existing error handling is unchanged: the IPSW runner records upload failures as
+`symbol_extraction_failed`; non-`OtaExtractError` failures in the OTA upload path propagate and leave the artifact
+`mirrored`, without an earlier directory upload publishing premature success.
+
 ## 3.2 Local admin cache
 
 The admin surface builds a local cache under:

@@ -270,7 +270,7 @@ class OtaExtract:
                                         op="gcs.upload_symbols",
                                         name=f"Upload OTA symbols {ota.platform} {ota.version}",
                                     ):
-                                        self.storage.upload_symbols(symbol_dir, key, ota, bundle_id)
+                                        self.storage.upload_symbols(ota.platform, bundle_id, symbol_dir)
                                 ota.processing_state = ArtifactProcessingState.SYMBOLS_EXTRACTED
                                 ota.update_last_run()
                                 self.storage.update_meta_item(key, ota)

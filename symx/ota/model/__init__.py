@@ -192,7 +192,9 @@ class OtaStorage(Protocol):
 
     def update_meta_item(self, ota_meta_key: str, ota_meta: OtaArtifact) -> OtaMetaData: ...
 
-    def upload_symbols(self, input_dir: Path, ota_meta_key: str, ota_meta: OtaArtifact, bundle_id: str) -> None: ...
+    def upload_symbols(self, prefix: str, bundle_id: str, binary_dir: Path) -> None:
+        """Upload symbol files without changing or persisting processing state."""
+        ...
 
 
 class OtaMetaRetriever(Protocol):

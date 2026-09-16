@@ -18,13 +18,8 @@ class IpswStorage(Protocol):
 
     def download_ipsw(self, ipsw_source: IpswSource) -> Path | None: ...
 
-    def upload_symbols(
-        self,
-        prefix: str,
-        bundle_id: str,
-        artifact: IpswArtifact,
-        source_idx: int,
-        binary_dir: Path,
-    ) -> None: ...
+    def upload_symbols(self, prefix: str, bundle_id: str, binary_dir: Path) -> None:
+        """Upload symbol files without changing or persisting processing state."""
+        ...
 
     def clean_local_dir(self) -> None: ...
