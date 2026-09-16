@@ -16,6 +16,7 @@ from symx.download import DownloadError, try_download_url_to_file
 from symx.fs import log_disk_usage
 from symx.tools import validate_shell_deps
 from symx.ipsw.model import IpswArtifact, IpswSource
+from symx.ipsw.errors import IpswMountCleanupError
 from symx.ipsw.extract import IpswExtractionRequest, extract_ipsw, generate_bundle_id, map_platform_to_prefix
 from symx.ipsw.meta_sync.appledb import AppleDbIpswImport
 from symx.ipsw.mirror import verify_download
@@ -245,6 +246,7 @@ def extract(
                         continue
 
                     # 4.) Extract and upload symbols and update meta-data on success or failure.
+                    unsafe_cleanup: IpswMountCleanupError | None = None
                     try:
                         with sentry_sdk.start_span(
                             op="ipsw.extract.run", name=f"IPSW extract+symsort {source.file_name}"
@@ -275,11 +277,16 @@ def extract(
                             "ipsw.extract.succeeded", 1, attributes={"platform": str(artifact.platform)}
                         )
                     except Exception as e:
+                        if isinstance(e, IpswMountCleanupError):
+                            unsafe_cleanup = e
                         sentry_sdk.capture_exception(e)
                         logger.warning(
-                            "Symbol extraction failed for %s: %s. Continuing with the next one.",
+                            "Symbol extraction failed for %s: %s. %s",
                             source.file_name,
                             e,
+                            "Stopping worker; mount cleanup unresolved."
+                            if unsafe_cleanup
+                            else "Continuing with the next one.",
                             extra={"artifact": artifact, "source": source, "exception": e},
                         )
                         artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
@@ -290,8 +297,24 @@ def extract(
                         )
                     finally:
                         artifact.sources[source_idx].update_last_run()
-                        ipsw_storage.update_meta_item(artifact)
-                        ipsw_storage.clean_local_dir()
+                        try:
+                            ipsw_storage.update_meta_item(artifact)
+                        except BaseException as update_error:
+                            if unsafe_cleanup is not None:
+                                unsafe_cleanup.add_note(
+                                    f"Final failed-source metadata update also failed: {update_error}"
+                                )
+                                raise unsafe_cleanup
+
+                            raise
+
+                        if unsafe_cleanup is None:
+                            ipsw_storage.clean_local_dir()
+
+                    if unsafe_cleanup is not None:
+                        # Propagate through the CLI's directory owner too: no
+                        # recursive deletion and no next image/source/worker.
+                        raise unsafe_cleanup
 
     sentry_sdk.metrics.distribution("ipsw.extract.artifacts_extracted", artifacts_extracted)
     sentry_sdk.metrics.distribution("ipsw.extract.artifacts_failed", artifacts_failed)

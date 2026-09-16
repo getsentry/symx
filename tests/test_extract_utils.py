@@ -7,9 +7,7 @@ the OTA and IPSW extraction workflows.
 
 import json
 import plistlib
-import signal
 import subprocess
-import tempfile
 import zipfile
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
@@ -19,6 +17,7 @@ from subprocess import CompletedProcess
 import pytest
 
 from symx.model import MACOS_DSC_ARCHITECTURES, Arch
+from tests.test_ipsw_systemos_images import ToolHarness, make_request, identity, COMMON
 from symx.ipsw import extract as ipsw_extract
 from symx.ipsw.materialization import (
     IpswDscMaterialized,
@@ -27,6 +26,13 @@ from symx.ipsw.materialization import (
     IpswDscUnavailableReason,
 )
 from symx.ipsw.model import IpswPlatform
+from symx.ipsw.image_plan import (
+    ImageKind,
+    IpswImageTarget,
+    IpswDscAttemptRequest,
+    build_extraction_plan,
+    macos_dsc_architectures,
+)
 from symx.ipsw.extract import (
     IpswExtractionRequest,
     IpswExtractError,
@@ -35,9 +41,7 @@ from symx.ipsw.extract import (
     _directory_tree_delta,
     _directory_tree_stats,
     _parse_symsorter_summary,
-    find_extraction_dir,
     generate_bundle_id,
-    inspect_ipsw_dmg_paths,
     inspect_ipsw_product_metadata,
     map_platform_to_prefix,
 )
@@ -106,7 +110,7 @@ def test_generate_bundle_id_no_commas() -> None:
 
 
 def test_macos_dsc_architectures_include_all_supported_architectures_for_macos_27_metadata() -> None:
-    assert ipsw_extract._macos_dsc_architectures("27.0") == [
+    assert list(macos_dsc_architectures("27.0")) == [
         Arch.ARM64E,
         Arch.ARM64E_X1,
         Arch.X86_64,
@@ -115,7 +119,7 @@ def test_macos_dsc_architectures_include_all_supported_architectures_for_macos_2
 
 
 def test_macos_dsc_architectures_are_not_version_gated_before_macos_27_metadata() -> None:
-    assert ipsw_extract._macos_dsc_architectures("26.5.1") == [
+    assert list(macos_dsc_architectures("26.5.1")) == [
         Arch.ARM64E,
         Arch.ARM64E_X1,
         Arch.X86_64,
@@ -125,12 +129,12 @@ def test_macos_dsc_architectures_are_not_version_gated_before_macos_27_metadata(
 
 def test_macos_dsc_architectures_raise_for_missing_version() -> None:
     with pytest.raises(IpswExtractError, match="missing or unparseable macOS version <missing>"):
-        ipsw_extract._macos_dsc_architectures(None)
+        macos_dsc_architectures(None)
 
 
 def test_macos_dsc_architectures_raise_for_unparseable_version() -> None:
     with pytest.raises(IpswExtractError, match="missing or unparseable macOS version 'Sequoia'"):
-        ipsw_extract._macos_dsc_architectures("Sequoia")
+        macos_dsc_architectures("Sequoia")
 
 
 def test_macos_extraction_requires_version_before_running_side_effects(tmp_path: Path) -> None:
@@ -144,46 +148,8 @@ def test_macos_extraction_requires_version_before_running_side_effects(tmp_path:
         _IpswExtractionRun(request)
 
 
-# --- find_extraction_dir tests ---
-
-
-def test_find_extraction_dir_finds_dsc_dir() -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        processing_dir = Path(tmpdir)
-        (processing_dir / "split_out").mkdir()
-        (processing_dir / "symbols").mkdir()
-        (processing_dir / "sys_mount").mkdir()
-        expected = processing_dir / "iPhone14,7_18.2_22C152"
-        expected.mkdir()
-
-        result = find_extraction_dir(processing_dir)
-
-        assert result == expected
-
-
-def test_find_extraction_dir_ignores_reserved_dirs() -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        processing_dir = Path(tmpdir)
-        (processing_dir / "split_out").mkdir()
-        (processing_dir / "symbols").mkdir()
-        (processing_dir / "sys_mount").mkdir()
-        # No other directory
-
-        result = find_extraction_dir(processing_dir)
-
-        assert result is None
-
-
-def test_find_extraction_dir_returns_first_match() -> None:
-    """If multiple non-reserved dirs exist, return one of them."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        processing_dir = Path(tmpdir)
-        (processing_dir / "dir1").mkdir()
-        (processing_dir / "dir2").mkdir()
-
-        result = find_extraction_dir(processing_dir)
-
-        assert result in [processing_dir / "dir1", processing_dir / "dir2"]
+# Shared-directory first-match discovery has been removed. Attempt-private
+# discovery (including stale-directory traps) is covered in test_ipsw_systemos_images.
 
 
 # --- IPSW diagnostics tests ---
@@ -245,12 +211,11 @@ def test_inspect_ipsw_dmg_paths_prefers_systemos_and_skips_recovery_filesystem(t
     with zipfile.ZipFile(ipsw_path, "w") as archive:
         archive.writestr("BuildManifest.plist", plistlib.dumps(build_manifest))
 
-    assert inspect_ipsw_dmg_paths(ipsw_path) == ipsw_extract.IpswDmgPaths(
-        system="system.dmg.aea",
-        filesystem="filesystem.dmg.aea",
-        rosetta="rosetta.dmg",
-        selected="system.dmg.aea",
-    )
+    with zipfile.ZipFile(ipsw_path, "a") as archive:
+        archive.writestr("system.dmg.aea", b"dummy")
+
+    plan = build_extraction_plan(IpswExtractionRequest(IpswPlatform.IOS, ipsw_path, tmp_path))
+    assert [image.member for image in plan.system_images] == ["system.dmg.aea"]
 
 
 def _make_macos_run_with_manifest(tmp_path: Path, version: str, manifest: dict[str, object]) -> _IpswExtractionRun:
@@ -267,6 +232,9 @@ def _make_macos_run_with_manifest(tmp_path: Path, version: str, manifest: dict[s
     }
     with zipfile.ZipFile(ipsw_path, "w") as archive:
         archive.writestr("BuildManifest.plist", plistlib.dumps(build_manifest))
+        archive.writestr("system.dmg.aea", b"dummy")
+        archive.writestr("rosetta.dmg.aea", b"dummy")
+        archive.writestr("rosetta.dmg", b"dummy")
 
     processing_dir = tmp_path / "processing"
     processing_dir.mkdir()
@@ -282,7 +250,7 @@ def test_rosetta_dmg_path_for_x86_64_dsc_allows_legacy_systemos_fallback_before_
         {"Cryptex1,SystemOS": {"Info": {"Path": "system.dmg.aea"}}},
     )
 
-    assert run._rosetta_dmg_path_for_x86_64_dsc() is None
+    assert not build_extraction_plan(run.request).rosetta_images
 
 
 def test_rosetta_dmg_path_for_x86_64_dsc_ignores_rosetta_before_macos_27(tmp_path: Path) -> None:
@@ -295,7 +263,7 @@ def test_rosetta_dmg_path_for_x86_64_dsc_ignores_rosetta_before_macos_27(tmp_pat
         },
     )
 
-    assert run._rosetta_dmg_path_for_x86_64_dsc() is None
+    assert not build_extraction_plan(run.request).rosetta_images
 
 
 def test_rosetta_dmg_path_for_x86_64_dsc_requires_rosetta_for_macos_27(tmp_path: Path) -> None:
@@ -306,18 +274,21 @@ def test_rosetta_dmg_path_for_x86_64_dsc_requires_rosetta_for_macos_27(tmp_path:
     )
 
     with pytest.raises(IpswExtractError, match="macOS 27.0 x86_64 DSC requires Cryptex1,RosettaOS"):
-        run._rosetta_dmg_path_for_x86_64_dsc()
+        build_extraction_plan(run.request)
 
 
 def test_rosetta_dmg_path_for_x86_64_dsc_rejects_encrypted_rosetta_for_macos_27(tmp_path: Path) -> None:
     run = _make_macos_run_with_manifest(
         tmp_path,
         "27.0",
-        {"Cryptex1,RosettaOS": {"Info": {"Path": "rosetta.dmg.aea"}}},
+        {
+            "Cryptex1,SystemOS": {"Info": {"Path": "system.dmg.aea"}},
+            "Cryptex1,RosettaOS": {"Info": {"Path": "rosetta.dmg.aea"}},
+        },
     )
 
-    with pytest.raises(IpswExtractError, match="RosettaOS DMG, but it is AEA encrypted"):
-        run._rosetta_dmg_path_for_x86_64_dsc()
+    with pytest.raises(IpswExtractError, match="RosettaOS DMG is AEA encrypted"):
+        build_extraction_plan(run.request)
 
 
 def test_find_rosetta_dsc_sources_finds_full_and_x86support_caches(tmp_path: Path) -> None:
@@ -335,62 +306,16 @@ def test_find_rosetta_dsc_sources_finds_full_and_x86support_caches(tmp_path: Pat
 
 
 def test_split_rosetta_dscs_splits_full_and_x86support_caches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    ipsw_path = tmp_path / "UniversalMac_27.0_26A5353q_Restore.ipsw"
-    build_manifest = {
-        "BuildIdentities": [
-            {
-                "Manifest": {
-                    "Cryptex1,RosettaOS": {"Info": {"Path": "rosetta.dmg"}},
-                },
-                "Info": {"Variant": "Customer Erase Install (IPSW)"},
-            }
-        ]
-    }
-    with zipfile.ZipFile(ipsw_path, "w") as archive:
-        archive.writestr("BuildManifest.plist", plistlib.dumps(build_manifest))
-        archive.writestr("rosetta.dmg", b"fake")
-
-    processing_dir = tmp_path / "processing"
-    processing_dir.mkdir()
-    run = _IpswExtractionRun(
-        IpswExtractionRequest(IpswPlatform.MACOS, ipsw_path, processing_dir, version="27.0", build="26A5353q")
-    )
-
-    mount_root = tmp_path / "mount"
-    full_dsc = mount_root / "System/Library/dyld/dyld_shared_cache_x86_64"
-    full_dsc.parent.mkdir(parents=True)
-    full_dsc.touch()
-    x86support_dsc = mount_root / "System/x86Support/System/Library/dyld/dyld_shared_cache_x86_64"
-    x86support_dsc.parent.mkdir(parents=True)
-    x86support_dsc.touch()
-
-    @contextmanager
-    def fake_mount(self: _IpswExtractionRun, dmg: Path) -> Generator[Path, None, None]:
-        assert self is run
-        assert dmg.name == "rosetta.dmg"
-        yield mount_root
-
-    split_calls: list[tuple[Path, str, str | None, Path | None]] = []
-
-    def fake_split(
-        self: _IpswExtractionRun,
-        dsc_root_file: Path,
-        arch_label: str,
-        split_label: str | None = None,
-        cleanup_dir: Path | None = None,
-    ) -> Path:
-        assert self is run
-        split_calls.append((dsc_root_file, arch_label, split_label, cleanup_dir))
-        return processing_dir / "split_out"
-
-    monkeypatch.setattr(_IpswExtractionRun, "_mounted_readonly_dmg", fake_mount)
-    monkeypatch.setattr(_IpswExtractionRun, "_ipsw_split_dsc_file", fake_split)
-
-    assert run._split_rosetta_dscs() == ["x86_64", "x86_64_x86Support"]
-    assert split_calls == [
-        (full_dsc, "x86_64", "x86_64", None),
-        (x86support_dsc, "x86_64_x86Support", "x86_64_x86Support", None),
-    ]
+    request = make_request(tmp_path)
+    tools = ToolHarness(request, monkeypatch)
+    plan = build_extraction_plan(request)
+    attempt = next(a for a in plan.attempts if a.arch == Arch.X86_64)
+    archives = _IpswExtractionRun(request)._split_rosetta_dscs(attempt)
+    assert [debug_id for debug_id, _ in tools.split_outputs] == ["rosetta.full", "rosetta.x86Support"]
+    assert len(archives) == 2
+    assert len({output for _, output in archives}) == 2
+    assert not tools.live_mounts
+    assert not attempt.work_dir.exists()
 
 
 def _make_ipsw_extractor(tmp_path: Path) -> _IpswExtractionRun:
@@ -440,202 +365,114 @@ def test_parse_symsorter_summary_extracts_counts() -> None:
     }
 
 
+def _direct_attempt(run: _IpswExtractionRun, arch: Arch | None = None) -> IpswDscAttemptRequest:
+    attempt = IpswDscAttemptRequest(IpswImageTarget(ImageKind.SYSTEM, COMMON), arch, run.processing_dir / "attempt")
+    attempt.work_dir.mkdir()
+    return attempt
+
+
 def test_ipsw_extract_dsc_timeout_preserves_timeout_contract_and_diagnostics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    extractor = _make_ipsw_extractor(tmp_path)
+    from tests.test_ipsw_systemos_images import FakeProcess
 
-    class FakePopen:
-        def __init__(self, command: list[str], stdout: object = None, stderr: object = None) -> None:
-            self.command = command
-            self.returncode = 0
+    request = make_request(tmp_path)
+    ToolHarness(request, monkeypatch)
+    extractor = _IpswExtractionRun(request)
+    attempt = _direct_attempt(extractor)
 
-        def __enter__(self) -> "FakePopen":
-            return self
-
-        def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
-            return False
-
+    class TimeoutProcess(FakeProcess):
         def communicate(self, timeout: int | None = None) -> tuple[bytes, bytes]:
-            if timeout is not None:
-                raise subprocess.TimeoutExpired(self.command, timeout)
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired("ipsw extract", timeout or 0)
             return b"timeout stdout", b"timeout stderr"
 
-        def kill(self) -> None:
-            self.returncode = -9
-
-    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
-
+    process = TimeoutProcess(returncode=None)
+    monkeypatch.setattr(ipsw_extract.subprocess, "Popen", lambda *args, **kwargs: process)
     with pytest.raises(TimeoutError, match="ipsw extract timed out") as exc_info:
-        extractor._ipsw_extract_dsc()
-
+        extractor._ipsw_extract_dsc(attempt)
     assert isinstance(exc_info.value, IpswExtractTimeoutError)
     assert isinstance(exc_info.value, IpswExtractError)
-    message = str(exc_info.value)
-    assert message == f"ipsw extract timed out for {extractor.ipsw_path} (default)"
+    assert str(exc_info.value) == f"ipsw extract timed out for {extractor.ipsw_path} (default)"
+    assert process.returncode == -9
 
 
 def test_ipsw_extract_dsc_returns_requested_arch_absence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    extractor = _make_ipsw_extractor(tmp_path)
-
-    class FakePopen:
-        def __init__(self, command: list[str], stdout: object = None, stderr: object = None) -> None:
-            self.command = command
-            self.returncode = 1
-
-        def __enter__(self) -> "FakePopen":
-            return self
-
-        def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
-            return False
-
-        def communicate(self, timeout: int | None = None) -> tuple[bytes, bytes]:
-            return b"", b"no dyld_shared_cache files found matching the specified archs: [arm64e_x1]"
-
-        def kill(self) -> None:
-            self.returncode = -9
-
-    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
-
-    result = extractor._ipsw_extract_dsc(Arch.ARM64E_X1)
-
+    request = make_request(tmp_path, [identity()])
+    tools = ToolHarness(request, monkeypatch)
+    tools.single_image = True
+    extractor = _IpswExtractionRun(request)
+    result = extractor._ipsw_extract_dsc(_direct_attempt(extractor, Arch.ARM64E_X1))
     assert result == IpswDscNotPresent(
-        arch=Arch.ARM64E_X1,
-        message="no dyld_shared_cache files found matching the specified archs: [arm64e_x1]",
+        arch=Arch.ARM64E_X1, message="no dyld_shared_cache files found matching the specified archs"
     )
 
 
 def test_ipsw_symsort_dsc_skips_absent_architecture_after_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    processing_dir = tmp_path / "processing"
-    processing_dir.mkdir()
-    ipsw_path = tmp_path / "UniversalMac_26.5.1_25F90_Restore.ipsw"
-    ipsw_path.touch()
-    extractor = _IpswExtractionRun(
-        IpswExtractionRequest(IpswPlatform.MACOS, ipsw_path, processing_dir, version="26.5.1")
-    )
-    extractor.macos_dsc_architectures = [Arch.ARM64E, Arch.ARM64E_X1]
-    extract_dir = processing_dir / "extracted"
-    extract_dir.mkdir()
-    attempts: list[Arch] = []
-    symsort_inputs: list[Path] = []
-
-    def fake_extract(arch: Arch | None = None) -> IpswDscMaterialized | IpswDscNotPresent:
-        assert arch is not None
-        attempts.append(arch)
-        if arch == Arch.ARM64E_X1:
-            return IpswDscNotPresent(arch=arch, message="not present")
-        return IpswDscMaterialized(arch=arch, extract_dir=extract_dir)
-
-    def fake_split(materialized_dir: Path, arch: Arch | None = None) -> Path:
-        assert materialized_dir == extract_dir
-        assert arch == Arch.ARM64E
-        split_dir = processing_dir / "split_out"
-        (split_dir / str(arch)).mkdir(parents=True)
-        return split_dir
-
-    def fake_compress(directory: Path) -> Path:
-        archive = directory.parent / f"{directory.name}.tar.zst"
-        directory.rmdir()
-        archive.touch()
-        return archive
-
-    def fake_decompress(archive: Path, target: Path) -> None:
-        assert archive.is_file()
-        target.mkdir()
-
-    monkeypatch.setattr(extractor, "_ipsw_extract_dsc", fake_extract)
-    monkeypatch.setattr(extractor, "_ipsw_split", fake_split)
-    monkeypatch.setattr("symx.ipsw.extract._compress_directory", fake_compress)
-    monkeypatch.setattr("symx.ipsw.extract._decompress_archive", fake_decompress)
-    monkeypatch.setattr(
-        extractor,
-        "_symsort",
-        lambda split_dir, ignore_errors=False, record_input_tree=True: symsort_inputs.append(split_dir),
-    )
-
-    extractor._symsort_dsc()
-
-    assert attempts == [Arch.ARM64E, Arch.ARM64E_X1]
-    assert symsort_inputs == [processing_dir / "split_out"]
-    assert not ipsw_path.exists()
+    request = make_request(tmp_path, [identity()])
+    tools = ToolHarness(request, monkeypatch)
+    tools.single_image = True
+    result = _IpswExtractionRun(request).run()
+    assert (result / f"{COMMON}.arm64e.sym").exists()
+    assert not (result / f"{COMMON}.arm64e_x1.sym").exists()
+    assert [(member, arch) for member, arch, _ in tools.dsc_attempts][:2] == [(COMMON, "arm64e"), (COMMON, "arm64e_x1")]
+    assert not request.ipsw_path.exists()
 
 
 def test_ipsw_symsort_dsc_fails_when_all_architectures_are_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    processing_dir = tmp_path / "processing"
-    processing_dir.mkdir()
-    ipsw_path = tmp_path / "UniversalMac_26.5.1_25F90_Restore.ipsw"
-    ipsw_path.touch()
-    extractor = _IpswExtractionRun(
-        IpswExtractionRequest(IpswPlatform.MACOS, ipsw_path, processing_dir, version="26.5.1")
+    request = make_request(tmp_path, [identity()])
+    tools = ToolHarness(request, monkeypatch)
+    tools.single_image = True
+    extractor = _IpswExtractionRun(request)
+    monkeypatch.setattr(
+        extractor, "_ipsw_extract_dsc", lambda attempt: IpswDscNotPresent(arch=attempt.arch, message="not present")
     )
-    extractor.macos_dsc_architectures = [Arch.ARM64E, Arch.ARM64E_X1]
-
-    def fake_absent(arch: Arch | None = None) -> IpswDscNotPresent:
-        assert arch is not None
-        return IpswDscNotPresent(arch=arch, message="not present")
-
-    monkeypatch.setattr(extractor, "_ipsw_extract_dsc", fake_absent)
-    monkeypatch.setattr(extractor, "_symsort", lambda *args, **kwargs: pytest.fail("must not symsort"))
-
-    with pytest.raises(IpswExtractError, match="none of the requested macOS architectures"):
-        extractor._symsort_dsc()
-
-    assert ipsw_path.exists()
+    with pytest.raises(IpswExtractError, match="none of the requested architectures"):
+        extractor.run()
+    assert "symsort" not in tools.events  # No final DSC symsort.
+    assert request.ipsw_path.exists()
 
 
 def test_ipsw_symsort_dsc_does_not_mask_unavailable_architecture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    processing_dir = tmp_path / "processing"
-    processing_dir.mkdir()
-    ipsw_path = tmp_path / "UniversalMac_27.0_26A428_Restore.ipsw"
-    ipsw_path.touch()
-    extractor = _IpswExtractionRun(IpswExtractionRequest(IpswPlatform.MACOS, ipsw_path, processing_dir, version="27.0"))
-    extractor.macos_dsc_architectures = [Arch.ARM64E_X1]
-    unavailable = IpswDscUnavailable(
-        arch=Arch.ARM64E_X1,
-        reason=IpswDscUnavailableReason.INVOCATION_FAILED,
-        message="arm64e_x1 mount failed",
-    )
-    monkeypatch.setattr(extractor, "_ipsw_extract_dsc", lambda arch=None: unavailable)
-    monkeypatch.setattr(extractor, "_symsort", lambda *args, **kwargs: pytest.fail("must not symsort"))
+    request = make_request(tmp_path, [identity()])
+    tools = ToolHarness(request, monkeypatch)
+    tools.single_image = True
+    extractor = _IpswExtractionRun(request)
+    original = extractor._ipsw_extract_dsc
 
+    def materialize(attempt: IpswDscAttemptRequest):
+        if attempt.arch == Arch.ARM64E_X1:
+            return IpswDscUnavailable(
+                arch=attempt.arch, reason=IpswDscUnavailableReason.INVOCATION_FAILED, message="arm64e_x1 mount failed"
+            )
+        return original(attempt)
+
+    monkeypatch.setattr(extractor, "_ipsw_extract_dsc", materialize)
     with pytest.raises(IpswExtractError, match="arm64e_x1 mount failed"):
-        extractor._symsort_dsc()
+        extractor.run()
 
-    assert ipsw_path.exists()
+    assert "symsort" not in tools.events
+    assert request.ipsw_path.exists()
 
 
 def test_ipsw_extract_dsc_returns_detailed_unavailable_when_extract_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    extractor = _make_ipsw_extractor(tmp_path)
+    from tests.test_ipsw_systemos_images import FakeProcess
 
-    class FakePopen:
-        def __init__(self, command: list[str], stdout: object = None, stderr: object = None) -> None:
-            self.command = command
-            self.returncode = 1
-
-        def __enter__(self) -> "FakePopen":
-            return self
-
-        def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
-            return False
-
-        def communicate(self, timeout: int | None = None) -> tuple[bytes, bytes]:
-            return b"extract stdout", b"extract stderr"
-
-        def kill(self) -> None:
-            self.returncode = -9
-
-    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
-
-    result = extractor._ipsw_extract_dsc()
-
+    request = make_request(tmp_path)
+    ToolHarness(request, monkeypatch)
+    extractor = _IpswExtractionRun(request)
+    monkeypatch.setattr(
+        ipsw_extract.subprocess, "Popen", lambda *args, **kwargs: FakeProcess(error=b"extract stderr", returncode=1)
+    )
+    result = extractor._ipsw_extract_dsc(_direct_attempt(extractor))
     assert result == IpswDscUnavailable(
         arch=None,
         reason=IpswDscUnavailableReason.INVOCATION_FAILED,
@@ -646,46 +483,23 @@ def test_ipsw_extract_dsc_returns_detailed_unavailable_when_extract_fails(
 def test_ipsw_extract_dsc_passes_vendored_pem_db_when_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    extractor = _make_ipsw_extractor(tmp_path)
-    pem_db = tmp_path / "fcs-keys.json"
-    pem_db.write_text("{}")
-    expected_extract_dir = extractor.processing_dir / "23E261__iPad15,7"
-    expected_extract_dir.mkdir()
-    commands: list[list[str]] = []
-
-    class FakePopen:
-        def __init__(self, command: list[str], stdout: object = None, stderr: object = None) -> None:
-            commands.append(command)
-            self.command = command
-            self.returncode = 0
-
-        def __enter__(self) -> "FakePopen":
-            return self
-
-        def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
-            return False
-
-        def communicate(self, timeout: int | None = None) -> tuple[bytes, bytes]:
-            return b"extract stdout", b"extract stderr"
-
-        def kill(self) -> None:
-            self.returncode = -9
-
-    monkeypatch.setattr("symx.ipsw.extract.vendored_ipsw_pem_db_path", lambda: pem_db)
-    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
-
-    assert extractor._ipsw_extract_dsc() == IpswDscMaterialized(arch=None, extract_dir=expected_extract_dir)
-    assert commands == [
+    request = make_request(tmp_path, [identity()])
+    tools = ToolHarness(request, monkeypatch)
+    tools.single_image = True
+    extractor = _IpswExtractionRun(request)
+    attempt = _direct_attempt(extractor)
+    assert extractor._ipsw_extract_dsc(attempt) == IpswDscMaterialized(arch=None, extract_dir=attempt.output_dir)
+    assert tools.commands == [
         [
             "ipsw",
             "extract",
-            str(extractor.ipsw_path),
+            str(request.ipsw_path),
             "-d",
             "-o",
-            str(extractor.processing_dir),
+            str(attempt.output_dir),
             "-V",
             "--pem-db",
-            str(pem_db),
+            str(tools.pem_db),
         ]
     ]
 
@@ -693,270 +507,89 @@ def test_ipsw_extract_dsc_passes_vendored_pem_db_when_available(
 def test_ipsw_symsort_sys_image_passes_vendored_pem_db_when_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    extractor = _make_ipsw_extractor(tmp_path)
-    pem_db = tmp_path / "fcs-keys.json"
-    pem_db.write_text("{}")
-    mount_point = extractor._sys_mount_point()
-    mount_point.mkdir()
-    commands: list[list[str]] = []
-    communicate_timeouts: list[int | None] = []
-    symsort_calls: list[tuple[Path, bool]] = []
-
-    class FakeStdout:
-        def __init__(self, lines: list[str]) -> None:
-            self._lines = iter(lines)
-
-        def readline(self) -> str:
-            return next(self._lines, "")
-
-    class FakePopen:
-        def __init__(
-            self,
-            command: list[str],
-            stdout: object = None,
-            stderr: object = None,
-            bufsize: int | None = None,
-            text: bool | None = None,
-        ) -> None:
-            commands.append(command)
-            self.stdout = FakeStdout([f"Press Ctrl+C to unmount '{mount_point}'\n", ""])
-            self.returncode = 0
-
-        def poll(self) -> int | None:
-            return None
-
-        def send_signal(self, sig: int) -> None:
-            return None
-
-        def communicate(self, timeout: int | None = None) -> tuple[str, str]:
-            communicate_timeouts.append(timeout)
-            self.returncode = 0
-            return "", ""
-
-        def wait(self, timeout: int | None = None) -> int:
-            raise AssertionError("mount cleanup should drain with communicate(), not wait()")
-
-        def kill(self) -> None:
-            return None
-
-    monkeypatch.setattr("symx.ipsw.extract.vendored_ipsw_pem_db_path", lambda: pem_db)
-    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
-    monkeypatch.setattr(
-        _IpswExtractionRun,
-        "_symsort",
-        lambda self, split_dir, ignore_errors=False, record_input_tree=True: symsort_calls.append(
-            (split_dir, ignore_errors)
-        ),
-    )
-
-    extractor._symsort_sys_image()
-
-    assert commands == [
-        [
-            "ipsw",
-            "mount",
-            "sys",
-            str(extractor.ipsw_path),
-            "-V",
-            "--mount-point",
-            str(mount_point),
-            "--pem-db",
-            str(pem_db),
-        ]
-    ]
-    assert communicate_timeouts == [60]
-    assert symsort_calls == [(mount_point, True)]
+    request = make_request(tmp_path)
+    tools = ToolHarness(request, monkeypatch)
+    image = build_extraction_plan(request).system_images[0]
+    _IpswExtractionRun(request)._symsort_sys_image(image)
+    command = tools.commands[0]
+    assert command[-2:] == ["--pem-db", str(tools.pem_db)]
+    assert tools.events == ["ordinary"]  # ignore_errors applies to filesystem scan only.
+    assert not tools.live_mounts
 
 
 def test_ipsw_symsort_sys_image_kills_mount_process_after_cleanup_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    extractor = _make_ipsw_extractor(tmp_path)
-    mount_point = extractor._sys_mount_point()
-    mount_point.mkdir()
-    communicate_timeouts: list[int | None] = []
-    sent_signals: list[int] = []
-    killed = False
+    from symx.ipsw.errors import IpswMountCleanupError
 
-    class FakeStdout:
-        def __init__(self, lines: list[str]) -> None:
-            self._lines = iter(lines)
+    request = make_request(tmp_path)
+    tools = ToolHarness(request, monkeypatch)
+    tools.stuck_mount = True
+    killed = []
 
-        def readline(self) -> str:
-            return next(self._lines, "")
+    def kill(process):
+        killed.append(process)
+        process.kill()
 
-    class FakePopen:
-        def __init__(
-            self,
-            command: list[str],
-            stdout: object = None,
-            stderr: object = None,
-            bufsize: int | None = None,
-            text: bool | None = None,
-        ) -> None:
-            self.command = command
-            self.stdout = FakeStdout([f"Press Ctrl+C to unmount '{mount_point}'\n", ""])
-            self.returncode: int | None = None
-
-        def poll(self) -> int | None:
-            return self.returncode
-
-        def send_signal(self, sig: int) -> None:
-            sent_signals.append(sig)
-
-        def communicate(self, timeout: int | None = None) -> tuple[str, str]:
-            communicate_timeouts.append(timeout)
-            if timeout is not None:
-                raise subprocess.TimeoutExpired(self.command, timeout, output="partial unmount output")
-            self.returncode = -9
-            return "post-kill unmount output", ""
-
-        def wait(self, timeout: int | None = None) -> int:
-            raise AssertionError("mount cleanup should drain with communicate(), not wait()")
-
-        def kill(self) -> None:
-            nonlocal killed
-            killed = True
-            self.returncode = -9
-
-    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
-    monkeypatch.setattr(
-        _IpswExtractionRun, "_symsort", lambda self, split_dir, ignore_errors=False, record_input_tree=True: None
-    )
-
-    extractor._symsort_sys_image()
-
-    assert sent_signals == [signal.SIGINT]
-    assert communicate_timeouts == [60, None]
+    monkeypatch.setattr(ipsw_extract, "_kill_process_group", kill)
+    image = build_extraction_plan(request).system_images[0]
+    with pytest.raises(IpswMountCleanupError):
+        _IpswExtractionRun(request)._symsort_sys_image(image)
     assert killed
+    assert tools.live_mounts
+    assert tools.mounts[0].backing.exists()  # Killing is NOT evidence of detach.
 
 
+@pytest.mark.parametrize("failure", [IpswExtractError("boom"), KeyboardInterrupt()])
 def test_ipsw_symsort_sys_image_cleans_extracted_aea_on_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: BaseException
 ) -> None:
-    extractor = _make_ipsw_extractor(tmp_path)
-    mount_point = extractor._sys_mount_point()
-    mount_point.mkdir()
-    extracted_aea = tmp_path / "tmp" / "043-01053-377.dmg.aea"
-    extracted_aea.parent.mkdir()
-    extracted_aea.write_bytes(b"aea")
+    request = make_request(tmp_path)
+    tools = ToolHarness(request, monkeypatch)
+    run = _IpswExtractionRun(request)
 
-    class FakeStdout:
-        def __init__(self, lines: list[str]) -> None:
-            self._lines = iter(lines)
+    def fail(*args: object, **kwargs: object):
+        raise failure
 
-        def readline(self) -> str:
-            return next(self._lines, "")
+    monkeypatch.setattr(run, "_symsort", fail)
+    with pytest.raises(type(failure)):
+        run._symsort_sys_image(build_extraction_plan(request).system_images[0])
 
-    class FakePopen:
-        def __init__(
-            self,
-            command: list[str],
-            stdout: object = None,
-            stderr: object = None,
-            bufsize: int | None = None,
-            text: bool | None = None,
-        ) -> None:
-            self.stdout = FakeStdout(
-                [
-                    f"Extracted {extracted_aea} from {extractor.ipsw_path}\n",
-                    f"Press Ctrl+C to unmount '{mount_point}'\n",
-                    "",
-                ]
-            )
-            self.returncode = 0
-
-        def poll(self) -> int | None:
-            return None
-
-        def send_signal(self, sig: int) -> None:
-            return None
-
-        def communicate(self, timeout: int | None = None) -> tuple[str, str]:
-            self.returncode = 0
-            return "", ""
-
-        def wait(self, timeout: int | None = None) -> int:
-            raise AssertionError("mount cleanup should drain with communicate(), not wait()")
-
-        def kill(self) -> None:
-            return None
-
-    def fake_symsort(
-        self: _IpswExtractionRun, split_dir: Path, ignore_errors: bool = False, record_input_tree: bool = True
-    ) -> None:
-        raise IpswExtractError("boom")
-
-    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
-    monkeypatch.setattr(_IpswExtractionRun, "_symsort", fake_symsort)
-
-    with pytest.raises(IpswExtractError, match="boom"):
-        extractor._symsort_sys_image()
-
-    assert not mount_point.exists()
-    assert not extracted_aea.exists()
+    assert not tools.live_mounts
+    mount = tools.mounts[0]
+    assert not mount.point.exists()
+    assert not mount.backing.exists()
+    assert not mount.backing.with_suffix("").exists()
 
 
 def test_ipsw_symsort_sys_image_raises_on_mount_failure_and_cleans_mount_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    extractor = _make_ipsw_extractor(tmp_path)
-    mount_point = extractor._sys_mount_point()
-    mount_point.mkdir()
-    extracted_aea = tmp_path / "tmp" / "043-01053-377.dmg.aea"
-    extracted_aea.parent.mkdir()
-    extracted_aea.write_bytes(b"aea")
-    decrypted_dmg = extracted_aea.with_suffix("")
-    decrypted_dmg.write_bytes(b"dmg")
+    from tests.test_ipsw_systemos_images import FakeProcess
+    import io
 
-    class FakeStdout:
-        def __init__(self, lines: list[str]) -> None:
-            self._lines = iter(lines)
+    request = make_request(tmp_path)
+    tools = ToolHarness(request, monkeypatch)
+    original = tools.popen
 
-        def readline(self) -> str:
-            return next(self._lines, "")
+    def fail_readiness(command: list[str], **kwargs: object):
+        original(command, **kwargs)  # Materialize/mount, but never report readiness.
+        log = kwargs["stdout"]
+        assert isinstance(log, io.TextIOBase)
+        log.seek(0)
+        log.truncate()
+        log.write("failed to mount sys DMG: Permission denied\n")
+        log.flush()
+        return FakeProcess(returncode=1)
 
-    class FakePopen:
-        def __init__(
-            self,
-            command: list[str],
-            stdout: object = None,
-            stderr: object = None,
-            bufsize: int | None = None,
-            text: bool | None = None,
-        ) -> None:
-            self.stdout = FakeStdout(
-                [
-                    f"Extracted {extracted_aea} from {extractor.ipsw_path}\n",
-                    (
-                        "failed to mount sys DMG: failed to mount "
-                        f"{decrypted_dmg}: exit status 1: hdiutil: attach failed - Permission denied\n"
-                    ),
-                    "",
-                ]
-            )
-            self.returncode = 1
-
-        def poll(self) -> int | None:
-            return self.returncode
-
-        def send_signal(self, sig: int) -> None:
-            return None
-
-        def wait(self, timeout: int | None = None) -> int:
-            raise AssertionError("mount cleanup should drain with communicate(), not wait()")
-
-        def kill(self) -> None:
-            return None
-
-    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
-
+    monkeypatch.setattr(ipsw_extract.subprocess, "Popen", fail_readiness)
     with pytest.raises(IpswExtractError, match="failed to mount sys DMG"):
-        extractor._symsort_sys_image()
+        _IpswExtractionRun(request)._symsort_sys_image(build_extraction_plan(request).system_images[0])
 
-    assert not mount_point.exists()
-    assert not extracted_aea.exists()
-    assert not decrypted_dmg.exists()
+    assert not tools.live_mounts  # Acquired volume was found by backing-file ownership.
+    assert not tools.mounts[0].point.exists()
+    assert not tools.mounts[0].backing.exists()
+    assert not tools.mounts[0].backing.with_suffix("").exists()
 
 
 def _make_ipsw_aea_preflight_extractor(tmp_path: Path) -> _IpswExtractionRun:
@@ -1028,13 +661,11 @@ def test_ipsw_aea_preflight_classifies_missing_key_failures(tmp_path: Path, monk
     monkeypatch.setattr("symx.ipsw.extract._vendored_ipsw_pem_db_keys", lambda: frozenset({"known-key"}))
 
     with pytest.raises(IpswExtractError, match="IPSW AEA preflight failed") as exc_info:
-        extractor._ipsw_aea_preflight()
+        extractor._ipsw_aea_preflight(build_extraction_plan(extractor.request).system_images[0])
 
     message = str(exc_info.value)
     assert get_key_attempts() == 1
     assert "selected_dmg=system.dmg.aea" in message
-    assert "system_dmg=system.dmg.aea" in message
-    assert "filesystem_dmg=filesystem.dmg.aea" in message
     assert "fcs_key=missing-key=" in message
     assert "vendored_db_hit=False" in message
     assert "failed to HPKE decrypt fcs-key: failed to connect to fcs-key URL: 403 Forbidden" in message
@@ -1062,7 +693,7 @@ def test_ipsw_aea_preflight_retries_transient_fcs_key_lookup(tmp_path: Path, mon
     monkeypatch.setattr("symx.ipsw.extract._vendored_ipsw_pem_db_keys", lambda: frozenset())
     monkeypatch.setattr("symx.ipsw.extract.time.sleep", lambda seconds: None)
 
-    extractor._ipsw_aea_preflight()
+    extractor._ipsw_aea_preflight(build_extraction_plan(extractor.request).system_images[0])
 
     assert get_key_attempts() == 2
 
@@ -1070,31 +701,17 @@ def test_ipsw_aea_preflight_retries_transient_fcs_key_lookup(tmp_path: Path, mon
 def test_ipsw_extract_dsc_unavailable_includes_stderr_summary_when_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    extractor = _make_ipsw_extractor(tmp_path)
+    from tests.test_ipsw_systemos_images import FakeProcess
 
-    class FakePopen:
-        def __init__(self, command: list[str], stdout: object = None, stderr: object = None) -> None:
-            self.command = command
-            self.returncode = 1
-
-        def __enter__(self) -> "FakePopen":
-            return self
-
-        def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
-            return False
-
-        def communicate(self, timeout: int | None = None) -> tuple[bytes, bytes]:
-            return (
-                b"extract stdout",
-                b"Usage:\n  ipsw extract <IPSW/OTA | URL> [flags]\n\nError: failed to mount DMG /tmp/test.dmg",
-            )
-
-        def kill(self) -> None:
-            self.returncode = -9
-
-    monkeypatch.setattr("symx.ipsw.extract.subprocess.Popen", FakePopen)
-
-    result = extractor._ipsw_extract_dsc()
+    request = make_request(tmp_path)
+    ToolHarness(request, monkeypatch)
+    extractor = _IpswExtractionRun(request)
+    process = FakeProcess(
+        error=b"Usage:\n  ipsw extract <IPSW/OTA | URL> [flags]\n\nError: failed to mount DMG /tmp/test.dmg",
+        returncode=1,
+    )
+    monkeypatch.setattr(ipsw_extract.subprocess, "Popen", lambda *args, **kwargs: process)
+    result = extractor._ipsw_extract_dsc(_direct_attempt(extractor))
 
     assert result == IpswDscUnavailable(
         arch=None,
@@ -1120,7 +737,7 @@ def test_ipsw_split_raises_detailed_error_when_split_fails(tmp_path: Path, monke
     monkeypatch.setattr("symx.ipsw.extract.dyld_split", fake_dyld_split)
 
     with pytest.raises(IpswExtractError, match="ipsw dyld split failed") as exc_info:
-        extractor._ipsw_split(extract_dir)
+        extractor._ipsw_split(extract_dir, _direct_attempt(extractor))
 
     message = str(exc_info.value)
     assert message == f"ipsw dyld split failed for {extract_dir / 'dyld_shared_cache_arm64e'}"

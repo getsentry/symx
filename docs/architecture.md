@@ -103,14 +103,26 @@ Workflow: [`symx-ipsw-extract.yml`](../.github/workflows/symx-ipsw-extract.yml)
 4. For each mirrored source:
    - download the mirrored IPSW back from GCS,
    - verify it against the metadata,
-   - run the IPSW extractor; macOS probes the same shared `arm64e`, `arm64e_x1`, `x86_64`, and `x86_64h` DSC
-     architecture set as OTA extraction, using typed outcomes to continue when a candidate is absent while preserving
-     invocation and materialization failures,
-   - symsort the system image and the dyld shared cache content,
+   - plan all distinct SystemOS members from the typed BuildManifest (falling back to non-recovery `OS` images
+     on older IPSWs), validating ZIP members and unique product/board selectors before invoking tools,
+   - process each image sequentially: preflight its AEA key, mount with its selector, symsort ordinary binaries,
+     confirm detach, then extract its DSC candidates with the same selector into attempt-private directories,
+   - macOS probes `arm64e`, `arm64e_x1`, `x86_64`, and `x86_64h`; on macOS 27+, x86 attempts are grouped by
+     distinct RosettaOS member instead of repeated per SystemOS image. Full and x86Support Rosetta caches remain
+     separate split sources. Absence is local to an image/architecture; each required SystemOS image must yield a DSC,
+   - compress image/architecture/cache-qualified splits, release the consumed IPSW only after all image consumers
+     finish, then restore/symsort/remove one split batch at a time into the same source bundle,
    - upload symbol files into `symbols/...`,
    - mark the source as `symbols_extracted` on success.
 
-If extraction fails, the source is marked `symbol_extraction_failed`. If the mirrored object cannot be downloaded or verified, it becomes `mirror_corrupt`.
+If extraction fails, the source is marked `symbol_extraction_failed`. A later-image failure prevents the source's
+upload entirely; there are no per-image metadata writes. An unresolved mount cleanup attempts the failed-source
+metadata update, retains the processing tree (including at the CLI directory-owner boundary), and aborts the worker
+rather than advancing to another source. Killing a mount process is not evidence of detach: cleanup inspects disk
+images by private backing-file/mount ownership and confirms absence before removing directories. A backing-file
+removal failure after confirmed detach remains an ordinary source failure.
+
+If the mirrored object cannot be downloaded or verified, it becomes `mirror_corrupt`.
 
 ## 2.2 OTA lane
 
