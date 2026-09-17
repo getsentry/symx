@@ -40,6 +40,7 @@ from symx.ota.model.materialization import (
     OtaDscMaterializationRequest,
     OtaDscMaterializationResult,
     OtaDscNotPresent,
+    OtaDscProcessTerminatedError,
     OtaDscProtocolError,
     OtaDscSource,
     OtaDscUnavailable,
@@ -742,6 +743,10 @@ def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationA
             logger.info("ipsw OTA DSC diagnostics for %s:\n%s", request.local_ota.name, stderr)
 
         try:
+            # A signal can interrupt even a valid-looking report. Never classify
+            # artifact availability from the output of a terminated producer.
+            if result.returncode < 0:
+                raise OtaDscProcessTerminatedError(-result.returncode, result.stderr)
             report = _parse_ota_dsc_report(request, result)
             _set_materialization_report_data(span, report)
             _validate_report_process_contract(request, result, report)

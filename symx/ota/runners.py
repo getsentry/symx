@@ -29,6 +29,7 @@ from symx.ota.model import (
     OtaSymbolsExtracted,
     parse_version_tuple,
 )
+from symx.ota.model.materialization import OtaDscProcessTerminatedError
 from symx.ota.extract import extract_symbols
 from symx.ota.meta import retrieve_current_meta
 from symx.ota.mirror import download_ota_from_apple
@@ -280,6 +281,24 @@ class OtaExtract:
                                     1,
                                     attributes={"platform": ota.platform},
                                 )
+                    except OtaDscProcessTerminatedError as e:
+                        sentry_sdk.capture_exception(e)
+                        logger.error(
+                            "OTA materializer terminated for %s %s %s: %s; "
+                            "aborting worker without changing artifact metadata",
+                            ota.platform,
+                            ota.version,
+                            ota.build,
+                            e,
+                        )
+                        sentry_sdk.metrics.count(
+                            "ota.extract.process_terminated",
+                            1,
+                            attributes={"platform": ota.platform, "signal": e.signal_name},
+                        )
+                        # The runner may be resource-starved. Unwind owned local
+                        # work, keep the row mirrored, and leave retry to a fresh run.
+                        raise
                     except OtaExtractError as e:
                         sentry_sdk.capture_exception(e)
                         logger.warning(

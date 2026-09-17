@@ -15,6 +15,10 @@ on:
       symx_run:
         required: true
         type: string
+      remove_simulators:
+        description: Remove preinstalled simulators on disposable OTA/IPSW extraction runners
+        type: boolean
+        default: false
     secrets:
       SENTRY_DSN:
         required: true
@@ -34,8 +38,18 @@ jobs:
       - name: Checkout sources
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: Remove preinstalled simulators
+        id: remove_simulators
+        if: ${{ inputs.remove_simulators }}
+        continue-on-error: true
+        run: |
+          mkdir -p .github/logs
+          set -o pipefail
+          bash .github/scripts/remove-ci-simulators.sh 2>&1 | tee .github/logs/remove-simulators.log
+
       - name: Auth
         id: auth
+        if: ${{ !inputs.remove_simulators || steps.remove_simulators.outcome == 'success' }}
         continue-on-error: true
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
@@ -126,6 +140,8 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SYMX_RUN: ${{ inputs.symx_run }}
+          # Fail-stop supervision is outside the worker to avoid artifact blame.
+          SYMX_CI_DISK_GUARD: "1"
           # Avoid the optional bucket-level metadata probe used only for GCS telemetry enrichment.
           DISABLE_GCS_PYTHON_CLIENT_OTEL_BUCKET_METADATA: "true"
 
@@ -141,6 +157,7 @@ jobs:
           job_name: ${{ inputs.job_name }}
           steps_json: >-
             [
+              {"name":"Remove preinstalled simulators","outcome":${{ toJSON(steps.remove_simulators.outcome) }},"log_path":"remove-simulators.log","fallback_snippet":"Remove simulator devices, caches and runtime images; preserve Xcode and SDKs."},
               {"name":"Auth","outcome":${{ toJSON(steps.auth.outcome) }},"fallback_snippet":"uses google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0"},
               {"name":"Set up Cloud SDK","outcome":${{ toJSON(steps.setup_gcloud.outcome) }},"fallback_snippet":"uses google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1"},
               {"name":"Install dependencies","outcome":${{ toJSON(steps.install_dependencies.outcome) }},"log_path":"install-dependencies.log","fallback_snippet":"Install uv dependencies and symsorter."},
@@ -150,5 +167,5 @@ jobs:
             ]
 
       - name: Fail workflow after notification
-        if: ${{ always() && (steps.auth.outcome == 'failure' || steps.setup_gcloud.outcome == 'failure' || steps.install_dependencies.outcome == 'failure' || steps.install_ipsw.outcome == 'failure' || steps.host_verification.outcome == 'failure' || steps.symx.outcome == 'failure') }}
+        if: ${{ always() && (steps.remove_simulators.outcome == 'failure' || steps.auth.outcome == 'failure' || steps.setup_gcloud.outcome == 'failure' || steps.install_dependencies.outcome == 'failure' || steps.install_ipsw.outcome == 'failure' || steps.host_verification.outcome == 'failure' || steps.symx.outcome == 'failure') }}
         run: exit 1

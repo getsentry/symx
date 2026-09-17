@@ -6,10 +6,12 @@ These values are operation context, not persistence or wire schemas. Non-success
 outcomes retain the parsed report needed for diagnostics and classification.
 """
 
+import signal
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from symx.diagnostics import truncate_text
 from symx.model import Arch
 from symx.ota.model.ipsw_report import OtaDscReport
 from symx.ota.model import OtaExtractError, OtaExtractionRequest
@@ -106,6 +108,25 @@ class OtaDscUnavailable:
 
 
 OtaDscMaterializationAttempt = OtaDscMaterializationResult | OtaDscNotPresent | OtaDscUnavailable
+
+
+class OtaDscProcessTerminatedError(OtaExtractError):
+    """The materializer was killed by a signal; this is not an artifact disposition."""
+
+    def __init__(self, signal_number: int, stderr: str | bytes | None = None) -> None:
+        self.signal_number = signal_number
+
+        try:
+            self.signal_name = signal.Signals(signal_number).name
+        except ValueError:
+            self.signal_name = f"SIG{signal_number}"
+
+        self.stderr = truncate_text(stderr)
+
+        super().__init__(
+            f"OTA DSC materializer terminated by {self.signal_name} (signal {signal_number}): "
+            f"{self.stderr or '<empty stderr>'}"
+        )
 
 
 class OtaDscProtocolError(OtaExtractError):

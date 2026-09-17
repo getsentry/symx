@@ -176,7 +176,9 @@ Path-less errors cannot be excluded by diagnostic text.
 
 There is no second materialization syntax or human-log-based fallback. A real failure from any architecture stops
 the operation, even if an earlier architecture succeeded. Structured errors and bounded stderr are retained for
-diagnostics; post-failure OTA probes do not materialize symbols.
+diagnostics; post-failure OTA probes do not materialize symbols. A materializer killed by a signal raises a distinct
+`OtaDscProcessTerminatedError` before JSON parsing, even if stdout contains a valid-looking report. Positive exit
+codes with missing/malformed JSON remain protocol errors.
 
 ## 2.2 GCS-backed runs from your machine
 
@@ -392,7 +394,42 @@ It does the following:
 - logs macOS host, Xcode, AppleArchive (`/usr/bin/aa`), and `ipsw` versions for extraction diagnostics,
 - runs `scripts/run_symx_gha.py`.
 
-This is used for extraction stages.
+This is used for OTA and IPSW extraction stages. Both callers explicitly enable `remove_simulators` (default
+`false` for other callers). Before authentication, dependencies, or artifact downloads, the disposable CI runner
+uses `.github/scripts/remove-ci-simulators.sh` to shut down/delete simulator devices, remove generated simulator
+dyld caches, and delete runtime images together with their associated MobileAssets. CoreSimulator performs the
+unmount/removal lifecycle; the script does not recursively remove mounted paths, Xcode, SDKs, or OS components.
+Runtime inventories and workspace/temp-filesystem free space are logged before/after cleanup, including disk
+reporting on failure, to `.github/logs/remove-simulators.log`. A cleanup failure blocks Symx and is included in the
+normal failure notification. Actual reclaimed space depends on the runner image; no fixed saving is assumed.
+
+**Do not run this destructive preparation on a workstation or a persistent/shared runner.** The script checks for
+macOS Actions and a workspace, but those environment checks are not proof that a host is disposable. It is not
+called by local extraction commands. The separate `symx-simulator-extract.yml` deliberately retains simulators
+and has neither this cleanup nor the disk watchdog.
+
+### Emergency extraction disk watchdog
+
+The reusable macOS wrapper enables `SYMX_CI_DISK_GUARD=1` for `scripts/run_symx_gha.py`. The guarded path is
+restricted to macOS Actions `ota extract` / `ipsw extract` jobs. It checks the workspace and temporary-directory
+filesystems before starting the worker, every **one second**, and at exit. Below **1 GiB free**, it emits a
+`DiskSpaceExhaustedError` to Sentry and exits unsuccessfully. This is an emergency safety floor, not a prediction
+that an artifact will fit, and rapid writes can exhaust space between samples.
+
+During a run the supervisor first freezes the worker's isolated process group and snapshots/freezes its owned
+descendants, including helpers in separate sessions, then kills them and reaps the worker. This deliberately
+does not let ordinary artifact-error handlers mark the item failed or continue to another item. There is no
+same-run retry or supervisor metadata mutation; the in-progress mirrored item remains eligible for a fresh
+worker without migration. Already completed storage writes are not rolled back.
+
+The disk-specific event preserves the **pre-intervention** path/total/used/free samples, threshold, worker PID,
+GitHub run ID, and pipeline; recovery of disk space after process termination must not erase the diagnosis.
+Existing stdout/stderr still flows into `symx.log`. Unrelated external signals remain distinct and are not
+reclassified as disk exhaustion when free space is healthy.
+
+Emergency termination does not guarantee detach of OS-managed mounts or cleanup of backing files: the disposable
+VM must be torn down rather than reused after an abort. No broad filesystem deletion or global process-name kill
+is performed. The guard is CI-only; local `extract-file` calls retain their existing lifecycle.
 
 ## 3.4 Variables, secrets, and credentials
 
@@ -548,6 +585,7 @@ Representative counters/distributions/gauges emitted by the current code:
 - `ota.mirror.failed`
 - `ota.extract.succeeded`
 - `ota.extract.failed`
+- `ota.extract.process_terminated` (platform and signal name; aborts without an artifact-state update)
 - `ota.extract.materialization.succeeded`
 - `ota.extract.materialization.failed`
 - `ota.extract.materialization.incomplete`
@@ -642,6 +680,23 @@ What Symx does:
 - clears `download_path`
 - resets state to `indexed`
 - relies on a later mirror run to repopulate the mirror
+
+### OTA materializer signal termination (row remains `mirrored`)
+
+`OtaDscProcessTerminatedError` means the direct materializer subprocess exited by a signal, not that its JSON
+schema or the OTA is invalid. The OTA worker reports the exception and aborts immediately, without same-run
+retry, symbol upload, or metadata update. `last_run` and `last_modified` remain unchanged: correlate this failure
+with Sentry and workflow logs rather than expecting a new persisted run attribution.
+
+For `SIGKILL`, inspect runner memory/physical footprint, swap, and free disk before retrying; the signal alone
+is not proof of OOM. The CI watchdog reports its own low-disk interventions as `DiskSpaceExhaustedError`, rather
+than waiting for an unrelated-looking downstream failure. A fresh worker can select the still-mirrored row naturally, but a resource-bound artifact
+may fail repeatedly on the same runner size and block later work. Correct the resource constraint before
+repeated retries. This handling does not increase capacity or repair historical failed rows.
+
+Symx unwinds its own temporary output/download scopes. A killed `ipsw` cannot be assumed to have cleaned its
+private mounts or files. On a local host, inspect owned mounts and detach them before removing backing files;
+do not delete unrelated temporary paths. Avoid continuing extraction on a potentially unhealthy runner.
 
 ### `symbol_extraction_failed`
 

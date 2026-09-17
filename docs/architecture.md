@@ -97,7 +97,8 @@ Workflow: [`symx-ipsw-mirror.yml`](../.github/workflows/symx-ipsw-mirror.yml)
 
 Workflow: [`symx-ipsw-extract.yml`](../.github/workflows/symx-ipsw-extract.yml)
 
-1. GitHub Actions starts a macOS job.
+1. GitHub Actions starts a disposable macOS job, removes unneeded simulator runtimes/devices/caches while retaining
+   Xcode/SDKs, and enables the CI disk watchdog.
 2. The job runs `symx ipsw extract -t 315 -s $SYMX_STORE`.
 3. `IpswGcsStorage.artifact_iter(extract_filter)` continuously reloads the remote metadata and picks the next artifact with at least one `mirrored` source.
 4. For each mirrored source:
@@ -157,7 +158,8 @@ other mirror-stage failure currently marks it `indexed_invalid`.
 
 Workflow: [`symx-ota-extract.yml`](../.github/workflows/symx-ota-extract.yml)
 
-1. GitHub Actions starts a macOS job.
+1. GitHub Actions starts a disposable macOS job, removes unneeded simulator runtimes/devices/caches while retaining
+   Xcode/SDKs, and enables the CI disk watchdog.
 2. The job runs `symx ota extract -t 330 -s $SYMX_STORE`.
 3. `iter_mirror()` continuously reloads OTA metadata from GCS and always yields the newest mirrored OTA first.
 4. For each mirrored OTA:
@@ -195,6 +197,25 @@ affect control flow.
 
 Protocol and invocation violations are exceptions, whereas expected materialization availability is represented by typed
 errors instead of exceptions. `ipsw` owns the OTA cryptex mount lifecycle.
+
+A negative materializer subprocess return code raises `OtaDscProcessTerminatedError` before parsing any stdout,
+including valid-looking JSON. The error retains the signal number/name and bounded stderr; signal termination
+alone does not identify its cause. The OTA runner captures the error, emits `ota.extract.process_terminated`,
+and aborts without uploading or changing the artifact's metadata (including state, `last_run`, and `last_modified`).
+The row stays `mirrored` for a fresh worker. There is no same-run retry or continuation to another artifact:
+resource pressure and interrupted tool cleanup can make either unsafe. Symx-owned temporary scopes unwind;
+this does not guarantee cleanup of `ipsw`-owned mounts or temporary files after a signal.
+
+Nonnegative exits still require a valid report; a positive exit with missing/malformed JSON remains a protocol
+error. Ordinary `OtaExtractError` failures retain the failed-row/continue policy.
+
+For both OTA and IPSW CI extraction, a separate supervisor checks workspace/temp free space before launch and
+every second. Below a 1 GiB emergency floor, it stops the worker and owned tool processes, reports
+`DiskSpaceExhaustedError` with the original disk samples, and exits. The supervisor never mutates artifact metadata
+or retries in the same run; the intervention bypasses artifact-failure handlers, so a mirrored item can be selected
+by a fresh runner without migration. It covers the entire worker, not only DSC materialization. Previously completed
+writes are not rolled back. This fail-stop lifecycle relies on disposal of the CI VM for any remaining OS-managed
+mounts and does not run in local commands or simulator collection. See [operations](operations.md#emergency-extraction-disk-watchdog).
 
 ### Classifying an OTA that has no usable DSC
 
@@ -532,6 +553,7 @@ stateDiagram-v2
 - `iter_mirror()` always reloads metadata and prefers the newest mirrored OTA first.
 - Existing `unsupported_ota_payload` rows remain terminal and may be reset to `mirrored` through an admin curated rerun. The default extractor no longer creates new rows from a `payload-extract` phase plus payload/BOM inventory alone; that evidence does not distinguish unsupported data from transient failures.
 - A `delta_ota` row may be reset to `mirrored` only through an explicitly filtered curated extract rerun, for example after correcting a false delta classification. `recovery_ota` remains excluded.
+- A signal-terminated OTA DSC materializer aborts the worker with no metadata update; the row remains `mirrored`.
 - The current `ota migrate-storage` path resets **all** OTAs in `symbol_extraction_failed` back to `mirrored`.
 
 ## 5.3 Manual-only and domain-specific nuances
