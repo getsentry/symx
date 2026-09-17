@@ -12,7 +12,7 @@ import sentry_sdk
 
 logger = logging.getLogger(__name__)
 
-MINIMUM_IPSW_VERSION = "3.1.718"
+MINIMUM_IPSW_VERSION = "3.1.721"
 _IPSW_RELEASE_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 

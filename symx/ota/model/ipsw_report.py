@@ -27,6 +27,9 @@ class OtaDscReportError(BaseModel):
     phase: str = Field(min_length=1)
     source: str
     message: str = Field(min_length=1)
+    # dsc-validation identifies a family by its report-relative primary path,
+    # including when only its sidecars were materialized. Older reports omit it.
+    path: str | None = Field(default=None, min_length=1)
 
 
 class OtaDscReport(BaseModel):

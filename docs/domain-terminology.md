@@ -92,7 +92,7 @@ System/Library/dyld/
 System/Library/Caches/com.apple.dyld/
 ```
 
-Symx deliberately excludes DriverKit and `System/x86Support` primaries from its symbol-extraction candidates. Files from those domains can still appear in an `ipsw` materialization report.
+Symx's OTA extractor currently excludes `DriverKit` and `System/x86Support` primaries from its symbol-extraction candidates. Files from those domains can still appear in an `ipsw` materialization report. This is not a pipeline-wide policy: IPSW Rosetta extraction includes the x86Support cache.
 
 ## Extraction stages
 
@@ -104,11 +104,11 @@ A successful subprocess is not by itself proof of a usable cache family. Apple A
 
 ### Complete materialization report
 
-For Symx's `ipsw` contract, `complete=true` means the materialization operation has no unresolved structured errors and each reported/requested DSC architecture has at least one cache family that can be opened with all companions required by its primary header.
+`complete=true` means the materialization operation has no structured errors. `ipsw` 3.1.721 checks each reported family independently, keyed by directory and architecture. A valid System family does not make a broken `DriverKit` family complete.
 
-It does not mean that every alternate family for the same architecture is usable. For example, a valid normal System family can satisfy `arm64e` even if an unsupported DriverKit family is incomplete.
+A `dsc-validation` error identifies an invalid family with a report-relative primary `path`, including when only sidecars were materialized. Other error phases and older producers may omit that optional field. Symx pins `ipsw` 3.1.721 to include this producer behavior.
 
-A report containing `dsc-validation` means no reported family for at least one architecture could be opened completely. Symx may classify that as an expected skip only when trusted metadata independently identifies a delta or recovery artifact; full and unknown artifacts remain failures.
+Symx can still extract valid `System` caches from a globally incomplete report when every failure is explicitly attributed by `path` and `source` to a reported family it excludes (`DriverKit` or `x86Support`). It logs those failures without changing the upstream completeness attribution. If supported input remains unavailable and errors contain only `dsc-validation`, trusted delta/recovery metadata can identify an expected skip; mixed failures and non-excluded failures on full or unknown artifacts remain failures.
 
 ### Split
 

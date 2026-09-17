@@ -6,10 +6,11 @@ import pytest
 from symx import tools
 
 
+@pytest.mark.parametrize("version", ["3.1.717", "3.1.718", "3.1.719", "3.1.720"])
 def test_validate_shell_deps_exits_when_ipsw_is_too_old(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    version: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    monkeypatch.setattr(tools, "ipsw_version", lambda: "3.1.717")
+    monkeypatch.setattr(tools, "ipsw_version", lambda: version)
 
     def unexpected_subprocess(*args: object, **kwargs: object) -> CompletedProcess[bytes]:
         raise AssertionError("symsorter should not be checked when ipsw is too old")
@@ -20,7 +21,7 @@ def test_validate_shell_deps_exits_when_ipsw_is_too_old(
         tools.validate_shell_deps()
 
     assert error.value.code == 1
-    assert "ipsw 3.1.717 is too old; version 3.1.718 or newer is required" in caplog.text
+    assert f"ipsw {version} is too old; version 3.1.721 or newer is required" in caplog.text
 
 
 def test_validate_shell_deps_exits_when_ipsw_version_is_unparseable(
@@ -35,7 +36,7 @@ def test_validate_shell_deps_exits_when_ipsw_version_is_unparseable(
     assert "Unexpected ipsw version format: 'development'" in caplog.text
 
 
-@pytest.mark.parametrize("version", ["3.1.718", "3.1.719", "3.2.0", "4.0.0"])
+@pytest.mark.parametrize("version", ["3.1.721", "3.1.722", "3.2.0", "4.0.0"])
 def test_validate_shell_deps_accepts_minimum_or_newer(version: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tools, "ipsw_version", lambda: version)
     monkeypatch.setattr(

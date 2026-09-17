@@ -70,10 +70,10 @@ Needed for:
 
 Requirement:
 
-- checksum-pinned `ipsw` 3.1.718 or newer installed and on `PATH`
+- checksum-pinned `ipsw` 3.1.721 or newer installed and on `PATH`
 
 The schema-1 OTA metadata envelope was introduced in `ipsw` 3.1.713. Symx standardizes metadata retrieval and
-extraction on the newer 3.1.718 production pin.
+extraction on the newer 3.1.721 production pin.
 
 ### Extraction commands
 
@@ -87,12 +87,12 @@ Needed for:
 
 Requirements:
 
-- checksum-pinned `ipsw` 3.1.718 or newer installed and on `PATH`
+- checksum-pinned `ipsw` 3.1.721 or newer installed and on `PATH`
 - executable `./symsorter` at the repository root
 
 For IPSW extraction, Symx also ships a vendored AEA PEM DB snapshot at `symx/ipsw/data/fcs-keys.json` and passes it to `ipsw` via `--pem-db` before `ipsw` falls back to live Apple FCS-key lookup. Refresh that file from upstream `ipsw/pkg/aea/data/fcs-keys.gz` when newly mirrored IPSWs start failing with AEA/FCS-key 403s on GitHub macOS runners. Before the high-level `ipsw mount sys` / `ipsw extract --dyld` steps, Symx also does a small AEA preflight against the selected DMG member so failures can be classified as key-resolution problems earlier.
 
-Production extraction runs on **macOS** because some inputs require Apple-provided macOS and Xcode binaries to handle encryption and compression algorithms that are unavailable in the Linux environment. Neither `ipsw`, DMG mounting, nor `symsorter` is inherently limited to macOS. Symx requires `ipsw` 3.1.718 or newer. The schema-1 `ipsw download ota --json` envelope first appeared in 3.1.713; the 3.1.718 production pin also includes the current OTA resolver, sequential macOS cryptex architecture search, and `arm64e_x1` DSC/cryptex handling. `ipsw` owns any cryptex patching and temporary mount lifecycle.
+Production extraction runs on **macOS** because some inputs require Apple-provided macOS and Xcode binaries to handle encryption and compression algorithms that are unavailable in the Linux environment. Neither `ipsw`, DMG mounting, nor `symsorter` is inherently limited to macOS. Symx requires `ipsw` 3.1.721 or newer for per-family validation, structured error paths and hardened cache-family opening. The schema-1 `ipsw download ota --json` envelope first appeared in 3.1.713; the current pin also includes the OTA resolver, sequential macOS cryptex architecture search, and `arm64e_x1` DSC/cryptex handling. `ipsw` owns any cryptex patching and temporary mount lifecycle.
 
 ### Simulator extraction
 
@@ -149,15 +149,20 @@ What it does:
 - validates `ipsw` and `./symsorter`,
 - for macOS, requests `arm64e`, `arm64e_x1`, `x86_64`, and `x86_64h` sequentially with exactly one `--dyld-arch` per operation;
   other platforms use the existing unfiltered operation,
-- strictly parses each schema-1 report and validates every reported regular file beneath that attempt's temporary
-  output root; `ipsw` verifies that each reported DSC architecture has at least one usable primary cache family,
-- distinguishes a requested architecture that is absent from any source-attributed, partial, or other real failure,
-- treats reports containing only `dsc-validation` failures as expected skips only when trusted metadata confirms a
-  delta or recovery artifact; full and unknown artifacts remain failures,
+- strictly parses each `schema-1` report and validates every reported regular file beneath that attempt's temporary
+  output root, including files belonging to excluded families,
+- warns and continues past `dsc-validation` failures only when every error's structured primary `path` and `source`
+  match a reported `DriverKit` or `x86Support` family; a supported `System` primary is still required,
+- distinguishes a requested architecture that is absent from any other partial or real failure,
+- treats remaining reports containing only `dsc-validation` failures as expected skips only when trusted metadata
+  confirms a delta or recovery artifact; full and unknown artifacts are still failures,
 - splits and compresses each successful macOS architecture before removing its materialization directory,
 - restores all successful split archives and symsorts them in one invocation,
 - preserves the caller-owned OTA file on both success and failure,
 - prints the output directories containing the symsorter result.
+
+Per-family validation and its optional error `path` are included in the pinned `ipsw` 3.1.721 release.
+Path-less errors cannot be excluded by diagnostic text.
 
 There is no second materialization syntax or human-log-based fallback. A real failure from any architecture stops
 the operation, even if an earlier architecture succeeded. Structured errors and bounded stderr are retained for
@@ -664,8 +669,10 @@ Classification uses trusted metadata rather than extraction-failure symptoms:
   typed plist and AEA-only `PrereqBuild` text fallbacks.
 - A `payload-extract` failure and payload/BOM inventory are not enough to classify an OTA because transient failures
   can produce the same evidence. These failures remain `symbol_extraction_failed` and visible in the default view.
-- A report whose errors are exclusively `dsc-validation` can use the same trusted delta/recovery metadata; mixed
-  validation and extraction errors remain failures, as do validation failures on full or unknown artifacts.
+- If supported materialization remains unavailable, a report whose errors are exclusively `dsc-validation` can use
+  the same trusted delta/recovery metadata; mixed validation and extraction errors are still failures, as are
+  non-excluded validation failures on full or unknown artifacts. Errors positively attributed to excluded `DriverKit`
+  or `x86Support` families do not prevent extracting usable `System` caches.
 - CDN paths, `image_patches/`, and archive listings are never used to infer an artifact type.
 
 Classification logs record which trusted source was used.
