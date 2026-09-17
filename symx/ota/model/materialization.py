@@ -92,6 +92,15 @@ class OtaDscUnavailable:
         return not self.report.files and any(error.phase == "dsc-discovery" for error in self.report.errors)
 
     @property
+    def has_only_dsc_validation_failures(self) -> bool:
+        """Whether every cause of an incomplete materialization is cache-family validation."""
+        return (
+            self.reason == OtaDscUnavailableReason.INCOMPLETE
+            and bool(self.report.errors)
+            and all(error.phase == "dsc-validation" for error in self.report.errors)
+        )
+
+    @property
     def has_payload_extraction_failure(self) -> bool:
         return any(error.phase == "payload-extract" for error in self.report.errors)
 

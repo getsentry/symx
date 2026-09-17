@@ -74,7 +74,7 @@ AEA_MAGIC = b"AEA1"
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 _LEADING_IPSW_GLYPH_RE = re.compile(r"^\s*[•⨯]\s*")
 _PREREQUISITE_BUILD_LINE_RE = re.compile(r"^PrereqBuild\s*=\s*(\S+)\s*$", re.MULTILINE)
-IPSW_OTA_DSC_JSON_CONTRACT_RELEASE = "3.1.707"
+IPSW_OTA_DSC_JSON_CONTRACT_RELEASE = "3.1.721"
 
 
 class PayloadListingProbeResult(TypedDict):
@@ -583,6 +583,37 @@ def _path_contains_sequence(parts: tuple[str, ...], sequence: tuple[str, ...]) -
     return any(parts[index : index + width] == sequence for index in range(len(parts) - width + 1))
 
 
+def _is_excluded_dsc_path(path: PurePosixPath) -> bool:
+    return any(
+        _path_contains_sequence(path.parts, ("System", subtree, "System", "Library"))
+        for subtree in ("DriverKit", "x86Support")
+    )
+
+
+def _has_only_excluded_family_failures(
+    report: OtaDscReport,
+    validated_files: list[tuple[OtaDscReportFile, PurePosixPath, Path]],
+) -> bool:
+    # Match only canonical primary paths derived from validated report entries.
+    # A sidecar establishes the family even when its primary is missing. This
+    # also keeps malformed, unreported and legacy path-less errors conservative.
+    excluded_families = {
+        (str(path.with_name(f"{DYLD_SHARED_CACHE}_{entry.arch}")), entry.source)
+        for entry, path, _ in validated_files
+        if entry.arch in Arch and _is_excluded_dsc_path(path)
+    }
+
+    if not report.errors or not all(
+        error.phase == "dsc-validation" and (error.path, error.source) in excluded_families for error in report.errors
+    ):
+        return False
+
+    for error in report.errors:
+        logger.warning("Ignoring DSC validation failure for excluded family %s: %s", error.path, error.message)
+
+    return True
+
+
 def _supported_dsc_source(
     entry: OtaDscReportFile,
     relative_path: PurePosixPath,
@@ -596,10 +627,7 @@ def _supported_dsc_source(
     if relative_path.name != f"{DYLD_SHARED_CACHE}_{arch}":
         return None
 
-    parts = relative_path.parts
-    if _path_contains_sequence(parts, ("System", "DriverKit", "System", "Library")):
-        return None
-    if _path_contains_sequence(parts, ("System", "x86Support", "System", "Library")):
+    if _is_excluded_dsc_path(relative_path):
         return None
 
     parent_parts = relative_path.parent.parts
@@ -636,6 +664,7 @@ def _set_materialization_report_data(span: Span, report: OtaDscReport) -> None:
                 {
                     "phase": error.phase,
                     "source": error.source,
+                    "path": error.path,
                     "message": truncate_text(error.message, max_chars=500),
                 }
                 for error in report.errors
@@ -731,7 +760,7 @@ def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationA
                 )
                 return OtaDscNotPresent(arch=request.requested_arch, report=report)
 
-            if not report.complete:
+            if not report.complete and not _has_only_excluded_family_failures(report, validated_files):
                 phases = ", ".join(sorted({error.phase for error in report.errors}))
                 return _record_materialization_unavailable(
                     span,
@@ -811,7 +840,7 @@ def _resolve_unavailable_materialization(
     request: OtaExtractionRequest,
     unavailable: OtaDscUnavailable,
 ) -> OtaExtractionSkipped:
-    if unavailable.exhausted_sources_without_primary:
+    if unavailable.exhausted_sources_without_primary or unavailable.has_only_dsc_validation_failures:
         classification = _classify_ota(request)
         if classification == OtaClassification.DELTA:
             return OtaExtractionSkipped(reason=OtaExtractionSkipReason.DELTA)

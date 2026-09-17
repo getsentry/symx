@@ -1,6 +1,6 @@
 # Architecture and state model
 
-This document explains how Symx works today: what gets processed, when state changes, where data lives, and which design choices shape the current system.
+This document explains how Symx works today: what gets processed, when state changes, where data lives, and which design choices shape the current system. Apple firmware and extraction terms used here are defined centrally in [domain-terminology.md](domain-terminology.md).
 
 ## 1. System model
 
@@ -162,14 +162,19 @@ Workflow: [`symx-ota-extract.yml`](../.github/workflows/symx-ota-extract.yml)
 3. `iter_mirror()` continuously reloads OTA metadata from GCS and always yields the newest mirrored OTA first.
 4. For each mirrored OTA:
    - download the mirrored OTA from GCS,
-   - for macOS, request `arm64e`, `arm64e_x1`, `x86_64`, and `x86_64h` from `ipsw` one at a time; other platforms retain one
-     unfiltered materialization operation,
-   - parse every schema-1 report into strict typed models and independently validate every reported path as a
-     regular file beneath that attempt's output root,
+   - for macOS, request `arm64e`, `arm64e_x1`, `x86_64`, and `x86_64h` from `ipsw` one at a time; other platforms keep
+     just the one unfiltered materialization operation,
+   - parse every `schema-1` report into strict typed models and independently validate every reported path as a
+     regular file beneath that attempt's output root, including files from excluded families,
+   - accept a globally incomplete report only when every error is `dsc-validation` with a structured primary `path`
+     and `source` matching a reported `DriverKit` or `x86Support` family; log those excluded failures and still require
+     supported System primaries,
    - normalize each valid report into a typed materialization outcome: supported primary DSCs, requested architecture
      absent, or unavailable input with an explicit `incomplete`/`no_supported_primary` reason,
    - treat an empty report containing only unattributed `dsc-discovery` errors as that requested architecture being
-     absent; files plus errors or a source-attributed error produce an `incomplete` outcome,
+     absent; other non-excluded failures produce an `incomplete` outcome,
+   - when unavailable input has only `dsc-validation` errors, classify instead from trusted artifact metadata: confirmed
+     delta and recovery artifacts become their expected skip outcomes, while full or unknown artifacts remain failures,
    - split each macOS architecture while its materialized cache and subcaches are present, compress the split
      directory, and remove that attempt's materialization before starting the next architecture,
    - after all macOS attempts, restore every successful split archive and symsort them together,
@@ -177,19 +182,25 @@ Workflow: [`symx-ota-extract.yml`](../.github/workflows/symx-ota-extract.yml)
    - update the OTA state once.
 
 The structured extraction report was introduced in `ipsw` 3.1.707, sequential macOS extraction first worked with
-3.1.711's cryptex architecture search, and the schema-1 OTA metadata envelope was introduced in 3.1.713. Symx now
-requires checksum-pinned `ipsw` 3.1.718 or newer to include the current OTA resolver and `arm64e_x1` DSC/cryptex
-handling. There is no
-literal, payload-pattern, or other materialization fallback after a JSON operation. At least one requested macOS
-architecture must be present, and one successful architecture never hides another architecture's materialization or
-split failure. Human stderr is retained only as bounded diagnostic data and does not drive control flow. Protocol and
-invocation violations remain exceptions; expected materialization availability is represented by typed outcomes
-instead of exceptions. `ipsw` owns the OTA cryptex mount lifecycle.
+3.1.711's cryptex architecture search, and the `schema-1` OTA metadata envelope was introduced in 3.1.713. Symx now
+requires `ipsw` 3.1.721 or newer for per-family `dsc-validation` and its report-relative error `path`, plus hardened 
+cache-family opening. This also includes the current OTA resolver and `arm64e_x1` DSC/cryptex handling.
+
+Path-less errors are still unavailable/classification outcomes and there is no literal, payload-pattern, or
+other materialization fallback after a JSON operation. 
+
+At least one requested macOS architecture must be present, and one successful architecture never hides another 
+architecture's materialization or split failure. Human stderr is retained only as bounded diagnostic data and does not 
+affect control flow.
+
+Protocol and invocation violations are exceptions, whereas expected materialization availability is represented by typed
+errors instead of exceptions. `ipsw` owns the OTA cryptex mount lifecycle.
 
 ### Classifying an OTA that has no usable DSC
 
-Symx classifies an OTA only after `ipsw` cannot provide a supported primary DSC. The classifier uses these sources,
-in order:
+Symx classifies an OTA after `ipsw` either cannot provide a supported primary DSC or reports only cache-family
+`dsc-validation` failures that cannot all be excluded by Symx's family-selection policy. It does not reclassify mixed
+validation/extraction failures. The classifier uses these sources, in order:
 
 1. **Request metadata:** an OTA requested for the `recovery` platform, or carrying either the
    `com.apple.MobileAsset.RecoveryOSUpdate` provenance asset type or `Darwin Recovery` release type from metadata sync,
@@ -218,8 +229,9 @@ The classifier follows two safety rules:
   archive listings.
 
 `delta` and `recovery` are expected skip outcomes that the storage runner persists as terminal states. An `unknown`
-result preserves the original unavailable-materialization failure. For macOS, classification runs once only after all
-requested architectures are absent.
+result becomes an unavailable-materialization failure. A full artifact with invalid family also is a failure (except it 
+is excluded like `DriverKit`). For macOS, an unavailable attempt is classified immediately; clean architecture absences 
+are classified once after all requested architectures are absent.
 
 A GCS extraction request owns its downloaded temporary OTA and removes it after the final macOS materialization
 attempt, before restoring split archives for symsort. `ota extract-file` does not own its input and always preserves

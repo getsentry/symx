@@ -11,11 +11,13 @@ In practice, Symx is **not** a long-running service. Today it consists of:
 
 ## Documentation map
 
+- [Apple artifact and extraction terminology](docs/domain-terminology.md) — start here for terms such as DSC, primary, cache family, SystemOS image, and materialization
 - [Architecture and state model](docs/architecture.md)
 - [Operations, local setup, deployment, and debugging](docs/operations.md)
 - [Coverage stats page](https://getsentry.github.io/symx/)
 
-If you only read one thing after this README, read **[docs/architecture.md](docs/architecture.md)**.
+If you only read one thing after this README, read **[docs/architecture.md](docs/architecture.md)**. Keep the
+[domain terminology](docs/domain-terminology.md) open when an Apple firmware or extraction term is unfamiliar.
 
 ## What Symx does
 
@@ -91,7 +93,7 @@ Symx uses `uv` for its Python application and tools. The native admin app uses S
 Helpful install/download links:
 
 - [`uv`](https://docs.astral.sh/uv/)
-- [`ipsw` latest release](https://github.com/blacktop/ipsw/releases/latest) / [`ipsw` Homebrew formula](https://formulae.brew.sh/formula/ipsw) (at least version 3.1.718)
+- [`ipsw` latest release](https://github.com/blacktop/ipsw/releases/latest) / [`ipsw` Homebrew formula](https://formulae.brew.sh/formula/ipsw) (at least version 3.1.721)
 - [`gh` CLI](https://cli.github.com/)
 - [Google Cloud CLI / `gcloud`](https://cloud.google.com/sdk/docs/install)
 - [`symsorter` latest GitHub release](https://github.com/getsentry/symbolicator/releases/latest)
@@ -109,7 +111,7 @@ uv sync --dev
   - `gcloud` credentials available via ADC / `GOOGLE_APPLICATION_CREDENTIALS`
   - a storage URI such as `gs://my-bucket` or `gs://my-project@my-bucket`
 - **OTA metadata/mirroring and extraction commands**
-  - `ipsw` **3.1.718 or newer** installed and on `PATH`
+  - `ipsw` **3.1.721 or newer** installed and on `PATH`
 - **Extraction commands**
   - executable `./symsorter` in the repo root
   - in practice, extraction is run on **macOS** in production
