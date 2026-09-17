@@ -5,8 +5,10 @@ Uses mock storage and injected test doubles to test the orchestration logic
 without actual file downloads or subprocess calls.
 """
 
+import signal
 from datetime import timedelta
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -14,6 +16,7 @@ from symx.model import ArtifactProcessingState
 from symx.ota.model.ipsw_report import OtaDscReport, OtaDscReportError
 from symx.ota.model.materialization import (
     OtaDscMaterializationError,
+    OtaDscProcessTerminatedError,
     OtaDscUnavailable,
     OtaDscUnavailableReason,
 )
@@ -173,6 +176,75 @@ def test_extract_marks_failed_extraction(tmp_path: Path) -> None:
     OtaExtract(storage, extractor=extractor).extract(FakeTimeout(timedelta(minutes=5)))
 
     assert storage.artifacts["key1"].processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
+
+
+def test_terminated_materializer_aborts_worker_without_blame_or_state_change(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    capture = Mock()
+    metric = Mock()
+    monkeypatch.setattr("symx.ota.runners.sentry_sdk.capture_exception", capture)
+    monkeypatch.setattr("symx.ota.runners.sentry_sdk.metrics.count", metric)
+    artifact = make_ota_artifact(id="key1", version="27.2")
+    next_artifact = make_ota_artifact(id="key2", version="27.1")
+    before = [item.model_dump() for item in (artifact, next_artifact)]
+    storage = MockStorage({"key1": artifact, "key2": next_artifact})
+
+    def fake_load(ota: OtaArtifact, download_dir: Path) -> Path:
+        assert ota is artifact
+        ota_file = download_dir / "test.zip"
+        ota_file.write_bytes(b"downloaded OTA")
+        (download_dir / "partial-output").write_bytes(b"partial")
+        return ota_file
+
+    monkeypatch.setattr(storage, "load_ota", fake_load)
+    error = OtaDscProcessTerminatedError(signal.SIGKILL, b"RawImagePatch returned -1")
+    extractor = FakeOtaExtractor(error=error)
+
+    with pytest.raises(OtaDscProcessTerminatedError, match="SIGKILL") as exc_info:
+        OtaExtract(storage, extractor=extractor).extract(FakeTimeout(timedelta(minutes=5)))
+
+    assert exc_info.value is error
+    capture.assert_called_once_with(error)
+    metric.assert_called_once_with(
+        "ota.extract.process_terminated", 1, attributes={"platform": "ios", "signal": "SIGKILL"}
+    )
+    assert "aborting worker without changing artifact metadata" in caplog.text
+
+    assert [item.model_dump() for item in (artifact, next_artifact)] == before
+    assert storage.meta_updates == []
+    assert storage.uploaded_symbols == []
+    assert len(extractor.extractions) == 1
+    assert all(not request.work_dir.exists() for request in extractor.extractions)
+
+
+def test_ordinary_extraction_failure_still_continues_to_next_artifact(tmp_path: Path) -> None:
+    storage = MockStorage(
+        {
+            "first": make_ota_artifact(id="first", version="27.2"),
+            "second": make_ota_artifact(id="second", version="27.1"),
+        }
+    )
+    ota_file = tmp_path / "test.zip"
+    ota_file.touch()
+    storage.load_ota_returns = ota_file
+
+    class FailFirstExtractor(FakeOtaExtractor):
+        def extract(self, request: OtaExtractionRequest) -> OtaExtractionResult:
+            if not self.extractions:
+                self.extractions.append(request)
+                raise OtaExtractError("ordinary artifact failure")
+            return super().extract(request)
+
+    extractor = FailFirstExtractor()
+    OtaExtract(storage, extractor=extractor).extract(FakeTimeout(timedelta(minutes=5)))
+
+    assert len(extractor.extractions) == 2
+    assert storage.meta_updates == [
+        ("first", ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED),
+        ("second", ArtifactProcessingState.SYMBOLS_EXTRACTED),
+    ]
+    assert len(storage.uploaded_symbols) == 1
 
 
 def test_payload_extract_materialization_failure_is_marked_symbol_extraction_failed(tmp_path: Path) -> None:

@@ -17,6 +17,7 @@ jobs:
     with:
       job_name: Extract OTA symbols
       symx_step: OTA Extract
+      remove_simulators: true
       symx_run: ota extract -t 330 -s ${{ vars.SYMX_STORE }}
     secrets:
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}

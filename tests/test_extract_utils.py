@@ -7,6 +7,7 @@ the OTA and IPSW extraction workflows.
 
 import json
 import plistlib
+import signal
 import subprocess
 import zipfile
 from collections.abc import Callable, Generator
@@ -16,6 +17,7 @@ from subprocess import CompletedProcess
 
 import pytest
 
+from symx.diagnostics import MAX_SUBPROCESS_OUTPUT_CHARS, truncate_text
 from symx.model import MACOS_DSC_ARCHITECTURES, Arch
 from tests.test_ipsw_systemos_images import ToolHarness, make_request, identity, COMMON
 from symx.ipsw import extract as ipsw_extract
@@ -51,6 +53,7 @@ from symx.ota.model.materialization import (
     OtaDscMaterializationRequest,
     OtaDscMaterializationResult,
     OtaDscNotPresent,
+    OtaDscProcessTerminatedError,
     OtaDscProtocolError,
     OtaDscSource,
     OtaDscUnavailable,
@@ -1131,22 +1134,106 @@ def test_extract_ota_rejects_partial_report_before_split(tmp_path: Path, monkeyp
             "schema-1 JSON report",
         ),
         (b"not json", "schema-1 JSON report"),
+        (b"", "schema-1 JSON report"),
     ],
 )
+@pytest.mark.parametrize("returncode", [0, 1, 137])
 def test_extract_ota_rejects_invalid_report_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     report: bytes,
     error_match: str,
+    returncode: int,
 ) -> None:
     request = _ota_materialization_request(tmp_path)
     monkeypatch.setattr(
         "symx.ota.extract.subprocess.run",
-        lambda args, *, stdin, capture_output: CompletedProcess(args=args, returncode=1, stdout=report, stderr=b"bad"),
+        lambda args, *, stdin, capture_output: CompletedProcess(
+            args=args, returncode=returncode, stdout=report, stderr=b"bad"
+        ),
     )
 
     with pytest.raises(OtaDscProtocolError, match=error_match):
         extract_ota(request)
+
+
+@pytest.mark.parametrize(
+    "signal_number, signal_name", [(signal.SIGKILL, "SIGKILL"), (signal.SIGTERM, "SIGTERM"), (127, "SIG127")]
+)
+@pytest.mark.parametrize("stdout", [b"", b'{"partial":', _ota_dsc_report(complete=True, files=[])])
+def test_extract_ota_rejects_terminated_process_before_parsing_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, signal_number: int, signal_name: str, stdout: bytes
+) -> None:
+    request = _ota_materialization_request(tmp_path)
+    monkeypatch.setattr(
+        "symx.ota.extract.subprocess.run",
+        lambda args, *, stdin, capture_output: CompletedProcess(
+            args=args,
+            returncode=-signal_number,
+            stdout=stdout,
+            stderr=b"RawImagePatch returned -1",
+        ),
+    )
+
+    def unexpected_parse(*args: object) -> OtaDscReport:
+        raise AssertionError("JSON parsing must not run after subprocess signal termination")
+
+    monkeypatch.setattr("symx.ota.extract._parse_ota_dsc_report", unexpected_parse)
+
+    with pytest.raises(OtaDscProcessTerminatedError) as exc_info:
+        extract_ota(request)
+
+    error = exc_info.value
+    assert error.signal_number == signal_number
+    assert error.signal_name == signal_name
+    assert signal_name in str(error)
+    assert "RawImagePatch returned -1" in str(error)
+
+
+@pytest.mark.parametrize("stderr", [None, b"", b"bad UTF-8: \xff", b"x" * 20_000])
+def test_materializer_termination_retains_only_bounded_stderr(stderr: bytes | None) -> None:
+    error = OtaDscProcessTerminatedError(signal.SIGKILL, stderr)
+
+    assert error.stderr == truncate_text(stderr)
+    assert (error.stderr or "<empty stderr>") in str(error)
+    assert len(str(error)) < MAX_SUBPROCESS_OUTPUT_CHARS + 200
+    assert not isinstance(error, OtaDscProtocolError)
+
+
+@pytest.mark.parametrize("platform", ["macos", "ios"])
+def test_extract_symbols_cleans_partial_materialization_after_termination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    artifact = tmp_path / "test.ota"
+    artifact.write_bytes(b"caller-owned OTA")
+    request = OtaExtractionRequest(
+        local_ota=artifact,
+        work_dir=tmp_path / "work",
+        platform=platform,
+        version="27.2",
+        build="26B5086k",
+        bundle_id="ota_test",
+    )
+    output_roots: list[Path] = []
+
+    def fake_run(args: list[str], *, stdin: int, capture_output: bool) -> CompletedProcess[bytes]:
+        output_root = Path(args[args.index("--output") + 1])
+        output_roots.append(output_root)
+        (output_root / "partial-dsc").write_bytes(b"partial")
+        return CompletedProcess(args=args, returncode=-signal.SIGKILL, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr("symx.ota.extract.subprocess.run", fake_run)
+    monkeypatch.setattr("symx.ota.extract.split_dsc", lambda *args: pytest.fail("must not split after termination"))
+    monkeypatch.setattr(
+        "symx.ota.extract._classify_ota", lambda *args: pytest.fail("must not classify after termination")
+    )
+
+    with pytest.raises(OtaDscProcessTerminatedError):
+        extract_symbols(request)
+
+    assert len(output_roots) == 1
+    assert not output_roots[0].exists()
+    assert artifact.read_bytes() == b"caller-owned OTA"
 
 
 def test_extract_ota_rejects_report_process_disagreement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1443,8 +1530,9 @@ def test_extract_symbols_processes_macos_architectures_sequentially(
     assert artifact.exists()
 
 
+@pytest.mark.parametrize("terminated", [False, True])
 def test_extract_symbols_macos_real_failure_after_success_is_not_masked(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terminated: bool
 ) -> None:
     artifact = tmp_path / "test.ota"
     artifact.touch()
@@ -1475,6 +1563,8 @@ def test_extract_symbols_macos_real_failure_after_success_is_not_masked(
     ) -> OtaDscMaterializationResult | OtaDscNotPresent | OtaDscUnavailable:
         arch = materialization_request.requested_arch
         if arch == Arch.X86_64:
+            if terminated:
+                raise OtaDscProcessTerminatedError(signal.SIGTERM)
             return unavailable
         if arch == Arch.ARM64E_X1:
             return _arch_not_present(arch)
@@ -1503,10 +1593,12 @@ def test_extract_symbols_macos_real_failure_after_success_is_not_masked(
         lambda *args: pytest.fail("symsort must not run after a later architecture fails"),
     )
 
-    with pytest.raises(OtaDscMaterializationError) as exc_info:
+    expected_error = OtaDscProcessTerminatedError if terminated else OtaDscMaterializationError
+    with pytest.raises(expected_error) as exc_info:
         extract_symbols(request)
 
-    assert exc_info.value.unavailable is unavailable
+    if isinstance(exc_info.value, OtaDscMaterializationError):
+        assert exc_info.value.unavailable is unavailable
     assert split_dir is not None and not split_dir.exists()
     assert not list(request.work_dir.glob("**/*.tar.zst"))
     assert artifact.exists()
