@@ -59,6 +59,8 @@ _SYMSORTER_SORTED_DEBUG_FILES_RE = re.compile(r"^Sorted (\d+) debug files$")
 _SYMSORTER_CREATED_SOURCE_BUNDLES_RE = re.compile(r"^Created (\d+) source bundles$")
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 _LEADING_IPSW_GLYPH_RE = re.compile(r"^\s*[•⨯]\s*")
+_IPSW_USAGE_RE = re.compile(r"^\s*Usage:")
+_IPSW_TERMINAL_DIAGNOSTIC_RE = re.compile(r"^\s*(?:⨯\s*|Error:\s*)")
 
 _SYS_MOUNT_CLEANUP_TIMEOUT_SECONDS = 60
 _ERROR_SUMMARY_MARKERS = (
@@ -203,11 +205,12 @@ def _ipsw_command_data(
     stderr: str | bytes | None,
     directories: list[Path],
 ) -> dict[str, object]:
+    filtered_stderr = _filter_ipsw_usage(stderr)
     return {
         "command": format_command(command),
         "stdout": truncate_text(stdout),
-        "stderr": truncate_text(stderr),
-        "stderr_summary": _summarize_ipsw_stderr(stderr),
+        "stderr": truncate_text(filtered_stderr),
+        "stderr_summary": _summarize_ipsw_stderr(filtered_stderr),
         "directories": [directory_data(directory) for directory in directories],
     }
 
@@ -609,7 +612,7 @@ class _IpswExtractionRun:
 
                 span.set_data("ipsw_extract", _ipsw_command_data(command, stdout, stderr, [output_dir]))
                 if process.returncode != 0:
-                    stderr_text = decode_subprocess_output(stderr).strip()
+                    stderr_text = _filter_ipsw_usage(stderr).strip()
                     if (
                         arch is not None
                         and "no dyld_shared_cache files found matching the specified archs" in stderr_text
@@ -901,8 +904,30 @@ def _vendored_ipsw_pem_db_keys() -> frozenset[str]:
     return frozenset(str(key) for key in raw_data_obj)
 
 
-def _summarize_ipsw_stderr(stderr: str | bytes | None) -> str | None:
+def _filter_ipsw_usage(stderr: str | bytes | None) -> str:
+    """Remove Cobra usage blocks while retaining surrounding diagnostics."""
     text = decode_subprocess_output(stderr)
+    if not text:
+        return ""
+
+    filtered: list[str] = []
+    suppressing_usage = False
+    for line in text.splitlines(keepends=True):
+        plain_line = _strip_ansi(line)
+        if not suppressing_usage and _IPSW_USAGE_RE.match(plain_line):
+            suppressing_usage = True
+            continue
+        if suppressing_usage:
+            if not _IPSW_TERMINAL_DIAGNOSTIC_RE.match(plain_line):
+                continue
+            suppressing_usage = False
+        filtered.append(line)
+
+    return "".join(filtered)
+
+
+def _summarize_ipsw_stderr(stderr: str | bytes | None) -> str | None:
+    text = _filter_ipsw_usage(stderr)
     if not text:
         return None
 
