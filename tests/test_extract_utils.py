@@ -374,6 +374,74 @@ def _direct_attempt(run: _IpswExtractionRun, arch: Arch | None = None) -> IpswDs
     return attempt
 
 
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        (
+            "• Extracting dyld_shared_cache\nUsage:\n  ipsw extract [flags]\nFlags:\n  -h, --help\n"
+            "   ⨯ no dyld_shared_cache files found\ncleanup detail\n",
+            "• Extracting dyld_shared_cache\n   ⨯ no dyld_shared_cache files found\ncleanup detail\n",
+        ),
+        (
+            "\x1b[1mUsage:\x1b[0m\n  ipsw extract [flags]\n\x1b[31m  ⨯ failed to mount DMG\x1b[0m\n",
+            "\x1b[31m  ⨯ failed to mount DMG\x1b[0m\n",
+        ),
+        ("Usage:\n  ipsw extract [flags]\nError: failed to mount DMG\n", "Error: failed to mount DMG\n"),
+        ("Error: invalid input\nUsage:\n  ipsw extract [flags]\n", "Error: invalid input\n"),
+        ("ordinary diagnostic\n", "ordinary diagnostic\n"),
+    ],
+)
+def test_filter_ipsw_usage_preserves_diagnostics(stderr: str, expected: str) -> None:
+    assert ipsw_extract._filter_ipsw_usage(stderr) == expected
+
+
+def test_filter_ipsw_usage_removes_real_arch_probe_usage_block() -> None:
+    stderr = """• Extracting dyld_shared_cache
+      • Preparing caches: SystemOS
+      • Extracted /tmp/044-44677-110.dmg.aea from UniversalMac_26.0_25A5316i_Restore.ipsw
+      • Mounting DMG /tmp/044-44677-110.dmg
+      • Unmounting /tmp/044-44677-110.dmg.aea
+Usage:
+  ipsw extract <IPSW/OTA | URL> [flags]
+Aliases:
+  extract, e, ex
+Examples:
+# Extract dyld_shared_cache for specific architecture
+$ ipsw extract --dyld --dyld-arch arm64e iPhone.ipsw
+Flags:
+  -d, --dyld                    Extract dyld_shared_cache
+  -a, --dyld-arch stringArray   dyld_shared_cache architecture to extract
+  -h, --help                    help for extract
+Global Flags:
+      --color           colorize output
+  -V, --verbose         verbose output
+   ⨯ no dyld_shared_cache files found matching the specified archs: [arm64e_x1]
+"""
+
+    assert (
+        ipsw_extract._filter_ipsw_usage(stderr)
+        == """• Extracting dyld_shared_cache
+      • Preparing caches: SystemOS
+      • Extracted /tmp/044-44677-110.dmg.aea from UniversalMac_26.0_25A5316i_Restore.ipsw
+      • Mounting DMG /tmp/044-44677-110.dmg
+      • Unmounting /tmp/044-44677-110.dmg.aea
+   ⨯ no dyld_shared_cache files found matching the specified archs: [arm64e_x1]
+"""
+    )
+
+
+def test_ipsw_command_data_excludes_usage_from_span_diagnostics() -> None:
+    data = ipsw_extract._ipsw_command_data(
+        ["ipsw", "extract"],
+        None,
+        "progress\nUsage:\n  ipsw extract [flags]\n   ⨯ extraction failed\n",
+        [],
+    )
+
+    assert data["stderr"] == "progress\n   ⨯ extraction failed"
+    assert data["stderr_summary"] == "extraction failed"
+
+
 def test_ipsw_extract_dsc_timeout_preserves_timeout_contract_and_diagnostics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -401,13 +469,33 @@ def test_ipsw_extract_dsc_timeout_preserves_timeout_contract_and_diagnostics(
 
 
 def test_ipsw_extract_dsc_returns_requested_arch_absence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.test_ipsw_systemos_images import FakeProcess
+
     request = make_request(tmp_path, [identity()])
     tools = ToolHarness(request, monkeypatch)
     tools.single_image = True
     extractor = _IpswExtractionRun(request)
+    monkeypatch.setattr(
+        ipsw_extract.subprocess,
+        "Popen",
+        lambda *args, **kwargs: FakeProcess(
+            error=(
+                b"Extracting dyld_shared_cache\n"
+                b"Usage:\n  ipsw extract <IPSW/OTA | URL> [flags]\nFlags:\n  -h, --help\n"
+                b"   \xe2\xa8\xaf no dyld_shared_cache files found matching the specified archs: [arm64e_x1]\n"
+            ),
+            returncode=1,
+        ),
+    )
+
     result = extractor._ipsw_extract_dsc(_direct_attempt(extractor, Arch.ARM64E_X1))
+
     assert result == IpswDscNotPresent(
-        arch=Arch.ARM64E_X1, message="no dyld_shared_cache files found matching the specified archs"
+        arch=Arch.ARM64E_X1,
+        message=(
+            "Extracting dyld_shared_cache\n"
+            "   ⨯ no dyld_shared_cache files found matching the specified archs: [arm64e_x1]"
+        ),
     )
 
 
