@@ -219,7 +219,7 @@ Before considering a change "done", run the full check suite:
 ```bash
 uv run ruff check --fix
 uv run ruff format
-uv run pyright
+uv run ty check
 uv run pytest
 ```
 

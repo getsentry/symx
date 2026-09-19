@@ -6,6 +6,7 @@ without actual file downloads or subprocess calls.
 """
 
 import signal
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 from unittest.mock import Mock
@@ -105,16 +106,18 @@ class MockStorage:
 
 
 class FakeOtaExtractor:
-    """Fake extractor that creates dummy symbol dirs or returns/raises configured outcomes."""
+    """Fake extractor with configured outcomes; calls after_operation on completion, including skips, but not errors."""
 
     def __init__(
         self,
         *,
         result: OtaExtractionResult | None = None,
         error: Exception | None = None,
+        after_operation: Callable[[], None] | None = None,
     ) -> None:
         self._result = result
         self._error = error
+        self._after_operation = after_operation
         self.extractions: list[OtaExtractionRequest] = []
         self.validate_called = False
 
@@ -126,11 +129,15 @@ class FakeOtaExtractor:
         if self._error is not None:
             raise self._error
         if self._result is not None:
-            return self._result
-        symbols_dir = request.work_dir / "symbols" / request.bundle_id
-        symbols_dir.mkdir(parents=True, exist_ok=True)
-        (symbols_dir / "fake.sym").write_bytes(b"symbols")
-        return OtaSymbolsExtracted(symbol_dirs=(symbols_dir,))
+            result = self._result
+        else:
+            symbols_dir = request.work_dir / "symbols" / request.bundle_id
+            symbols_dir.mkdir(parents=True, exist_ok=True)
+            (symbols_dir / "fake.sym").write_bytes(b"symbols")
+            result = OtaSymbolsExtracted(symbol_dirs=(symbols_dir,))
+        if self._after_operation is not None:
+            self._after_operation()
+        return result
 
 
 # -- Tests --
@@ -171,10 +178,12 @@ def test_extract_marks_failed_extraction(tmp_path: Path) -> None:
     ota_file.touch()
     storage.load_ota_returns = ota_file
 
-    extractor = FakeOtaExtractor(error=OtaExtractError("test"))
+    after_operation = Mock()
+    extractor = FakeOtaExtractor(error=OtaExtractError("test"), after_operation=after_operation)
 
     OtaExtract(storage, extractor=extractor).extract(FakeTimeout(timedelta(minutes=5)))
 
+    after_operation.assert_not_called()
     assert storage.artifacts["key1"].processing_state == ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
 
 
@@ -423,7 +432,8 @@ def test_unsupported_payload_ota_skipped(tmp_path: Path) -> None:
     assert storage.artifacts["key1"].processing_state == ArtifactProcessingState.UNSUPPORTED_OTA_PAYLOAD
 
 
-def test_timeout_stops_processing(tmp_path: Path) -> None:
+@pytest.mark.parametrize("result", [None, OtaExtractionSkipped(reason=OtaExtractionSkipReason.DELTA)])
+def test_timeout_stops_processing(tmp_path: Path, result: OtaExtractionResult | None) -> None:
     """Extraction stops when timeout is exceeded."""
     storage = MockStorage(
         {
@@ -436,21 +446,13 @@ def test_timeout_stops_processing(tmp_path: Path) -> None:
     storage.load_ota_returns = ota_file
 
     timer = FakeTimeout(timedelta(seconds=10))
-    extractor = FakeOtaExtractor()
-
-    original_extract = extractor.extract
-
-    def extract_then_advance(request: OtaExtractionRequest) -> OtaExtractionResult:
-        result = original_extract(request)
-        timer.advance(11)
-        return result
-
-    extractor.extract = extract_then_advance  # type: ignore[assignment]
+    extractor = FakeOtaExtractor(result=result, after_operation=lambda: timer.advance(11))
 
     OtaExtract(storage, extractor=extractor).extract(timer)
 
     # Only one processed before timeout
     assert len(extractor.extractions) == 1
+    assert timer.elapsed_seconds == 11
 
 
 def test_no_artifacts_is_noop() -> None:

@@ -1,7 +1,9 @@
 """Tests for the IPSW extract runner using fully mocked side-effects."""
 
+from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from pydantic import HttpUrl
@@ -20,10 +22,11 @@ from tests.ipsw_storage_mock import InMemoryIpswStorage
 
 
 class FakeExtractor:
-    """Simulates extraction by creating a fake symbols directory."""
+    """Creates fake symbols, then calls after_operation if provided. Does not call it on failure."""
 
-    def __init__(self, should_fail: bool = False) -> None:
+    def __init__(self, should_fail: bool = False, *, after_operation: Callable[[], None] | None = None) -> None:
         self._should_fail = should_fail
+        self._after_operation = after_operation
         self.extractions: list[IpswExtractionRequest] = []
         self.validate_called = False
 
@@ -42,11 +45,14 @@ class FakeExtractor:
         (symbols_dir / "fake.sym").write_bytes(b"symbols")
 
         bundle_id = f"ipsw_{request.ipsw_path.name[:-5]}"
-        return ExtractionResult(
+        result = ExtractionResult(
             symbols_dir=symbols_dir,
             prefix=str(request.platform).lower(),
             bundle_id=bundle_id,
         )
+        if self._after_operation is not None:
+            self._after_operation()
+        return result
 
 
 # -- Helpers --
@@ -60,6 +66,7 @@ def _make_mirrored_artifact(
     url: str = "https://updates.cdn-apple.com/iOS/iPhone_18.0_22A100_Restore.ipsw",
 ) -> IpswArtifact:
     """Create a MIRRORED artifact and seed both the db and the mirror file."""
+    mirror_path = f"mirror/ipsw/{platform}/{version}/{build}/iPhone_{version}_{build}_Restore.ipsw"
     artifact = IpswArtifact(
         platform=platform,
         version=version,
@@ -71,14 +78,14 @@ def _make_mirrored_artifact(
                 devices=["iPhone15,2"],
                 link=HttpUrl(url),
                 processing_state=ArtifactProcessingState.MIRRORED,
-                mirror_path=f"mirror/ipsw/{platform}/{version}/{build}/iPhone_{version}_{build}_Restore.ipsw",
+                mirror_path=mirror_path,
             )
         ],
     )
     storage.seed_artifact(artifact)
 
     # Place a fake IPSW file in the mirror location so download_ipsw succeeds
-    mirror_file = storage.local_dir / artifact.sources[0].mirror_path  # type: ignore[operator]
+    mirror_file = storage.local_dir / mirror_path
     mirror_file.parent.mkdir(parents=True, exist_ok=True)
     mirror_file.write_bytes(b"fake ipsw")
 
@@ -124,9 +131,12 @@ class TestExtractRunner:
         storage = InMemoryIpswStorage(tmp_path)
         artifact = _make_mirrored_artifact(storage)
 
-        extractor = FakeExtractor(should_fail=True)
+        after_operation = Mock()
+        extractor = FakeExtractor(should_fail=True, after_operation=after_operation)
 
         extract(storage, FakeTimeout(timedelta(minutes=60)), extractor=extractor)
+
+        after_operation.assert_not_called()
 
         # No symbols uploaded
         assert len(storage.uploaded_symbols) == 0
@@ -227,21 +237,13 @@ class TestExtractRunner:
         )
 
         timer = FakeTimeout(timedelta(seconds=10))
-        extractor = FakeExtractor()
-
-        original_extract = extractor.extract
-
-        def extract_then_advance(request: IpswExtractionRequest) -> ExtractionResult:
-            result = original_extract(request)
-            timer.advance(11)
-            return result
-
-        extractor.extract = extract_then_advance  # type: ignore[assignment]
+        extractor = FakeExtractor(after_operation=lambda: timer.advance(11))
 
         extract(storage, timer, extractor=extractor)
 
         # Only one artifact processed before timeout
         assert len(extractor.extractions) == 1
+        assert timer.elapsed_seconds == 11
 
     def test_symbols_dir_cleaned_after_upload(self, tmp_path: Path) -> None:
         storage = InMemoryIpswStorage(tmp_path)

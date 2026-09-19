@@ -175,6 +175,6 @@ For code changes beyond workflow/docs bootstrap wiring, also run the full projec
 ```bash
 uv run ruff check --fix
 uv run ruff format
-uv run pyright
+uv run ty check
 uv run pytest
 ```
