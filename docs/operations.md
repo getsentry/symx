@@ -792,6 +792,6 @@ The repo convention is to use `uv` for everything and to run the full check suit
 ```bash
 uv run ruff check --fix
 uv run ruff format
-uv run pyright
+uv run ty check
 uv run pytest
 ```

@@ -48,15 +48,6 @@ def parse_github_output(path: Path) -> dict[str, str]:
     return outputs
 
 
-class FakeResponse(io.StringIO):
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        self.close()
-        return None
-
-
 def test_main_emits_no_failure_outputs(tmp_path):
     output_path = tmp_path / "github_output.txt"
     env = {
@@ -130,7 +121,7 @@ def test_write_output_uses_non_colliding_marker(tmp_path, monkeypatch):
             self.hex = hex_value
 
     generated = iter([FakeUuid("collision"), FakeUuid("safe")])
-    monkeypatch.setattr(MODULE.uuid, "uuid4", lambda: next(generated))
+    monkeypatch.setattr(MODULE.uuid, name="uuid4", value=lambda: next(generated))
 
     output_path = tmp_path / "github_output.txt"
     MODULE.write_output(output_path, "failed_step_snippet", "before\nEOF_collision\nafter")
@@ -169,7 +160,7 @@ def test_resolve_step_url_uses_step_anchor():
         assert request.full_url.endswith("/actions/runs/123/attempts/2/jobs?per_page=100")
         assert request.headers["Authorization"] == "Bearer token"
         assert timeout == 10
-        return FakeResponse(payload)
+        return io.StringIO(payload)
 
     assert (
         MODULE.resolve_step_url(env, "Extract IPSW symbols", "IPSW Extract", "token", fake_urlopen)

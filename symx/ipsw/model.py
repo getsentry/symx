@@ -4,7 +4,7 @@ import os
 from datetime import date
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 from pydantic import HttpUrl
 
 from symx.model import ArtifactProcessingState, github_run_id
@@ -34,6 +34,8 @@ class IpswPlatform(StrEnum):
 
 
 class IpswArtifactHashes(BaseModel):
+    model_config = ConfigDict(validate_by_name=True, validate_by_alias=True)
+
     sha1: str | None = None
     sha2: str | None = Field(None, validation_alias="sha2-256")
 

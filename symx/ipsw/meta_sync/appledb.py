@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 import sentry_sdk
 import sentry_sdk.metrics
-from deepdiff import DeepDiff  # type: ignore
+from deepdiff import DeepDiff
 from pydantic import (
     BaseModel,
     computed_field,
@@ -156,10 +156,10 @@ def compare_artifacts_with_diff(existing: IpswArtifact, new: IpswArtifact) -> tu
 
     significant_changes: list[str] = []
 
-    for change_type, changes in diff.items():  # type: ignore
+    for change_type, changes in diff.items():
         if change_type in ["values_changed", "type_changes"]:
-            if hasattr(changes, "items"):  # type: ignore
-                for path, change in changes.items():  # type: ignore
+            if hasattr(changes, "items"):
+                for path, change in changes.items():
                     significant_fields = [
                         "released",
                         "release_status",
@@ -172,7 +172,7 @@ def compare_artifacts_with_diff(existing: IpswArtifact, new: IpswArtifact) -> tu
                         "link",
                         "size",  # source fields
                     ]
-                    if any(field in str(path) for field in significant_fields):  # type: ignore
+                    if any(field in str(path) for field in significant_fields):
                         significant_changes.append(f"{change_type}: {path} = {change}")
         elif change_type in ["iterable_item_added", "iterable_item_removed"]:
             significant_changes.append(f"{change_type}: {changes}")

@@ -1,7 +1,9 @@
 """Tests for the IPSW mirror runner using fully mocked side-effects."""
 
+from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import Mock
 
 from symx.model import ArtifactProcessingState
 from pydantic import HttpUrl
@@ -23,11 +25,18 @@ from tests.ipsw_storage_mock import InMemoryIpswStorage
 
 
 class FakeDownloader:
-    """Simulates downloading by writing a dummy file to disk."""
+    """Writes a dummy download, then calls after_operation if provided. Does not call it on failure."""
 
-    def __init__(self, verify_result: bool = True, download_raises: bool = False) -> None:
+    def __init__(
+        self,
+        verify_result: bool = True,
+        download_raises: bool = False,
+        *,
+        after_operation: Callable[[], None] | None = None,
+    ) -> None:
         self._verify_result = verify_result
         self._download_raises = download_raises
+        self._after_operation = after_operation
         self.downloads: list[tuple[str, Path]] = []
 
     def download(self, url: str, filepath: Path) -> None:
@@ -37,6 +46,8 @@ class FakeDownloader:
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_bytes(b"fake ipsw content")
         self.downloads.append((url, filepath))
+        if self._after_operation is not None:
+            self._after_operation()
 
     def verify(self, filepath: Path, source: IpswSource) -> bool:
         return self._verify_result
@@ -109,9 +120,12 @@ class TestMirrorRunner:
         storage.seed_artifact(a1)
         storage.seed_artifact(a2)
 
-        downloader = FakeDownloader(download_raises=True)
+        after_operation = Mock()
+        downloader = FakeDownloader(download_raises=True, after_operation=after_operation)
 
         mirror(storage, FakeTimeout(timedelta(minutes=60)), downloader=downloader)
+
+        after_operation.assert_not_called()
 
         # Both sources were attempted
         assert len(downloader.downloads) == 2
@@ -165,21 +179,14 @@ class TestMirrorRunner:
         storage.seed_artifact(a2)
 
         timer = FakeTimeout(timedelta(seconds=10))
-        downloader = FakeDownloader()
-
         # Timeout is 10 seconds, but timer jumps past it after first download
-        original_download = downloader.download
-
-        def download_then_advance(url: str, filepath: Path) -> None:
-            original_download(url, filepath)
-            timer.advance(11)
-
-        downloader.download = download_then_advance  # type: ignore[assignment]
+        downloader = FakeDownloader(after_operation=lambda: timer.advance(11))
 
         mirror(storage, timer, downloader=downloader)
 
         # Only one artifact should have been processed
         assert len(storage.uploaded_ipsws) == 1
+        assert timer.elapsed_seconds == 11
 
     def test_old_artifact_filtered_out(self, tmp_path: Path) -> None:
         storage = InMemoryIpswStorage(tmp_path)

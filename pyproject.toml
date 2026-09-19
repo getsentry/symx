@@ -7,7 +7,7 @@ authors = [
     {name = "Mischan Toosarani-Hausberger", email = "mischan@abovevacant.com"},
 ]
 license = {text = "MIT"}
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "typer==0.26.8",
     "sentry-sdk==2.64.0",
@@ -26,8 +26,8 @@ symx = "symx.__main__:main"
 
 [dependency-groups]
 dev = [
-    "pyright==1.1.411",
     "ruff==0.15.20",
+    "ty==0.0.82",
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
 ]
