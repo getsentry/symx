@@ -10,6 +10,8 @@ from subprocess import CompletedProcess
 
 import sentry_sdk
 
+from symx.host_diagnostics import log_extraction_host
+
 logger = logging.getLogger(__name__)
 
 MINIMUM_IPSW_VERSION = "3.1.721"
@@ -35,6 +37,8 @@ def _parse_ipsw_release_version(version: str) -> tuple[int, int, int]:
 
 
 def validate_shell_deps() -> None:
+    log_extraction_host()
+
     try:
         version = ipsw_version()
         parsed_version = _parse_ipsw_release_version(version)

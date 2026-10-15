@@ -1,8 +1,9 @@
 # Symx Admin for macOS
 
 An operator-focused native SwiftUI app for inspecting the read-only snapshot
-produced by `symx/admin`. It deliberately targets the current operator environment:
-macOS 26 and Swift tools 6.3. The tested toolchain is Swift 6.3.3 from Xcode 26.6.
+produced by `symx/admin`. For local administration, **macOS 27 and the Swift toolchain included with Xcode 27**
+are recommended. This app does not perform artifact extraction; see the
+[extraction environment guidance](../../README.md#extraction-environment) for artifact-dependent host requirements.
 The app uses only Apple frameworks plus the system SQLite library.
 
 The existing admin TUI remains available as a fallback. This app does not replace
@@ -43,7 +44,7 @@ cd apps/SymxAdmin
 swift run
 ```
 
-You can also open `Package.swift` directly in Xcode 26.6.
+You can also open `Package.swift` directly in Xcode 27.
 
 Verify the package with the installed Swift toolchain:
 
