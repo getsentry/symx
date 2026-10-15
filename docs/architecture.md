@@ -108,7 +108,7 @@ Workflow: [`symx-ipsw-extract.yml`](../.github/workflows/symx-ipsw-extract.yml)
      on older IPSWs), validating ZIP members and unique product/board selectors before invoking tools,
    - process each image sequentially: preflight its AEA key, mount with its selector, symsort ordinary binaries,
      confirm detach, then extract its DSC candidates with the same selector into attempt-private directories,
-   - macOS probes `arm64e`, `arm64e_x1`, `x86_64`, and `x86_64h`; on macOS 27+, x86 attempts are grouped by
+   - macOS probes `arm64e`, `arm64e_x1`, `x86_64`, and `x86_64h`; for macOS 27 IPSWs, x86 attempts are grouped by
      distinct RosettaOS member instead of repeated per SystemOS image. Full and x86Support Rosetta caches remain
      separate split sources. Absence is local to an image/architecture; each required SystemOS image must yield a DSC,
    - compress image/architecture/cache-qualified splits, release the consumed IPSW only after all image consumers
@@ -116,7 +116,7 @@ Workflow: [`symx-ipsw-extract.yml`](../.github/workflows/symx-ipsw-extract.yml)
    - upload symbol files into `symbols/...`,
    - mark the source as `symbols_extracted` on success.
 
-If extraction fails, the source is marked `symbol_extraction_failed`. A later-image failure prevents the source's
+If artifact extraction fails, the source is marked `symbol_extraction_failed`. A later-image failure prevents the source's
 upload entirely; there are no per-image metadata writes. An unresolved mount cleanup attempts the failed-source
 metadata update, retains the processing tree (including at the CLI directory-owner boundary), and aborts the worker
 rather than advancing to another source. Killing a mount process is not evidence of detach: cleanup inspects disk

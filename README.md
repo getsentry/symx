@@ -84,6 +84,21 @@ More detail, including the "who processes what when" walkthrough and the state d
 The workflow files in [`.github/workflows/`](.github/workflows/) are the authoritative deployment config. GitHub Actions bootstrap dependency pins and bump instructions live in
 [docs/gha-dependencies.md](docs/gha-dependencies.md).
 
+## Extraction environment
+
+To extract the newest Apple artifacts, keep **both macOS and Xcode current**. **macOS 27 and Xcode 27 are
+recommended for extracting 27-era artifacts**. Requirements depend on the artifact: older artifacts may work
+with older macOS and Xcode versions. The latest versions are still recommended, because tooling cannot provide
+a soft fallback path for every OTA and IPSW out there.
+
+Apple artifacts can rely on host features: macOS supplies Apple Archive compression support such as `lzraven`,
+while Xcode supplies `dsc_extractor.bundle` for splitting dyld caches such as `arm64e_x1`. Updating `ipsw` alone
+cannot add these capabilities. Make sure the intended full Xcode installation is selected via `xcode-select`.
+
+Symx logs the actual host and selected Xcode for diagnostics; it does not enforce macOS or Xcode versions.
+Metadata, mirroring, and CLI/TUI administration can still run on Linux. See
+[tooling requirements by task](docs/operations.md#12-tooling-requirements-by-task).
+
 ## Quick start
 
 ### 1. Install dependencies
@@ -106,7 +121,7 @@ uv sync --dev
 
 - **Admin / workflow inspection only**
   - `gh` installed and authenticated
-  - for the native app: macOS 26 and Swift 6.3.3 from Xcode 26.6 (the currently tested operator toolchain)
+  - for the native app: macOS 27 and the Swift toolchain included with Xcode 27 are recommended; see the [app README](apps/SymxAdmin/README.md)
 - **GCS-backed runs** (`ipsw meta-sync`, `ipsw mirror`, `ipsw extract`, `ota mirror`, `ota extract`, `sim extract`)
   - `gcloud` credentials available via ADC / `GOOGLE_APPLICATION_CREDENTIALS`
   - a storage URI such as `gs://my-bucket` or `gs://my-project@my-bucket`
@@ -114,7 +129,7 @@ uv sync --dev
   - `ipsw` **3.1.721 or newer** installed and on `PATH`
 - **Extraction commands**
   - executable `./symsorter` in the repo root
-  - in practice, extraction is run on **macOS** in production
+  - macOS and a selected Xcode installation suitable for the artifact; see [Extraction environment](#extraction-environment)
 
 ### 3. Common local commands
 

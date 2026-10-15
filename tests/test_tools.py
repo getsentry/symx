@@ -6,6 +6,11 @@ import pytest
 from symx import tools
 
 
+@pytest.fixture(autouse=True)
+def isolate_host_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tools, "log_extraction_host", lambda: None)
+
+
 @pytest.mark.parametrize("version", ["3.1.717", "3.1.718", "3.1.719", "3.1.720"])
 def test_validate_shell_deps_exits_when_ipsw_is_too_old(
     version: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -52,3 +57,23 @@ def test_validate_shell_deps_accepts_minimum_or_newer(version: str, monkeypatch:
     tools.validate_shell_deps()
 
     assert ("ipsw.version", version) in sentry_tags
+
+
+def test_validate_shell_deps_records_host_before_tool_versions(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(tools, "log_extraction_host", lambda: calls.append("host"))
+
+    def ipsw_version() -> str:
+        calls.append("ipsw")
+        return "3.1.721"
+
+    def run(*args: object, **kwargs: object) -> CompletedProcess[bytes]:
+        calls.append("symsorter")
+        return CompletedProcess(["./symsorter", "--version"], 0, stdout=b"symsorter 26.6.0\n")
+
+    monkeypatch.setattr(tools, "ipsw_version", ipsw_version)
+    monkeypatch.setattr(tools.subprocess, "run", run)
+
+    tools.validate_shell_deps()
+
+    assert calls == ["host", "ipsw", "symsorter"]

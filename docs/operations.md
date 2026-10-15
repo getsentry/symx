@@ -10,6 +10,11 @@ This document is the practical companion to [architecture.md](architecture.md). 
 - [`uv`](https://docs.astral.sh/uv/)
 - this repository checked out locally
 
+For the newest Apple artifacts, keep both macOS and Xcode current. **macOS 27 and Xcode 27 are recommended
+for extracting 27-era artifacts**. Host requirements depend on the artifact; older artifacts may work with older
+toolchains. See [extraction commands](#extraction-commands) for the separate macOS and Xcode dependencies.
+Metadata, mirroring, and CLI/TUI administration can still run on Linux.
+
 Install Python dependencies:
 
 ```bash
@@ -37,7 +42,8 @@ Requirements:
 
 - `gh` CLI installed
 - `gh auth login` completed with access to this repository
-- for the native app, macOS 26 and Swift 6.3.3 from Xcode 26.6
+- for the native app, macOS 27 and the Swift toolchain included with Xcode 27 are recommended; see
+  [`apps/SymxAdmin/README.md`](../apps/SymxAdmin/README.md)
 
 These commands do **not** need direct GCP credentials locally, because the actual metadata fetch happens inside a GitHub Actions workflow.
 
@@ -87,8 +93,28 @@ Needed for:
 
 Requirements:
 
+- a macOS host and selected full Xcode installation with the capabilities needed by the artifact
 - checksum-pinned `ipsw` 3.1.721 or newer installed and on `PATH`
 - executable `./symsorter` at the repository root
+
+For current artifacts, keep **both macOS and Xcode current**, not just `ipsw`:
+
+- **macOS** supplies Apple Archive tooling and libraries needed to handle newer compression formats such as
+  `lzraven`.
+- **Xcode** supplies `dsc_extractor.bundle`, which `ipsw dyld split` uses for bulk DSC extraction. Xcode 27's
+  extractor supports `arm64e_x1` dyld shared caches; older extractors may reject these even when they can
+  split an older artifact's caches. This applies to the cache variant, not just to macOS artifacts.
+
+Installing an updated Xcode is not enough if another installation remains selected. Symx invokes `ipsw dyld split`
+without an explicit `--xcode` path, so `ipsw` uses the installation reported by `xcode-select -p`. Updating macOS
+or `ipsw` alone does not replace that selected Xcode extractor. `DEVELOPER_DIR` overrides the system-wide selection
+for an invocation and is honored by `ipsw`.
+
+IPSW/OTA extraction commands log the actual host OS/kernel and architecture, `DEVELOPER_DIR`, macOS version/build,
+selected Xcode developer directory and version/build, and DSC extractor path/presence, alongside the existing
+`ipsw` and `symsorter` version logs. Host diagnostics are best-effort: failed probes warn but do not stop extraction,
+and no macOS or Xcode version gate is applied. These logs describe the environment used, not a compatibility
+verdict. Compare them with the artifact being extracted when investigating failures.
 
 For IPSW extraction, Symx also ships a vendored AEA PEM DB snapshot at `symx/ipsw/data/fcs-keys.json` and passes it to `ipsw` via `--pem-db` before `ipsw` falls back to live Apple FCS-key lookup. Refresh that file from upstream `ipsw/pkg/aea/data/fcs-keys.gz` when newly mirrored IPSWs start failing with AEA/FCS-key 403s on GitHub macOS runners. Before the high-level `ipsw mount sys` / `ipsw extract --dyld` steps, Symx also does a small AEA preflight against the selected DMG member so failures can be classified as key-resolution problems earlier.
 
@@ -117,6 +143,14 @@ ipsw version
 gh auth status
 ```
 
+On extraction hosts, also check the OS and selected Xcode before investigating an artifact failure:
+
+```bash
+sw_vers
+xcode-select -p
+xcodebuild -version
+```
+
 ## 2. Running Symx locally
 
 ## 2.1 Local, file-based reproduction
@@ -131,7 +165,7 @@ uv run symx ipsw extract-file /path/to/file.ipsw -p iOS -o /tmp/symx-ipsw
 
 What it does:
 
-- validates `ipsw` and `./symsorter`,
+- logs host diagnostics and validates `ipsw` and `./symsorter`,
 - runs the IPSW extraction pipeline locally; macOS probes the shared `arm64e`, `arm64e_x1`, `x86_64`, and
   `x86_64h` DSC architecture set sequentially, skipping absent candidates without masking real extraction failures,
 - uses the vendored IPSW PEM DB snapshot before any live Apple FCS-key lookup,
@@ -156,7 +190,7 @@ uv run symx ota extract-file /path/to/file.zip -p ios -V 18.2 -b 22C152 -o /tmp/
 
 What it does:
 
-- validates `ipsw` and `./symsorter`,
+- logs host diagnostics and validates `ipsw` and `./symsorter`,
 - for macOS, requests `arm64e`, `arm64e_x1`, `x86_64`, and `x86_64h` sequentially with exactly one `--dyld-arch` per operation;
   other platforms use the existing unfiltered operation,
 - strictly parses each `schema-1` report and validates every reported regular file beneath that attempt's temporary
@@ -231,7 +265,7 @@ What happens:
 
 ### Start the native macOS app
 
-The app currently targets macOS 26 and Swift 6.3.3 from Xcode 26.6:
+macOS 27 and the Swift toolchain included with Xcode 27 are recommended for local administration:
 
 ```bash
 cd apps/SymxAdmin
@@ -705,6 +739,7 @@ Likely causes:
 - `ipsw` extraction failure, including an incomplete `payload-extract` report that may be transient or a cache-family
   `dsc-validation` failure on a full/unknown artifact
 - `dyld_split` failure
+- missing host Apple Archive compression support; check macOS as well as Xcode and `ipsw` versions
 - `symsorter` failure
 - unexpected artifact layout differences
 
