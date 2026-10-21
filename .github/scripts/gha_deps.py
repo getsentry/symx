@@ -229,13 +229,48 @@ def fetch_uv_wheel_hashes(version: str) -> dict[str, str]:
     return hashes
 
 
+def pip_manifest_values(manifest: dict[str, Any]) -> tuple[str, str, str]:
+    pip_section = manifest_section(manifest, "pip")
+    version = manifest_str(pip_section, "version")
+    url = manifest_str(pip_section, "url")
+    require_https_url(url)
+    digest = require_sha256(manifest_str(pip_section, "sha256"), label="pip SHA-256")
+    return version, url, digest
+
+
+def fetch_pip_wheel(version: str) -> dict[str, str]:
+    data = fetch_json(f"https://pypi.org/pypi/pip/{version}/json")
+    for wheel in data.get("urls", []):
+        if wheel.get("filename") == f"pip-{version}-py3-none-any.whl":
+            pin = {
+                "version": version,
+                "url": wheel["url"],
+                "sha256": wheel["digests"]["sha256"],
+            }
+            pip_manifest_values({"pip": pin})
+            return pin
+    raise GhaDependencyError(f"no universal pip wheel found for {version}")
+
+
+def pinned_pip_environment(manifest: dict[str, Any], temp_dir: Path) -> dict[str, str]:
+    """Run hash-verified pip from its wheel without changing the runner's pip installation."""
+    if sys.version_info < (3, 10):
+        raise GhaDependencyError("the pinned pip bootstrap requires Python 3.10 or newer")
+    version, url, digest = pip_manifest_values(manifest)
+    wheel_path = temp_dir / f"pip-{version}-py3-none-any.whl"
+    download_verified(url, digest, wheel_path)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(wheel_path), env.get("PYTHONPATH")]))
+    return env
+
+
 def install_uv(manifest: dict[str, Any], *, emit_shell: bool, print_bin_dir: bool) -> None:
     version, wheel_hashes = uv_manifest_values(manifest)
     temp_dir = runner_temp_dir("uv-bootstrap")
     try:
         requirements_path = temp_dir / "uv-bootstrap.txt"
         requirements_path.write_text(format_uv_requirements(version, wheel_hashes))
-        env = os.environ.copy()
+        env = pinned_pip_environment(manifest, temp_dir)
         env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
         run_command(
             [
@@ -243,6 +278,8 @@ def install_uv(manifest: dict[str, Any], *, emit_shell: bool, print_bin_dir: boo
                 "-m",
                 "pip",
                 "install",
+                # Use patched pip's bundled CAs, not potentially stale runner system roots.
+                "--use-deprecated=legacy-certs",
                 "--user",
                 "--disable-pip-version-check",
                 "--no-deps",
@@ -463,6 +500,7 @@ def resolve_action_tag(repo: str, tag: str) -> str:
 
 
 def validate_manifest(manifest: dict[str, Any]) -> None:
+    pip_manifest_values(manifest)
     uv_version, uv_hashes = uv_manifest_values(manifest)
     if not uv_version:
         raise GhaDependencyError("uv version must not be empty")
@@ -550,12 +588,14 @@ def verify(manifest: dict[str, Any], *, network: bool, large_downloads: bool) ->
         uv_version, uv_hashes = uv_manifest_values(manifest)
         requirements_path = temp_dir / "uv-bootstrap.txt"
         requirements_path.write_text(format_uv_requirements(uv_version, uv_hashes))
+        env = pinned_pip_environment(manifest, temp_dir)
         run_command(
             [
                 sys.executable,
                 "-m",
                 "pip",
                 "download",
+                "--use-deprecated=legacy-certs",
                 "--disable-pip-version-check",
                 "--no-deps",
                 "--only-binary=:all:",
@@ -564,7 +604,8 @@ def verify(manifest: dict[str, Any], *, network: bool, large_downloads: bool) ->
                 str(requirements_path),
                 "-d",
                 str(temp_dir / "uv-download"),
-            ]
+            ],
+            env=env,
         )
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -632,6 +673,16 @@ def command_bump_uv(args: argparse.Namespace) -> None:
     print_manifest_update("uv", old, new, write=args.write)
     if args.write:
         manifest["uv"] = new
+        save_manifest(manifest)
+
+
+def command_bump_pip(args: argparse.Namespace) -> None:
+    manifest = load_manifest()
+    old = manifest_section(manifest, "pip")
+    new = fetch_pip_wheel(args.version)
+    print_manifest_update("pip", old, new, write=args.write)
+    if args.write:
+        manifest["pip"] = new
         save_manifest(manifest)
 
 
@@ -792,6 +843,11 @@ def build_parser() -> argparse.ArgumentParser:
     bump_uv.add_argument("--version", required=True)
     add_write_flag(bump_uv)
     bump_uv.set_defaults(func=command_bump_uv)
+
+    bump_pip = subparsers.add_parser("bump-pip", help="update the pip bootstrap wheel pin")
+    bump_pip.add_argument("--version", required=True)
+    add_write_flag(bump_pip)
+    bump_pip.set_defaults(func=command_bump_pip)
 
     render_uv = subparsers.add_parser("render-uv-requirements", help="render the hashed uv requirements file")
     render_uv.set_defaults(func=command_render_uv_requirements)
