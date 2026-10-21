@@ -107,7 +107,7 @@ Symx uses `uv` for its Python application and tools. The native admin app uses S
 
 Helpful install/download links:
 
-- [`uv`](https://docs.astral.sh/uv/)
+- [`uv`](https://docs.astral.sh/uv/) **0.13.4 or newer** (see [dependency and trust-store guidance](docs/gha-dependencies.md#tls-trust-stores))
 - [`ipsw` latest release](https://github.com/blacktop/ipsw/releases/latest) / [`ipsw` Homebrew formula](https://formulae.brew.sh/formula/ipsw) (at least version 3.1.721)
 - [`gh` CLI](https://cli.github.com/)
 - [Google Cloud CLI / `gcloud`](https://cloud.google.com/sdk/docs/install)
