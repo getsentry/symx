@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 # we use the default policy (initial_wait=1s, wait_mult=2x, max_wait=60s). 300s retry timeout gives us 10 retries.
 SYMX_GCS_RETRY = DEFAULT_RETRY.with_timeout(300.0)
 
+# Whole-artifact uploads only: fewer requests at the cost of ~512 MiB buffering
+# per active upload. Keep symbol binaries and metadata on the SDK defaults.
+ARTIFACT_UPLOAD_CHUNK_SIZE = 512 * 1024 * 1024
+
 
 def parse_gcs_url(storage: str) -> ParseResult | None:
     uri = urlparse(storage)
