@@ -12,6 +12,7 @@ from google.cloud.storage import Blob, Bucket, Client
 
 from symx.model import ArtifactProcessingState
 from symx.gcs import (
+    ARTIFACT_UPLOAD_CHUNK_SIZE,
     SYMX_GCS_RETRY,
     compare_md5_hash,
     try_download_to_filename,
@@ -123,7 +124,8 @@ class IpswGcsStorage(IpswStorage):
                     span.set_status("internal_error")
                     return artifact
             else:
-                # this file will be split into considerable chunks: set timeout to something high
+                blob.chunk_size = ARTIFACT_UPLOAD_CHUNK_SIZE
+                # Allow ample time for each large chunk.
                 blob.upload_from_filename(str(ipsw_file), timeout=3600, retry=SYMX_GCS_RETRY)
                 logger.info("Upload finished for %s", source.file_name)
                 sentry_sdk.metrics.distribution(

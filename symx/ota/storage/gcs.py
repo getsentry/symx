@@ -11,6 +11,7 @@ from pydantic import TypeAdapter
 
 from symx.model import ArtifactProcessingState
 from symx.gcs import (
+    ARTIFACT_UPLOAD_CHUNK_SIZE,
     compare_md5_hash,
     parse_gcs_url,
     try_download_to_filename,
@@ -108,7 +109,8 @@ class OtaGcsStorage(OtaStorage):
                     span.set_status("internal_error")
                     return
             else:
-                # this file will be split into considerable chunks: set timeout to something high
+                blob.chunk_size = ARTIFACT_UPLOAD_CHUNK_SIZE
+                # Allow ample time for each large chunk.
                 blob.upload_from_filename(str(ota_file), timeout=3600)
                 logger.info("Upload finished for %s", ota_file.name)
                 sentry_sdk.metrics.distribution(
