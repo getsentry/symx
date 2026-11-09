@@ -273,7 +273,7 @@ If the mirrored OTA is missing when extraction starts, Symx resets it back to `i
 
 Workflow: [`symx-simulator-extract.yml`](../.github/workflows/symx-simulator-extract.yml)
 
-1. GitHub Actions starts a macOS matrix job (`macos-14`, `macos-15`, `macos-26`).
+1. GitHub Actions starts a macOS matrix job (`macos-15`, `macos-26`, `xcode-27`).
 2. The job inspects simulator dyld caches already present on the runner image.
 3. Symx splits and symsorts those caches and uploads symbol files.
 

@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runs-on: [macos-14, macos-15, macos-26]
+        runs-on: [macos-15, macos-26, xcode-27]
 
     steps:
       - name: Checkout sources
