@@ -4,7 +4,7 @@
     "url": "https://www.apple.com/appleca/AppleIncRootCertificate.cer"
   },
   "gcloud": {
-    "version": "575.0.0"
+    "version": "594.0.0"
   },
   "ipsw": {
     "archives": {
