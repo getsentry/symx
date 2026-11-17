@@ -20,8 +20,8 @@
   },
   "symsorter": {
     "asset": "symsorter-Darwin-universal",
-    "sha256": "587a8994fd34665309d9b462e609ea1893996e4e4f0537fd439e8766ccf81fe1",
-    "symbolicator_version": "26.6.0"
+    "sha256": "80a7800bf5311eb25d9672da196b073dd5b8a3fd540c2fb104fd277d9ffeec37",
+    "symbolicator_version": "26.11.0"
   },
   "uv": {
     "version": "0.13.9",
