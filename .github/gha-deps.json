@@ -8,10 +8,10 @@
   },
   "ipsw": {
     "archives": {
-      "linux_x86_64": "715994002e44e42a4afde5c38cbab1941e25ce63d1330cdfb640e651ebf54bd9",
-      "macOS_universal": "8af3dd5c7e6907def9809c64ea688df2f00999e2f1898f283851ae7b3d7bda0c"
+      "linux_x86_64": "5d70450175f5484c84f10b917e13319045db4bdcb137c2618322f7f0712e4d2f",
+      "macOS_universal": "50203f7f5a5fd600556043ea2ac50cba14802b1a15d5016400b25cf4e510dfdc"
     },
-    "version": "3.1.721"
+    "version": "3.1.749"
   },
   "pip": {
     "sha256": "f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13",
