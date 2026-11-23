@@ -77,7 +77,7 @@ def extract(
     """
     Extract symbols from Simulator images to storage
     """
-    with sentry_sdk.start_transaction(op="sim.extract", name="Simulator extract"):
+    with sentry_sdk.start_span(parent_span=None, attributes={"sentry.op": "sim.extract"}, name="Simulator extract"):
         # todo: move this out to a storage class including meta-data
         uri = parse_gcs_url(storage)
         if uri is None or uri.hostname is None:

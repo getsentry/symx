@@ -13,8 +13,9 @@ from typing import TypedDict
 import sentry_sdk
 import sentry_sdk.metrics
 from pydantic import ValidationError
-from sentry_sdk.tracing import Span
+from sentry_sdk.traces import Span
 
+from symx.telemetry import set_diagnostic
 from symx.diagnostics import (
     format_command,
     subprocess_result_data,
@@ -176,21 +177,24 @@ def _probe_aea_payload_listing_for_dsc(artifact: Path) -> PayloadListingProbeRes
 
 def _probe_payload_dsc_inventory(artifact: Path) -> None:
     """Record DSC inventory after a payload-extract failure without materializing files."""
-    with sentry_sdk.start_span(op="ota.extract.payload_probe", name="Inspect OTA payload DSC inventory") as span:
-        span.set_data("artifact", str(artifact))
+    with sentry_sdk.start_span(
+        attributes={"sentry.op": "ota.extract.payload_probe"}, name="Inspect OTA payload DSC inventory"
+    ) as span:
+        span.set_attribute("artifact", str(artifact))
 
         try:
             if not _ota_is_zip_archive(artifact):
-                span.set_data("is_zip_archive", False)
+                span.set_attribute("is_zip_archive", False)
                 is_aea_archive = _ota_is_aea_archive(artifact)
-                span.set_data("is_aea_archive", is_aea_archive)
+                span.set_attribute("is_aea_archive", is_aea_archive)
                 if not is_aea_archive:
-                    span.set_data("dsc_referenced", False)
+                    span.set_attribute("dsc_referenced", False)
                     return
 
                 payload_listing = _probe_aea_payload_listing_for_dsc(artifact)
                 payload_dsc_entries = payload_listing["dsc_entries"]
-                span.set_data(
+                set_diagnostic(
+                    span,
                     "aea_payload_listing_probe",
                     {
                         "returncode": payload_listing["returncode"],
@@ -201,14 +205,15 @@ def _probe_payload_dsc_inventory(artifact: Path) -> None:
                     },
                 )
                 if payload_listing["returncode"] == 0 and payload_dsc_entries:
-                    span.set_data("dsc_referenced", True)
+                    span.set_attribute("dsc_referenced", True)
                     return
 
                 # `ipsw ota ls --bom` can describe post-state files for partial OTAs, so BOM matches are
                 # evidence that the OTA references a DSC, not proof that every DSC byte is present.
                 bom_listing = _probe_aea_bom_listing_for_dsc(artifact)
                 bom_dsc_entries = bom_listing["dsc_entries"]
-                span.set_data(
+                set_diagnostic(
+                    span,
                     "aea_bom_listing_probe",
                     {
                         "returncode": bom_listing["returncode"],
@@ -219,24 +224,24 @@ def _probe_payload_dsc_inventory(artifact: Path) -> None:
                     },
                 )
                 dsc_referenced = bom_listing["returncode"] == 0 and bool(bom_dsc_entries)
-                span.set_data("dsc_referenced", dsc_referenced)
+                span.set_attribute("dsc_referenced", dsc_referenced)
                 return
 
-            span.set_data("is_zip_archive", True)
-            span.set_data("is_aea_archive", False)
+            span.set_attribute("is_zip_archive", True)
+            span.set_attribute("is_aea_archive", False)
             bom_matches = _read_post_bom_dsc_matches(artifact)
-            span.set_data("post_bom_dsc_match_count", len(bom_matches))
-            span.set_data("post_bom_dsc_matches", bom_matches[:10])
+            span.set_attribute("post_bom_dsc_match_count", len(bom_matches))
+            span.set_attribute("post_bom_dsc_matches", bom_matches[:10])
             if not bom_matches:
-                span.set_data("dsc_referenced", False)
+                span.set_attribute("dsc_referenced", False)
                 return
 
             payload_names = _payload_entry_names(artifact)
-            span.set_data("payload_member_count", len(payload_names))
-            span.set_data("payload_members_sample", payload_names[:10])
-            span.set_data("dsc_referenced", True)
+            span.set_attribute("payload_member_count", len(payload_names))
+            span.set_attribute("payload_members_sample", payload_names[:10])
+            span.set_attribute("dsc_referenced", True)
         except (FileNotFoundError, OSError, ValueError, zipfile.BadZipFile) as exc:
-            span.set_data("payload_probe_error", str(exc))
+            span.set_attribute("payload_probe_error", str(exc))
 
 
 def _strip_ansi(text: str) -> str:
@@ -267,11 +272,11 @@ def split_dsc(
     split_dirs: list[Path] = []
     for result_item in search_result:
         with sentry_sdk.start_span(
-            op="subprocess.dyld_split",
+            attributes={"sentry.op": "subprocess.dyld_split"},
             name=f"Split DSC {result_item.arch}",
         ) as span:
-            span.set_data("arch", str(result_item.arch))
-            span.set_data("artifact", str(result_item.artifact))
+            span.set_attribute("arch", str(result_item.arch))
+            span.set_attribute("artifact", str(result_item.artifact))
             logger.info("Splitting DSC %s (%s)", result_item.artifact.name, result_item.arch)
             result = splitter(result_item.artifact, result_item.split_dir)
             if result.returncode != 0:
@@ -280,7 +285,8 @@ def split_dsc(
                     result_item.artifact.name,
                     result_item.arch,
                 )
-                span.set_status("internal_error")
+                span.status = "error"
+                span.set_attribute("symx.failure_reason", "internal_error")
             else:
                 logger.info("DSC split successful for %s (%s)", result_item.artifact.name, result_item.arch)
                 split_dirs.append(result_item.split_dir)
@@ -653,7 +659,8 @@ def _source_kind(source: str) -> str:
 
 
 def _set_materialization_report_data(span: Span, report: OtaDscReport) -> None:
-    span.set_data(
+    set_diagnostic(
+        span,
         "report",
         {
             "schema_version": report.schema_version,
@@ -679,15 +686,16 @@ def _record_materialization_unavailable(
     request: OtaDscMaterializationRequest,
     unavailable: OtaDscUnavailable,
 ) -> OtaDscUnavailable:
-    span.set_data("unavailable_reason", str(unavailable.reason))
+    span.set_attribute("unavailable_reason", str(unavailable.reason))
     sentry_sdk.metrics.count(
         "ota.extract.materialization.unavailable",
         1,
         attributes={"platform": request.platform, "reason": str(unavailable.reason)},
     )
     if unavailable.reason == OtaDscUnavailableReason.INCOMPLETE:
-        span.set_status("internal_error")
-        span.set_data("failure_reason", unavailable.message)
+        span.status = "error"
+        span.set_attribute("symx.failure_reason", "internal_error")
+        span.set_attribute("failure_reason", unavailable.message)
         sentry_sdk.metrics.count("ota.extract.materialization.failed", 1, attributes={"platform": request.platform})
         sentry_sdk.metrics.count("ota.extract.materialization.incomplete", 1, attributes={"platform": request.platform})
     return unavailable
@@ -695,15 +703,19 @@ def _record_materialization_unavailable(
 
 def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationAttempt:
     """Materialize and validate one requested architecture, or the unfiltered non-macOS set."""
-    with sentry_sdk.start_span(op="ota.extract.materialize_dsc", name="Materialize OTA DSCs") as span:
-        span.set_data("artifact", str(request.local_ota))
-        span.set_data("output_root", str(request.output_root))
-        span.set_data("platform", request.platform)
-        span.set_data("version", request.version)
-        span.set_data("build", request.build)
-        span.set_data("source_identity", request.bundle_id)
-        span.set_data("requested_arch", str(request.requested_arch) if request.requested_arch is not None else None)
-        span.set_data("ipsw_contract_release", IPSW_OTA_DSC_JSON_CONTRACT_RELEASE)
+    with sentry_sdk.start_span(
+        attributes={"sentry.op": "ota.extract.materialize_dsc"}, name="Materialize OTA DSCs"
+    ) as span:
+        span.set_attribute("artifact", str(request.local_ota))
+        span.set_attribute("output_root", str(request.output_root))
+        span.set_attribute("platform", request.platform)
+        span.set_attribute("version", request.version)
+        span.set_attribute("build", request.build)
+        span.set_attribute("source_identity", request.bundle_id)
+        set_diagnostic(
+            span, "requested_arch", str(request.requested_arch) if request.requested_arch is not None else None
+        )
+        span.set_attribute("ipsw_contract_release", IPSW_OTA_DSC_JSON_CONTRACT_RELEASE)
 
         command = [
             "ipsw",
@@ -726,12 +738,14 @@ def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationA
         try:
             result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True)
         except OSError as error:
-            span.set_status("internal_error")
-            span.set_data("failure_reason", str(error))
+            span.status = "error"
+            span.set_attribute("symx.failure_reason", "internal_error")
+            span.set_attribute("failure_reason", str(error))
             sentry_sdk.metrics.count("ota.extract.materialization.failed", 1, attributes={"platform": request.platform})
             raise OtaDscProtocolError(f"Could not invoke OTA DSC materializer: {format_command(command)}") from error
 
-        span.set_data(
+        set_diagnostic(
+            span,
             "subprocess",
             {
                 "command": format_command(command),
@@ -795,7 +809,8 @@ def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationA
                 for entry, relative_path, artifact in validated_files
                 if (dsc := _supported_dsc_source(entry, relative_path, artifact)) is not None
             )
-            span.set_data(
+            set_diagnostic(
+                span,
                 "report_validation",
                 {
                     "validated_dsc_count": len(validated_files),
@@ -823,8 +838,9 @@ def extract_ota(request: OtaDscMaterializationRequest) -> OtaDscMaterializationA
                     f"{request.requested_arch}; expected exactly one"
                 )
         except OtaExtractError as error:
-            span.set_status("internal_error")
-            span.set_data("failure_reason", str(error))
+            span.status = "error"
+            span.set_attribute("symx.failure_reason", "internal_error")
+            span.set_attribute("failure_reason", str(error))
             sentry_sdk.metrics.count("ota.extract.materialization.failed", 1, attributes={"platform": request.platform})
             raise
 
@@ -894,10 +910,10 @@ def _process_macos_ota(request: OtaExtractionRequest) -> OtaExtractionResult:
     try:
         for arch in MACOS_DSC_ARCHITECTURES:
             with sentry_sdk.start_span(
-                op="ota.extract.dsc_arch",
+                attributes={"sentry.op": "ota.extract.dsc_arch"},
                 name=f"Materialize+split OTA DSC {arch}",
             ) as span:
-                span.set_data("arch", str(arch))
+                span.set_attribute("arch", str(arch))
                 with tempfile.TemporaryDirectory(suffix=f"_{arch}_dsc_extract") as materialization_dir:
                     materialization_request = OtaDscMaterializationRequest.from_extraction_request(
                         request,

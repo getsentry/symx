@@ -78,10 +78,12 @@ def symsort(
     ignore_errors: bool = False,
 ) -> CompletedProcess[bytes]:
     input_paths = [split_dir] if isinstance(split_dir, Path) else list(split_dir)
-    with sentry_sdk.start_span(op="subprocess.symsort", name=f"Symsort {prefix}/{bundle_id}") as span:
-        span.set_data("prefix", prefix)
-        span.set_data("bundle_id", bundle_id)
-        span.set_data("split_dirs", [str(path) for path in input_paths])
+    with sentry_sdk.start_span(
+        attributes={"sentry.op": "subprocess.symsort"}, name=f"Symsort {prefix}/{bundle_id}"
+    ) as span:
+        span.set_attribute("prefix", prefix)
+        span.set_attribute("bundle_id", bundle_id)
+        span.set_attribute("split_dirs", [str(path) for path in input_paths])
 
         symsorter_args = [
             "./symsorter",
@@ -104,19 +106,23 @@ def symsort(
             capture_output=True,
         )
         if result.returncode != 0:
-            span.set_status("internal_error")
+            span.status = "error"
+            span.set_attribute("symx.failure_reason", "internal_error")
         return result
 
 
 def dyld_split(dsc: Path, output_dir: Path) -> CompletedProcess[bytes]:
-    with sentry_sdk.start_span(op="subprocess.dyld_split", name=f"Dyld split {dsc.name}") as span:
-        span.set_data("dsc", str(dsc))
-        span.set_data("output_dir", str(output_dir))
+    with sentry_sdk.start_span(
+        attributes={"sentry.op": "subprocess.dyld_split"}, name=f"Dyld split {dsc.name}"
+    ) as span:
+        span.set_attribute("dsc", str(dsc))
+        span.set_attribute("output_dir", str(output_dir))
 
         result = subprocess.run(
             ["ipsw", "dyld", "split", str(dsc), "--output", str(output_dir)],
             capture_output=True,
         )
         if result.returncode != 0:
-            span.set_status("internal_error")
+            span.status = "error"
+            span.set_attribute("symx.failure_reason", "internal_error")
         return result

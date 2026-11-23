@@ -9,6 +9,7 @@ from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Client, Bucket
 from pydantic import TypeAdapter
 
+from symx.telemetry import set_diagnostic
 from symx.model import ArtifactProcessingState
 from symx.gcs import (
     ARTIFACT_UPLOAD_CHUNK_SIZE,
@@ -93,10 +94,12 @@ class OtaGcsStorage(OtaStorage):
         if not ota_file.is_file():
             raise RuntimeError("Path to upload must be a file")
 
-        with sentry_sdk.start_span(op="gcs.upload_ota", name=f"Upload OTA {ota_file.name}") as span:
+        with sentry_sdk.start_span(
+            attributes={"sentry.op": "gcs.upload_ota"}, name=f"Upload OTA {ota_file.name}"
+        ) as span:
             file_size = ota_file.stat().st_size
-            span.set_data("file_name", ota_file.name)
-            span.set_data("file_size_bytes", file_size)
+            span.set_attribute("file_name", ota_file.name)
+            span.set_attribute("file_size_bytes", file_size)
 
             logger.info("Uploading OTA %s (%dMiB) to %s", ota_file.name, file_size // (1024 * 1024), self.bucket.name)
             mirror_filename = ota_mirror_path(ota_meta, ota_file)
@@ -106,7 +109,8 @@ class OtaGcsStorage(OtaStorage):
                 # uploading and only update meta, since that means some meta is still set to INDEXED instead of MIRRORED.
                 # On the other hand, if the hashes differ, then we have a problem and should be getting out
                 if not compare_md5_hash(ota_file, blob):
-                    span.set_status("internal_error")
+                    span.status = "error"
+                    span.set_attribute("symx.failure_reason", "internal_error")
                     return
             else:
                 blob.chunk_size = ARTIFACT_UPLOAD_CHUNK_SIZE
@@ -123,34 +127,40 @@ class OtaGcsStorage(OtaStorage):
         self.update_meta_item(ota_meta_key, ota_meta)
 
     def load_ota(self, ota: OtaArtifact, download_dir: Path) -> Path | None:
-        with sentry_sdk.start_span(op="gcs.download_ota", name=f"Download OTA {ota.platform} {ota.version}") as span:
-            span.set_data("platform", ota.platform)
-            span.set_data("version", ota.version)
-            span.set_data("download_path", ota.download_path)
+        with sentry_sdk.start_span(
+            attributes={"sentry.op": "gcs.download_ota"}, name=f"Download OTA {ota.platform} {ota.version}"
+        ) as span:
+            span.set_attribute("platform", ota.platform)
+            span.set_attribute("version", ota.version)
+            set_diagnostic(span, "download_path", ota.download_path)
 
             if ota.download_path is None:
                 logger.error("OTA %s %s has no mirror path", ota.platform, ota.version)
-                span.set_status("invalid_argument")
+                span.status = "error"
+                span.set_attribute("symx.failure_reason", "invalid_argument")
                 return None
 
             blob = self.bucket.blob(ota.download_path)
             local_ota_path = download_dir / f"{ota.id}.zip"
             if not blob.exists():
                 logger.error("OTA mirror path no longer accessible: %s", ota.download_path)
-                span.set_status("not_found")
+                span.status = "error"
+                span.set_attribute("symx.failure_reason", "not_found")
                 return None
 
             if not try_download_to_filename(blob, local_ota_path):
-                span.set_status("internal_error")
+                span.status = "error"
+                span.set_attribute("symx.failure_reason", "internal_error")
                 return None
 
             if not check_ota_hash(ota, local_ota_path):
                 logger.error("SHA1 mismatch between storage and meta-data for OTA %s %s", ota.platform, ota.version)
-                span.set_status("data_loss")
+                span.status = "error"
+                span.set_attribute("symx.failure_reason", "data_loss")
                 return None
 
             if local_ota_path.exists():
-                span.set_data("downloaded_bytes", local_ota_path.stat().st_size)
+                span.set_attribute("downloaded_bytes", local_ota_path.stat().st_size)
             return local_ota_path
 
     def update_meta_item(self, ota_meta_key: str, ota_meta: OtaArtifact) -> OtaMetaData:

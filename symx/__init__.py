@@ -3,7 +3,7 @@ import os
 
 import sentry_sdk
 import typer
-from sentry_sdk.integrations.logging import SentryLogsHandler
+from sentry_sdk.integrations.logging import LoggingIntegration
 
 from .model import github_run_id
 from .admin.app import admin_app
@@ -37,9 +37,36 @@ def setup_sentry():
     sentry_sdk.init(
         dsn=SENTRY_DSN,
         traces_sample_rate=1.0,
-        enable_logs=True,
+        integrations=[LoggingIntegration(level=logging.INFO, breadcrumb_level=logging.INFO, event_level=logging.ERROR)],
+        data_collection={
+            "user_info": False,
+            "http_bodies": [],
+            "graphql": {"document": False, "variables": False},
+            "gen_ai": {"inputs": False, "outputs": False},
+            "mcp": {"inputs": False, "outputs": False},
+            "database_query_data": False,
+            "queues": False,
+            "stack_frame_variables": {"mode": "denylist"},
+            "http_headers": {
+                "request": {
+                    "mode": "denylist",
+                    "terms": ["forwarded", "-ip", "remote-", "via", "-user"],
+                },
+            },
+            "cookies": {
+                "mode": "denylist",
+                "terms": ["forwarded", "-ip", "remote-", "via", "-user"],
+            },
+            "url_query_params": {
+                "mode": "denylist",
+                "terms": ["forwarded", "-ip", "remote-", "via", "-user"],
+            },
+        },
     )
-    sentry_sdk.set_tag("github.run.id", github_run_id())
+
+    run_id = github_run_id()
+    sentry_sdk.set_tag("github.run.id", run_id)
+    sentry_sdk.set_attribute("github.run.id", run_id)
 
 
 class AppendExtrasFormatter(logging.Formatter):
@@ -88,4 +115,4 @@ def setup_logs(verbose: bool):
     extra_std_out.setFormatter(AppendExtrasFormatter(fmt=fmt))
     if verbose:
         lvl = logging.DEBUG
-    logging.basicConfig(level=lvl, format=fmt, handlers=[SentryLogsHandler(level=logging.INFO), extra_std_out])
+    logging.basicConfig(level=lvl, format=fmt, handlers=[extra_std_out])

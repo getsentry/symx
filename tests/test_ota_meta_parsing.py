@@ -223,13 +223,13 @@ def test_download_meta_job_records_bounded_subprocess_diagnostics(monkeypatch: p
     span_data: dict[str, object] = {}
 
     class RecordingSpan:
-        def set_data(self, key: str, value: object) -> None:
+        def set_attribute(self, key: str, value: object) -> None:
             span_data[key] = value
 
     @contextmanager
     def recording_span(*args: object, **kwargs: object) -> Generator[RecordingSpan]:
         assert kwargs == {
-            "op": "subprocess.ipsw_download_meta",
+            "attributes": {"sentry.op": "subprocess.ipsw_download_meta"},
             "name": "Fetch OTA meta for tvos (beta)",
         }
         yield RecordingSpan()

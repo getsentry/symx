@@ -33,7 +33,7 @@ def meta_sync(storage: str = typer.Option(..., "--storage", "-s", help="Storage"
     """
     Synchronize meta-data with appledb.
     """
-    with sentry_sdk.start_transaction(op="ipsw.meta_sync", name="IPSW meta-sync"):
+    with sentry_sdk.start_span(parent_span=None, attributes={"sentry.op": "ipsw.meta_sync"}, name="IPSW meta-sync"):
         with tempfile.TemporaryDirectory() as processing_dir:
             storage_backend = init_storage(Path(processing_dir), storage)
             if storage_backend:
@@ -92,7 +92,9 @@ def extract_file(
     """
     Extract symbols from a local IPSW file.
     """
-    with sentry_sdk.start_transaction(op="ipsw.extract_file", name=f"IPSW extract-file {ipsw_file.name}"):
+    with sentry_sdk.start_span(
+        parent_span=None, attributes={"sentry.op": "ipsw.extract_file"}, name=f"IPSW extract-file {ipsw_file.name}"
+    ):
         validate_shell_deps()
 
         if output_dir is None:
@@ -114,7 +116,7 @@ def migrate(
     """
     Migrate/Maintain storage
     """
-    with sentry_sdk.start_transaction(op="ipsw.migrate", name="IPSW migrate"):
+    with sentry_sdk.start_span(parent_span=None, attributes={"sentry.op": "ipsw.migrate"}, name="IPSW migrate"):
         with tempfile.TemporaryDirectory() as processing_dir:
             storage_backend = init_storage(Path(processing_dir), storage)
             if storage_backend:

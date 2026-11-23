@@ -13,6 +13,7 @@ import sentry_sdk
 import sentry_sdk.metrics
 from pydantic import BaseModel, ConfigDict, Field
 
+from symx.telemetry import set_diagnostic
 from symx.diagnostics import decode_subprocess_output, format_command, truncate_text
 from symx.model import ArtifactProcessingState
 from symx.ota.model import (
@@ -154,9 +155,11 @@ def _download_meta_job(job: tuple[str, bool]) -> OtaMetaData:
     platform, beta = job
     label = f"{platform} (beta)" if beta else platform
 
-    with sentry_sdk.start_span(op="subprocess.ipsw_download_meta", name=f"Fetch OTA meta for {label}") as span:
-        span.set_data("platform", platform)
-        span.set_data("beta", beta)
+    with sentry_sdk.start_span(
+        attributes={"sentry.op": "subprocess.ipsw_download_meta"}, name=f"Fetch OTA meta for {label}"
+    ) as span:
+        span.set_attribute("platform", platform)
+        span.set_attribute("beta", beta)
         logger.info("Downloading OTA meta for %s%s", platform, " (beta)" if beta else "")
         cmd = [
             "ipsw",
@@ -169,10 +172,10 @@ def _download_meta_job(job: tuple[str, bool]) -> OtaMetaData:
         if beta:
             cmd.append("--beta")
 
-        span.set_data("command", format_command(cmd))
+        span.set_attribute("command", format_command(cmd))
         result = subprocess.run(cmd, capture_output=True)
-        span.set_data("returncode", result.returncode)
-        span.set_data("stderr", truncate_text(result.stderr))
+        span.set_attribute("returncode", result.returncode)
+        set_diagnostic(span, "stderr", truncate_text(result.stderr))
         meta: OtaMetaData = {}
         parse_download_meta_output(platform, result, meta, beta)
         return meta
