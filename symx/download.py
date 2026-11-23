@@ -60,9 +60,9 @@ DOWNLOAD_TIMEOUT = (10.0, 60.0)
 
 
 def download_url_to_file(url: str, filepath: Path, status_callback: StatusCallback | None = None) -> None:
-    with sentry_sdk.start_span(op="http.download", name=f"Download {filepath.name}") as span:
-        span.set_data("url", str(url))
-        span.set_data("filepath", str(filepath))
+    with sentry_sdk.start_span(attributes={"sentry.op": "http.download"}, name=f"Download {filepath.name}") as span:
+        span.set_attribute("url", str(url))
+        span.set_attribute("filepath", str(filepath))
         start = time_module.monotonic()
 
         with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as res:
@@ -76,7 +76,7 @@ def download_url_to_file(url: str, filepath: Path, status_callback: StatusCallba
                 total = int(content_length)
                 total_mib = total / MiB
                 _emit_status(f"Filesize: {floor(total_mib)}MiB", status_callback)
-                span.set_data("content_length_bytes", total)
+                span.set_attribute("content_length_bytes", total)
 
             with open(filepath, "wb") as f:
                 actual = 0
@@ -94,7 +94,7 @@ def download_url_to_file(url: str, filepath: Path, status_callback: StatusCallba
                 _emit_status(f"Downloaded {floor(actual_mib)}MiB", status_callback)
 
         elapsed = time_module.monotonic() - start
-        span.set_data("downloaded_bytes", actual)
+        span.set_attribute("downloaded_bytes", actual)
         sentry_sdk.metrics.distribution("download.size_bytes", actual, unit="byte")
         sentry_sdk.metrics.distribution("download.duration_seconds", elapsed, unit="second")
 

@@ -22,12 +22,12 @@ def check_ota_hash(ota_meta: OtaArtifact, filepath: Path) -> bool:
 
 def download_ota_from_apple(ota_meta: OtaArtifact, download_dir: Path) -> Path:
     with sentry_sdk.start_span(
-        op="http.download",
+        attributes={"sentry.op": "http.download"},
         name=f"Download OTA {ota_meta.platform} {ota_meta.version} {ota_meta.build}",
     ) as span:
-        span.set_data("platform", ota_meta.platform)
-        span.set_data("version", ota_meta.version)
-        span.set_data("build", ota_meta.build)
+        span.set_attribute("platform", ota_meta.platform)
+        span.set_attribute("version", ota_meta.version)
+        span.set_attribute("build", ota_meta.build)
 
         logger.info("Downloading OTA %s %s %s from Apple", ota_meta.platform, ota_meta.version, ota_meta.build)
 
@@ -38,7 +38,7 @@ def download_ota_from_apple(ota_meta: OtaArtifact, download_dir: Path) -> Path:
             raise RuntimeError(f"Downloaded OTA failed hash verification: {ota_meta.url}")
 
         size = filepath.stat().st_size
-        span.set_data("downloaded_bytes", size)
+        span.set_attribute("downloaded_bytes", size)
         sentry_sdk.metrics.distribution(
             "ota.download.size_bytes", size, unit="byte", attributes={"platform": ota_meta.platform}
         )

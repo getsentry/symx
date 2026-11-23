@@ -71,7 +71,9 @@ def extract_file(
     """
     Extract symbols from a local OTA file.
     """
-    with sentry_sdk.start_transaction(op="ota.extract_file", name=f"OTA extract-file {ota_file.name}"):
+    with sentry_sdk.start_span(
+        parent_span=None, attributes={"sentry.op": "ota.extract_file"}, name=f"OTA extract-file {ota_file.name}"
+    ):
         validate_shell_deps()
 
         if bundle_id is None:
@@ -109,7 +111,7 @@ def migrate_storage(storage: str = typer.Option(..., "--storage", "-s", help="St
     just the entry point for a GHA.
     :param storage: URI to a supported storage backend
     """
-    with sentry_sdk.start_transaction(op="ota.migrate", name="OTA migrate"):
+    with sentry_sdk.start_span(parent_span=None, attributes={"sentry.op": "ota.migrate"}, name="OTA migrate"):
         storage_backend = init_storage(storage)
         if storage_backend:
             migrate(storage_backend)

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import sentry_sdk
 import sentry_sdk.metrics
+from sentry_sdk.traces import Span
 
 from symx.download import DownloadError
 from symx.model import (
@@ -37,12 +38,16 @@ from symx.ota.mirror import download_ota_from_apple
 logger = logging.getLogger(__name__)
 
 
-def _set_artifact_context(key: str, ota: OtaArtifact) -> None:
-    """Set sentry tags and structured context for the current artifact."""
-    sentry_sdk.set_tag("artifact.key", key)
-    sentry_sdk.set_tag("artifact.platform", ota.platform)
-    sentry_sdk.set_tag("artifact.version", ota.version)
-    sentry_sdk.set_tag("artifact.build", ota.build)
+def _set_artifact_context(span: Span, key: str, ota: OtaArtifact) -> None:
+    for name, value in {
+        "artifact.key": key,
+        "artifact.platform": ota.platform,
+        "artifact.version": ota.version,
+        "artifact.build": ota.build,
+        "artifact.url": ota.url,
+    }.items():
+        span.set_attribute(name, value)
+        sentry_sdk.set_tag(name, value)
     sentry_sdk.set_context(
         "ota_artifact",
         {
@@ -80,7 +85,9 @@ class OtaMirror:
         self._downloader = downloader if downloader is not None else _RealOtaDownloader()
 
     def update_meta(self) -> None:
-        with sentry_sdk.start_transaction(op="ota.meta_sync", name="OTA meta-sync from Apple"):
+        with sentry_sdk.start_span(
+            parent_span=None, attributes={"sentry.op": "ota.meta_sync"}, name="OTA meta-sync from Apple"
+        ):
             logger.info("Updating OTA meta-data")
             apple_meta = self._meta_retriever.retrieve()
             self.meta = self.storage.save_meta(apple_meta)
@@ -102,14 +109,17 @@ class OtaMirror:
                 if not ota.is_indexed():
                     continue
 
-                with sentry_sdk.start_transaction(
-                    op="ota.mirror",
+                with sentry_sdk.start_span(
+                    parent_span=None,
+                    attributes={"sentry.op": "ota.mirror"},
                     name=f"OTA mirror {ota.platform} {ota.version} {ota.build} ({key[:12]})",
-                ):
-                    _set_artifact_context(key, ota)
+                ) as span:
+                    _set_artifact_context(span, key, ota)
                     try:
                         ota_file = self._downloader.download(ota, Path(download_dir))
-                        with sentry_sdk.start_span(op="gcs.upload", name=f"Upload OTA {ota.platform} {ota.version}"):
+                        with sentry_sdk.start_span(
+                            attributes={"sentry.op": "gcs.upload"}, name=f"Upload OTA {ota.platform} {ota.version}"
+                        ):
                             self.storage.save_ota(key, ota, ota_file)
                         ota_file.unlink()
                         artifacts_mirrored += 1
@@ -194,17 +204,20 @@ class OtaExtract:
                 logger.warning("Exiting OTA extract due to elapsed timeout after %ds", timer.elapsed_seconds)
                 break
 
-            with sentry_sdk.start_transaction(
-                op="ota.extract",
+            with sentry_sdk.start_span(
+                parent_span=None,
+                attributes={"sentry.op": "ota.extract"},
                 name=f"OTA extract {ota.platform} {ota.version} {ota.build} ({key[:12]})",
-            ):
-                _set_artifact_context(key, ota)
+            ) as span:
+                _set_artifact_context(span, key, ota)
 
                 with tempfile.TemporaryDirectory() as ota_work_dir:
                     work_dir_path = Path(ota_work_dir)
                     logger.info("Downloading mirrored OTA %s %s %s", ota.platform, ota.version, ota.build)
 
-                    with sentry_sdk.start_span(op="gcs.download", name=f"Download OTA {ota.platform} {ota.version}"):
+                    with sentry_sdk.start_span(
+                        attributes={"sentry.op": "gcs.download"}, name=f"Download OTA {ota.platform} {ota.version}"
+                    ):
                         local_ota_path = self.storage.load_ota(ota, work_dir_path)
 
                     if local_ota_path is None:
@@ -216,7 +229,7 @@ class OtaExtract:
 
                     try:
                         with sentry_sdk.start_span(
-                            op="ota.extract.run",
+                            attributes={"sentry.op": "ota.extract.run"},
                             name=f"Extract+split+symsort OTA {ota.platform} {ota.version}",
                         ):
                             request = OtaExtractionRequest.from_artifact(
@@ -268,7 +281,7 @@ class OtaExtract:
                                 bundle_id = request.bundle_id
                                 for symbol_dir in symbol_dirs:
                                     with sentry_sdk.start_span(
-                                        op="gcs.upload_symbols",
+                                        attributes={"sentry.op": "gcs.upload_symbols"},
                                         name=f"Upload OTA symbols {ota.platform} {ota.version}",
                                     ):
                                         self.storage.upload_symbols(ota.platform, bundle_id, symbol_dir)

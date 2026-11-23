@@ -189,7 +189,7 @@ uv run symx ota mirror -s gs://my-project@my-bucket
 The shortest useful operator loop is usually:
 
 1. inspect failing or slow runs in GitHub Actions,
-2. look at the corresponding Sentry transaction,
+2. look at the corresponding Sentry trace,
 3. inspect a local admin snapshot in the native app or TUI (either client can sync it),
 4. when needed, download the failing artifact from the TUI and reproduce with `extract-file` locally.
 
@@ -197,7 +197,7 @@ Useful entry points:
 
 - GitHub Actions inspection: [docs/operations.md#github-actions](docs/operations.md#github-actions)
 - Admin clients and local SQLite snapshots: [docs/operations.md#admin-tui-and-local-snapshots](docs/operations.md#admin-tui-and-local-snapshots)
-- Sentry tags, transactions, and metrics: [docs/operations.md#sentry](docs/operations.md#sentry)
+- Sentry tags, traces, and metrics: [docs/operations.md#sentry](docs/operations.md#sentry)
 - Failure-state diagrams: [docs/architecture.md#artifact-state-model](docs/architecture.md#artifact-state-model)
 - GitHub Actions dependency pins and bumping: [docs/gha-dependencies.md](docs/gha-dependencies.md)
 

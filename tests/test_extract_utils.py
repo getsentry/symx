@@ -1817,7 +1817,7 @@ def test_probe_payload_dsc_inventory_keeps_zip_bom_evidence_without_payload_memb
     span_data: dict[str, object] = {}
 
     class RecordingSpan:
-        def set_data(self, key: str, value: object) -> None:
+        def set_attribute(self, key: str, value: object) -> None:
             span_data[key] = value
 
     @contextmanager

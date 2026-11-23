@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 
 import sentry_sdk
 
+from symx.telemetry import set_diagnostic
 from symx.diagnostics import (
     decode_subprocess_output,
     directory_data,
@@ -477,8 +478,8 @@ class _IpswExtractionRun:
         if selected_dmg in self._aea_preflight_complete or not selected_dmg.endswith(".aea"):
             return
 
-        with sentry_sdk.start_span(op="ipsw.preflight.aea", name="IPSW AEA preflight") as span:
-            span.set_data("ipsw_path", str(self.ipsw_path))
+        with sentry_sdk.start_span(attributes={"sentry.op": "ipsw.preflight.aea"}, name="IPSW AEA preflight") as span:
+            span.set_attribute("ipsw_path", str(self.ipsw_path))
             probe_data: dict[str, object] = {"selected_dmg": selected_dmg, "image_kind": str(image.kind)}
             pem_db_path = vendored_ipsw_pem_db_path()
             if pem_db_path is not None:
@@ -494,10 +495,11 @@ class _IpswExtractionRun:
                 info_result = subprocess.run(info_command, capture_output=True)
                 info_command_data = _ipsw_command_data(info_command, info_result.stdout, info_result.stderr, [temp_dir])
                 info_command_data.update(probe_data)
-                span.set_data("aea_info", info_command_data)
+                set_diagnostic(span, "aea_info", info_command_data)
 
                 if info_result.returncode != 0:
-                    span.set_status("internal_error")
+                    span.status = "error"
+                    span.set_attribute("symx.failure_reason", "internal_error")
                     summary = _summarize_ipsw_stderr(info_result.stderr) or "ipsw fw aea --info failed"
                     raise IpswExtractError(f"IPSW AEA preflight failed for {self.ipsw_path}: {summary}")
 
@@ -510,7 +512,7 @@ class _IpswExtractionRun:
                 probe_data["fcs_key_url"] = fcs_key_url
                 probe_data["fcs_key_id"] = fcs_key_id
                 probe_data["vendored_db_hit"] = vendored_db_hit
-                span.set_data("aea_probe", probe_data)
+                set_diagnostic(span, "aea_probe", probe_data)
 
                 key_command = ["ipsw", "--no-color", "fw", "aea", "--key"]
                 if pem_db_path is not None:
@@ -539,9 +541,12 @@ class _IpswExtractionRun:
                     )
                     time.sleep(_AEA_KEY_RETRY_DELAY_SECONDS * attempt)
 
-                span.set_data("aea_key_probe", key_attempt_data[0] if len(key_attempt_data) == 1 else key_attempt_data)
+                set_diagnostic(
+                    span, "aea_key_probe", key_attempt_data[0] if len(key_attempt_data) == 1 else key_attempt_data
+                )
                 if key_result is None or key_result.returncode != 0:
-                    span.set_status("internal_error")
+                    span.status = "error"
+                    span.set_attribute("symx.failure_reason", "internal_error")
                     summary = (
                         _summarize_ipsw_stderr(key_result.stderr) if key_result is not None else None
                     ) or "ipsw fw aea --key failed"
@@ -565,11 +570,11 @@ class _IpswExtractionRun:
         temp_dir.mkdir()
 
         with sentry_sdk.start_span(
-            op="subprocess.ipsw_extract",
+            attributes={"sentry.op": "subprocess.ipsw_extract"},
             name=f"ipsw extract DSC ({arch_label})",
         ) as span:
-            span.set_data("arch", arch_label)
-            span.set_data("ipsw_path", str(self.ipsw_path))
+            span.set_attribute("arch", arch_label)
+            span.set_attribute("ipsw_path", str(self.ipsw_path))
 
             command: list[str] = [
                 "ipsw",
@@ -606,21 +611,23 @@ class _IpswExtractionRun:
                 except subprocess.TimeoutExpired:
                     _kill_process_group(process)
                     stdout, stderr = process.communicate(timeout=_SYS_MOUNT_CLEANUP_TIMEOUT_SECONDS)
-                    span.set_data("ipsw_extract", _ipsw_command_data(command, stdout, stderr, [output_dir]))
-                    span.set_status("deadline_exceeded")
+                    set_diagnostic(span, "ipsw_extract", _ipsw_command_data(command, stdout, stderr, [output_dir]))
+                    span.status = "error"
+                    span.set_attribute("symx.failure_reason", "deadline_exceeded")
                     raise IpswExtractTimeoutError(f"ipsw extract timed out for {self.ipsw_path} ({arch_label})")
 
-                span.set_data("ipsw_extract", _ipsw_command_data(command, stdout, stderr, [output_dir]))
+                set_diagnostic(span, "ipsw_extract", _ipsw_command_data(command, stdout, stderr, [output_dir]))
                 if process.returncode != 0:
                     stderr_text = _filter_ipsw_usage(stderr).strip()
                     if (
                         arch is not None
                         and "no dyld_shared_cache files found matching the specified archs" in stderr_text
                     ):
-                        span.set_data("materialization_outcome", "not_present")
+                        span.set_attribute("materialization_outcome", "not_present")
                         return IpswDscNotPresent(arch=arch, message=stderr_text)
 
-                    span.set_status("internal_error")
+                    span.status = "error"
+                    span.set_attribute("symx.failure_reason", "internal_error")
                     stderr_summary = _summarize_ipsw_stderr(stderr)
                     detail = f": {stderr_summary}" if stderr_summary else ""
                     return IpswDscUnavailable(
@@ -634,8 +641,9 @@ class _IpswExtractionRun:
 
             extract_dir = output_dir
             if not any(extract_dir.iterdir()):
-                span.set_data("processing_dir", directory_data(output_dir))
-                span.set_status("internal_error")
+                set_diagnostic(span, "processing_dir", directory_data(output_dir))
+                span.status = "error"
+                span.set_attribute("symx.failure_reason", "internal_error")
                 return IpswDscUnavailable(
                     arch=arch,
                     reason=IpswDscUnavailableReason.NO_EXTRACT_DIR,
@@ -645,8 +653,8 @@ class _IpswExtractionRun:
                     ),
                 )
 
-            span.set_data("extract_dir", directory_data(extract_dir))
-            span.set_data("extract_output_tree", _directory_tree_stats(extract_dir).to_span_data())
+            set_diagnostic(span, "extract_dir", directory_data(extract_dir))
+            set_diagnostic(span, "extract_output_tree", _directory_tree_stats(extract_dir).to_span_data())
             return IpswDscMaterialized(arch=arch, extract_dir=extract_dir)
 
     def run(self) -> Path:
@@ -710,10 +718,12 @@ class _IpswExtractionRun:
         return self.symbols_dir()
 
     def _materialize_and_archive(self, attempt: IpswDscAttemptRequest) -> list[tuple[Path, Path]]:
-        with sentry_sdk.start_span(op="ipsw.extract.dsc_arch", name=f"{attempt.image.member} / {attempt.arch}") as span:
-            span.set_data("image", attempt.image.member)
-            span.set_data("selector", attempt.image.selector)
-            span.set_data("architecture", str(attempt.arch))
+        with sentry_sdk.start_span(
+            attributes={"sentry.op": "ipsw.extract.dsc_arch"}, name=f"{attempt.image.member} / {attempt.arch}"
+        ) as span:
+            span.set_attribute("image", attempt.image.member)
+            set_diagnostic(span, "selector", attempt.image.selector)
+            span.set_attribute("architecture", str(attempt.arch))
             with image_workspace(attempt.work_dir):
                 match self._ipsw_extract_dsc(attempt):
                     case IpswDscNotPresent(message=message):
@@ -722,7 +732,7 @@ class _IpswExtractionRun:
                                 "unfiltered IPSW DSC materialization returned an architecture absence"
                             )
 
-                        span.set_data("outcome", "not_present")
+                        span.set_attribute("outcome", "not_present")
                         logger.info(
                             "IPSW DSC absent image=%s arch=%s: %s",
                             attempt.image.member,
@@ -733,7 +743,7 @@ class _IpswExtractionRun:
                     case IpswDscUnavailable(message=message):
                         raise IpswExtractError(message)
                     case IpswDscMaterialized(extract_dir=extract_dir):
-                        span.set_data("outcome", "materialized")
+                        span.set_attribute("outcome", "materialized")
                         return self._ipsw_split(extract_dir, attempt)
 
     def _archive_split(self, cache: Path, relative: Path, attempt: IpswDscAttemptRequest) -> tuple[Path, Path]:
@@ -776,9 +786,11 @@ class _IpswExtractionRun:
             if pem_db := vendored_ipsw_pem_db_path():
                 command.extend(["--pem-db", str(pem_db)])
 
-            with sentry_sdk.start_span(op="subprocess.ipsw_mount", name=f"Mount {image.member}") as span:
-                span.set_data("image", image.member)
-                span.set_data("selector", image.selector)
+            with sentry_sdk.start_span(
+                attributes={"sentry.op": "subprocess.ipsw_mount"}, name=f"Mount {image.member}"
+            ) as span:
+                span.set_attribute("image", image.member)
+                set_diagnostic(span, "selector", image.selector)
                 # A regular file avoids both pipe backpressure and unbounded
                 # readline during acquisition. Polling has a readiness deadline.
                 log_path = root / "mount.log"
@@ -793,7 +805,7 @@ class _IpswExtractionRun:
                     ) as process,
                 ):
                     preview = _wait_for_sys_mount(process, log_path, mount_point, image)
-                    span.set_data("mount_output_preview", preview)
+                    span.set_attribute("mount_output_preview", preview)
                     logger.info("IPSW mounted image=%s selector=%s mount=%s", image.member, image.selector, mount_point)
                     yield mount_point
 
@@ -833,42 +845,48 @@ class _IpswExtractionRun:
         return [self._archive_split(path, path.relative_to(extract_dir), attempt) for path in primaries]
 
     def _ipsw_split_dsc_file(self, dsc_root_file: Path, output: Path) -> None:
-        with sentry_sdk.start_span(op="ipsw.dyld_split", name=f"Split IPSW DSC {dsc_root_file.name}") as span:
-            span.set_data("dsc_root_file", str(dsc_root_file))
+        with sentry_sdk.start_span(
+            attributes={"sentry.op": "ipsw.dyld_split"}, name=f"Split IPSW DSC {dsc_root_file.name}"
+        ) as span:
+            span.set_attribute("dsc_root_file", str(dsc_root_file))
             result = dyld_split(dsc_root_file, output)
-            span.set_data("dyld_split", subprocess_result_data(result))
-            span.set_data("split_output_tree", _directory_tree_stats(output).to_span_data())
+            set_diagnostic(span, "dyld_split", subprocess_result_data(result))
+            set_diagnostic(span, "split_output_tree", _directory_tree_stats(output).to_span_data())
             logger.info("IPSW split cache=%s output=%s returncode=%s", dsc_root_file, output, result.returncode)
 
             if result.returncode != 0:
-                span.set_status("internal_error")
+                span.status = "error"
+                span.set_attribute("symx.failure_reason", "internal_error")
                 raise IpswExtractError(f"ipsw dyld split failed for {dsc_root_file}")
 
     def _symsort(self, split_dir: Path, ignore_errors: bool = False, record_input_tree: bool = True) -> None:
         output_dir = self.symbols_dir()
         logger.info("Symsorting %s -> %s", split_dir, output_dir)
 
-        with sentry_sdk.start_span(op="ipsw.symsort", name=f"Symsort IPSW {self.bundle_id}") as span:
-            span.set_data("bundle_id", self.bundle_id)
-            span.set_data("split_dir", directory_data(split_dir))
+        with sentry_sdk.start_span(
+            attributes={"sentry.op": "ipsw.symsort"}, name=f"Symsort IPSW {self.bundle_id}"
+        ) as span:
+            span.set_attribute("bundle_id", self.bundle_id)
+            set_diagnostic(span, "split_dir", directory_data(split_dir))
             if record_input_tree:
-                span.set_data("input_tree", _directory_tree_stats(split_dir).to_span_data())
+                set_diagnostic(span, "input_tree", _directory_tree_stats(split_dir).to_span_data())
 
             output_tree_before = _directory_tree_stats(output_dir)
-            span.set_data("output_dir", directory_data(output_dir))
+            set_diagnostic(span, "output_dir", directory_data(output_dir))
 
             result = symsort(output_dir, self.prefix, self.bundle_id, split_dir, ignore_errors)
-            span.set_data("symsort", subprocess_result_data(result))
-            span.set_data("symsorter_summary", _parse_symsorter_summary(result.stdout, result.stderr))
+            set_diagnostic(span, "symsort", subprocess_result_data(result))
+            set_diagnostic(span, "symsorter_summary", _parse_symsorter_summary(result.stdout, result.stderr))
 
             output_tree_after = _directory_tree_stats(output_dir)
-            span.set_data(
-                "output_tree_delta", _directory_tree_delta(output_tree_before, output_tree_after).to_span_data()
+            set_diagnostic(
+                span, "output_tree_delta", _directory_tree_delta(output_tree_before, output_tree_after).to_span_data()
             )
-            span.set_data("output_tree_total_after", output_tree_after.to_span_data())
+            set_diagnostic(span, "output_tree_total_after", output_tree_after.to_span_data())
 
             if result.returncode != 0:
-                span.set_status("internal_error")
+                span.status = "error"
+                span.set_attribute("symx.failure_reason", "internal_error")
                 raise IpswExtractError(f"Symsorter failed for bundle {self.bundle_id}")
 
 

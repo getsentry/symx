@@ -7,6 +7,7 @@ from typing import Protocol
 
 import sentry_sdk
 import sentry_sdk.metrics
+from sentry_sdk.traces import Span
 
 from symx.model import (
     ArtifactProcessingState,
@@ -56,12 +57,15 @@ class SymbolExtractor(Protocol):
 logger = logging.getLogger(__name__)
 
 
-def _set_artifact_context(artifact: IpswArtifact) -> None:
-    """Set sentry tags and structured context for the current artifact."""
-    sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
-    sentry_sdk.set_tag("ipsw.artifact.platform", str(artifact.platform))
-    sentry_sdk.set_tag("ipsw.artifact.version", artifact.version)
-    sentry_sdk.set_tag("ipsw.artifact.build", artifact.build)
+def _set_artifact_context(span: Span, artifact: IpswArtifact) -> None:
+    for key, value in {
+        "ipsw.artifact.key": artifact.key,
+        "ipsw.artifact.platform": str(artifact.platform),
+        "ipsw.artifact.version": artifact.version,
+        "ipsw.artifact.build": artifact.build,
+    }.items():
+        span.set_attribute(key, value)
+        sentry_sdk.set_tag(key, value)
     sentry_sdk.set_context(
         "ipsw_artifact",
         {
@@ -85,7 +89,7 @@ def _set_artifact_context(artifact: IpswArtifact) -> None:
 
 
 def import_meta_from_appledb(ipsw_storage: "IpswGcsStorage") -> None:
-    with sentry_sdk.start_span(op="ipsw.meta_sync", name="IPSW meta-sync from AppleDB"):
+    with sentry_sdk.start_span(attributes={"sentry.op": "ipsw.meta_sync"}, name="IPSW meta-sync from AppleDB"):
         _, base_generation = ipsw_storage.load_artifacts_meta()
 
         importer = AppleDbIpswImport(ipsw_storage.local_dir)
@@ -94,8 +98,10 @@ def import_meta_from_appledb(ipsw_storage: "IpswGcsStorage") -> None:
         logger.info("Updating IPSW meta with %d new artifacts", len(importer.new_artifacts))
         sentry_sdk.metrics.distribution("ipsw.meta_sync.new_artifacts", len(importer.new_artifacts))
 
-        with sentry_sdk.start_span(op="ipsw.meta_sync.upsert", name="Upsert new artifacts") as upsert_span:
-            upsert_span.set_data("count", len(importer.new_artifacts))
+        with sentry_sdk.start_span(
+            attributes={"sentry.op": "ipsw.meta_sync.upsert"}, name="Upsert new artifacts"
+        ) as upsert_span:
+            upsert_span.set_attribute("count", len(importer.new_artifacts))
             if importer.new_artifacts:
                 ipsw_storage.update_meta_items(
                     importer.new_artifacts,
@@ -114,11 +120,12 @@ def mirror(
     artifacts_failed = 0
 
     for artifact in ipsw_storage.artifact_iter(mirror_filter):
-        with sentry_sdk.start_transaction(
-            op="ipsw.mirror",
+        with sentry_sdk.start_span(
+            parent_span=None,
+            attributes={"sentry.op": "ipsw.mirror"},
             name=f"IPSW mirror {artifact.platform} {artifact.version} {artifact.build}",
-        ):
-            _set_artifact_context(artifact)
+        ) as span:
+            _set_artifact_context(span, artifact)
             logger.info("Mirroring artifact %s", artifact.key)
 
             for source_idx, source in enumerate(artifact.sources):
@@ -136,20 +143,24 @@ def mirror(
                     continue
 
                 with sentry_sdk.start_span(
-                    op="ipsw.mirror.source",
+                    attributes={"sentry.op": "ipsw.mirror.source", "ipsw.artifact.source": source.file_name},
                     name=f"Mirror source {source.file_name}",
                 ) as source_span:
-                    source_span.set_data("source.file_name", source.file_name)
+                    source_span.set_attribute("source.file_name", source.file_name)
 
                     log_disk_usage()
                     filepath = ipsw_storage.local_dir / source.file_name
 
                     download_ok = False
                     try:
-                        with sentry_sdk.start_span(op="http.download", name=f"Download {source.file_name} from Apple"):
+                        with sentry_sdk.start_span(
+                            attributes={"sentry.op": "http.download"}, name=f"Download {source.file_name} from Apple"
+                        ):
                             downloader.download(str(source.link), filepath)
 
-                        with sentry_sdk.start_span(op="ipsw.mirror.verify", name=f"Verify {source.file_name}"):
+                        with sentry_sdk.start_span(
+                            attributes={"sentry.op": "ipsw.mirror.verify"}, name=f"Verify {source.file_name}"
+                        ):
                             download_ok = downloader.verify(filepath, source)
                     except DownloadError as e:
                         sentry_sdk.capture_exception(e)
@@ -162,13 +173,16 @@ def mirror(
                         artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORING_FAILED
                         artifact.sources[source_idx].update_last_run()
                         ipsw_storage.update_meta_item(artifact)
-                        source_span.set_status("internal_error")
+                        source_span.status = "error"
+                        source_span.set_attribute("symx.failure_reason", "internal_error")
                         artifacts_failed += 1
                         sentry_sdk.metrics.count(
                             "ipsw.mirror.failed", 1, attributes={"platform": str(artifact.platform)}
                         )
                     else:
-                        with sentry_sdk.start_span(op="gcs.upload", name=f"Upload {source.file_name} to GCS"):
+                        with sentry_sdk.start_span(
+                            attributes={"sentry.op": "gcs.upload"}, name=f"Upload {source.file_name} to GCS"
+                        ):
                             updated_artifact = ipsw_storage.upload_ipsw(artifact, (filepath, source))
                         ipsw_storage.update_meta_item(updated_artifact)
                         artifacts_mirrored += 1
@@ -195,11 +209,12 @@ def extract(
     artifacts_failed = 0
 
     for artifact in ipsw_storage.artifact_iter(extract_filter):
-        with sentry_sdk.start_transaction(
-            op="ipsw.extract",
+        with sentry_sdk.start_span(
+            parent_span=None,
+            attributes={"sentry.op": "ipsw.extract"},
             name=f"IPSW extract {artifact.platform} {artifact.version} {artifact.build}",
-        ):
-            _set_artifact_context(artifact)
+        ) as span:
+            _set_artifact_context(span, artifact)
             logger.info(
                 "Extracting artifact %s (%s %s %s)",
                 artifact.key,
@@ -223,14 +238,16 @@ def extract(
                     continue
 
                 with sentry_sdk.start_span(
-                    op="ipsw.extract.source",
+                    attributes={"sentry.op": "ipsw.extract.source", "ipsw.artifact.source": source.file_name},
                     name=f"Extract source {source.file_name}",
                 ) as source_span:
-                    source_span.set_data("source.file_name", source.file_name)
+                    source_span.set_attribute("source.file_name", source.file_name)
 
                     # 3.) Download IPSW from mirror. If failing update meta-data.
                     log_disk_usage()
-                    with sentry_sdk.start_span(op="gcs.download", name=f"Download {source.file_name} from mirror"):
+                    with sentry_sdk.start_span(
+                        attributes={"sentry.op": "gcs.download"}, name=f"Download {source.file_name} from mirror"
+                    ):
                         local_path = ipsw_storage.download_ipsw(source)
 
                     if local_path is None:
@@ -238,7 +255,8 @@ def extract(
                         artifact.sources[source_idx].update_last_run()
                         ipsw_storage.update_meta_item(artifact)
                         ipsw_storage.clean_local_dir()
-                        source_span.set_status("internal_error")
+                        source_span.status = "error"
+                        source_span.set_attribute("symx.failure_reason", "internal_error")
                         artifacts_failed += 1
                         sentry_sdk.metrics.count(
                             "ipsw.extract.mirror_corrupt", 1, attributes={"platform": str(artifact.platform)}
@@ -249,7 +267,8 @@ def extract(
                     unsafe_cleanup: IpswMountCleanupError | None = None
                     try:
                         with sentry_sdk.start_span(
-                            op="ipsw.extract.run", name=f"IPSW extract+symsort {source.file_name}"
+                            attributes={"sentry.op": "ipsw.extract.run"},
+                            name=f"IPSW extract+symsort {source.file_name}",
                         ):
                             request = IpswExtractionRequest(
                                 platform=artifact.platform,
@@ -262,7 +281,8 @@ def extract(
                             result = extractor.extract(request)
 
                         with sentry_sdk.start_span(
-                            op="gcs.upload_symbols", name=f"Upload symbols for {source.file_name}"
+                            attributes={"sentry.op": "gcs.upload_symbols"},
+                            name=f"Upload symbols for {source.file_name}",
                         ):
                             ipsw_storage.upload_symbols(
                                 result.prefix,
@@ -290,7 +310,8 @@ def extract(
                             extra={"artifact": artifact, "source": source, "exception": e},
                         )
                         artifact.sources[source_idx].processing_state = ArtifactProcessingState.SYMBOL_EXTRACTION_FAILED
-                        source_span.set_status("internal_error")
+                        source_span.status = "error"
+                        source_span.set_attribute("symx.failure_reason", "internal_error")
                         artifacts_failed += 1
                         sentry_sdk.metrics.count(
                             "ipsw.extract.failed", 1, attributes={"platform": str(artifact.platform)}

@@ -555,9 +555,11 @@ workflow-executed and generation-matched.
 
 Sentry is the live, per-run observability surface.
 
-### Transaction names / ops worth knowing
+### Root span names / ops worth knowing
 
-Top-level transactions include:
+Sentry streams spans individually. Search by the `github.run.id` span attribute to find a run. Failed spans use status `error`; `symx.failure_reason` preserves the specific code where available. Extraction diagnostics remain on the span. Bulk symbol uploads emit an aggregate span rather than a span for each chunk request.
+
+Root spans include:
 
 - `ipsw.meta_sync`
 - `ipsw.mirror`
@@ -582,7 +584,9 @@ Common child span ops include:
 - `ota.extract.dsc_arch`
 - `ota.extract.payload_probe`
 
-### High-value tags
+### Searchable span attributes and event tags
+
+For mirror and extraction traces, look for artifact identity on the artifact root span and `ipsw.artifact.source` on each IPSW source span. These fields also remain tags on error events.
 
 Global:
 
@@ -644,7 +648,7 @@ Representative counters/distributions/gauges emitted by the current code:
 If you have a failed GitHub run:
 
 1. get the run ID,
-2. open the Sentry transaction tagged with `github.run.id=<run-id>`,
+2. open the Sentry trace with the span attribute `github.run.id=<run-id>`,
 3. inspect the failing child span (`http.download`, `gcs.download`, `subprocess.*`, etc.),
 4. use the artifact tags to identify the specific IPSW source or OTA artifact,
 5. reproduce locally if needed.
@@ -687,7 +691,7 @@ Likely causes:
 First checks:
 
 - failing GitHub run log
-- Sentry OTA mirror transaction
+- Sentry OTA mirror trace
 - OTA URL/hash from the admin snapshot
 
 ### `mirror_corrupt` (IPSW)

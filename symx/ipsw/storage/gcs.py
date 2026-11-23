@@ -10,6 +10,7 @@ import sentry_sdk.metrics
 from google.cloud.exceptions import PreconditionFailed
 from google.cloud.storage import Blob, Bucket, Client
 
+from symx.telemetry import set_diagnostic
 from symx.model import ArtifactProcessingState
 from symx.gcs import (
     ARTIFACT_UPLOAD_CHUNK_SIZE,
@@ -104,11 +105,13 @@ class IpswGcsStorage(IpswStorage):
         if not ipsw_file.is_file():
             raise RuntimeError("Path to upload must be a file")
 
-        with sentry_sdk.start_span(op="gcs.upload_ipsw", name=f"Upload IPSW {source.file_name}") as span:
+        with sentry_sdk.start_span(
+            attributes={"sentry.op": "gcs.upload_ipsw"}, name=f"Upload IPSW {source.file_name}"
+        ) as span:
             file_size = ipsw_file.stat().st_size
-            span.set_data("file_name", source.file_name)
-            span.set_data("file_size_bytes", file_size)
-            span.set_data("artifact_key", artifact.key)
+            span.set_attribute("file_name", source.file_name)
+            span.set_attribute("file_size_bytes", file_size)
+            span.set_attribute("artifact_key", artifact.key)
 
             logger.info("Uploading IPSW %s (%dMiB) to %s", ipsw_file.name, file_size // (1024 * 1024), self.bucket.name)
 
@@ -121,7 +124,8 @@ class IpswGcsStorage(IpswStorage):
                 if not compare_md5_hash(ipsw_file, blob):
                     logger.error("Trying to upload IPSW that already exists in mirror with a different MD5")
                     artifact.sources[source_idx].processing_state = ArtifactProcessingState.MIRRORING_FAILED
-                    span.set_status("internal_error")
+                    span.status = "error"
+                    span.set_attribute("symx.failure_reason", "internal_error")
                     return artifact
             else:
                 blob.chunk_size = ARTIFACT_UPLOAD_CHUNK_SIZE
@@ -223,29 +227,34 @@ class IpswGcsStorage(IpswStorage):
             yield sorted_by_age_descending[0]
 
     def download_ipsw(self, ipsw_source: IpswSource) -> Path | None:
-        with sentry_sdk.start_span(op="gcs.download_ipsw", name=f"Download IPSW {ipsw_source.file_name}") as span:
-            span.set_data("file_name", ipsw_source.file_name)
-            span.set_data("mirror_path", ipsw_source.mirror_path)
+        with sentry_sdk.start_span(
+            attributes={"sentry.op": "gcs.download_ipsw"}, name=f"Download IPSW {ipsw_source.file_name}"
+        ) as span:
+            span.set_attribute("file_name", ipsw_source.file_name)
+            set_diagnostic(span, "mirror_path", ipsw_source.mirror_path)
 
             logger.info("Downloading IPSW %s from mirror", ipsw_source.file_name)
             if ipsw_source.mirror_path is None:
                 logger.error("Attempting to download IPSW without mirror path")
-                span.set_status("invalid_argument")
+                span.status = "error"
+                span.set_attribute("symx.failure_reason", "invalid_argument")
                 return None
 
             blob = self.bucket.blob(ipsw_source.mirror_path)
             local_ipsw_path = self.local_dir / ipsw_source.file_name
             if not blob.exists():
                 logger.error("IPSW mirror path no longer accessible: %s", ipsw_source.mirror_path)
-                span.set_status("not_found")
+                span.status = "error"
+                span.set_attribute("symx.failure_reason", "not_found")
                 return None
 
             if not (try_download_to_filename(blob, local_ipsw_path) and verify_download(local_ipsw_path, ipsw_source)):
-                span.set_status("internal_error")
+                span.status = "error"
+                span.set_attribute("symx.failure_reason", "internal_error")
                 return None
 
             if local_ipsw_path.exists():
-                span.set_data("downloaded_bytes", local_ipsw_path.stat().st_size)
+                span.set_attribute("downloaded_bytes", local_ipsw_path.stat().st_size)
             return local_ipsw_path
 
     def upload_symbols(self, prefix: str, bundle_id: str, binary_dir: Path) -> None:

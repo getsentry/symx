@@ -201,7 +201,7 @@ class AppleDbIpswImport:
         try:
             # Clone or update the appledb repository
             with tempfile.TemporaryDirectory() as temp_dir:
-                with sentry_sdk.start_span(op="git.clone", name="Clone/update AppleDB repo"):
+                with sentry_sdk.start_span(attributes={"sentry.op": "git.clone"}, name="Clone/update AppleDB repo"):
                     self._repo_dir = clone_or_update_appledb_repo(Path(temp_dir))
 
                 platforms = list(IpswPlatform)
@@ -211,9 +211,10 @@ class AppleDbIpswImport:
 
                 for platform in platforms:
                     with sentry_sdk.start_span(
-                        op="ipsw.meta_sync.platform", name=f"Process platform {platform}"
+                        attributes={"sentry.op": "ipsw.meta_sync.platform"}, name=f"Process platform {platform}"
                     ) as span:
-                        span.set_data("platform", str(platform))
+                        span.set_attribute("platform", str(platform))
+                        span.set_attribute("ipsw.import.appledb.platform", str(platform))
                         self._process_platform(platform)
         except Exception as e:
             sentry_sdk.capture_exception(e)

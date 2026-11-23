@@ -2,6 +2,11 @@
 
 from collections.abc import Callable
 from datetime import date, timedelta
+import json
+
+import sentry_sdk
+from sentry_sdk.envelope import Envelope
+from sentry_sdk.transport import Transport
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -85,6 +90,54 @@ def _make_artifact(
 
 
 # -- Tests --
+
+
+def test_emitted_span_identity_for_two_sources(tmp_path: Path) -> None:
+    envelopes: list[Envelope] = []
+
+    class Recorder(Transport):
+        def capture_envelope(self, envelope: Envelope) -> None:
+            envelopes.append(envelope)
+
+    artifact = _make_artifact()
+    artifact.sources.extend(_make_artifact(url="https://example.com/second.ipsw").sources)
+    storage = InMemoryIpswStorage(tmp_path)
+    storage.seed_artifact(artifact)
+    with (
+        sentry_sdk.isolation_scope(),
+        sentry_sdk.new_scope() as scope,
+        sentry_sdk.Client(
+            dsn="https://key@example.invalid/1",
+            transport=Recorder(),
+            traces_sample_rate=1.0,
+            default_integrations=False,
+        ) as client,
+    ):
+        scope.set_client(client)
+        mirror(storage, FakeTimeout(timedelta(minutes=60)), downloader=FakeDownloader())
+        client.flush()
+
+    spans = [
+        span
+        for envelope in envelopes
+        for item in envelope.items
+        if item.type == "span"
+        for span in json.loads(item.get_bytes())["items"]
+    ]
+    (root,) = [span for span in spans if span["is_segment"]]
+    attrs = root["attributes"]
+    for key, value in {
+        "key": artifact.key,
+        "platform": str(artifact.platform),
+        "version": artifact.version,
+        "build": artifact.build,
+    }.items():
+        assert attrs[f"ipsw.artifact.{key}"]["value"] == value
+    assert "ipsw.artifact.source" not in attrs
+    sources = [span for span in spans if span.get("parent_span_id") == root["span_id"]]
+    assert sorted(span["attributes"]["ipsw.artifact.source"]["value"] for span in sources) == sorted(
+        s.file_name for s in artifact.sources
+    )
 
 
 class TestMirrorRunner:
