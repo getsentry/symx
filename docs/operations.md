@@ -584,7 +584,9 @@ Common child span ops include:
 - `ota.extract.dsc_arch`
 - `ota.extract.payload_probe`
 
-### High-value tags
+### Searchable span attributes and event tags
+
+For mirror and extraction traces, look for artifact identity on the artifact root span and `ipsw.artifact.source` on each IPSW source span. These fields also remain tags on error events.
 
 Global:
 

@@ -7,6 +7,7 @@ from typing import Protocol
 
 import sentry_sdk
 import sentry_sdk.metrics
+from sentry_sdk.traces import Span
 
 from symx.model import (
     ArtifactProcessingState,
@@ -56,12 +57,15 @@ class SymbolExtractor(Protocol):
 logger = logging.getLogger(__name__)
 
 
-def _set_artifact_context(artifact: IpswArtifact) -> None:
-    """Set sentry tags and structured context for the current artifact."""
-    sentry_sdk.set_tag("ipsw.artifact.key", artifact.key)
-    sentry_sdk.set_tag("ipsw.artifact.platform", str(artifact.platform))
-    sentry_sdk.set_tag("ipsw.artifact.version", artifact.version)
-    sentry_sdk.set_tag("ipsw.artifact.build", artifact.build)
+def _set_artifact_context(span: Span, artifact: IpswArtifact) -> None:
+    for key, value in {
+        "ipsw.artifact.key": artifact.key,
+        "ipsw.artifact.platform": str(artifact.platform),
+        "ipsw.artifact.version": artifact.version,
+        "ipsw.artifact.build": artifact.build,
+    }.items():
+        span.set_attribute(key, value)
+        sentry_sdk.set_tag(key, value)
     sentry_sdk.set_context(
         "ipsw_artifact",
         {
@@ -120,8 +124,8 @@ def mirror(
             parent_span=None,
             attributes={"sentry.op": "ipsw.mirror"},
             name=f"IPSW mirror {artifact.platform} {artifact.version} {artifact.build}",
-        ):
-            _set_artifact_context(artifact)
+        ) as span:
+            _set_artifact_context(span, artifact)
             logger.info("Mirroring artifact %s", artifact.key)
 
             for source_idx, source in enumerate(artifact.sources):
@@ -139,7 +143,7 @@ def mirror(
                     continue
 
                 with sentry_sdk.start_span(
-                    attributes={"sentry.op": "ipsw.mirror.source"},
+                    attributes={"sentry.op": "ipsw.mirror.source", "ipsw.artifact.source": source.file_name},
                     name=f"Mirror source {source.file_name}",
                 ) as source_span:
                     source_span.set_attribute("source.file_name", source.file_name)
@@ -209,8 +213,8 @@ def extract(
             parent_span=None,
             attributes={"sentry.op": "ipsw.extract"},
             name=f"IPSW extract {artifact.platform} {artifact.version} {artifact.build}",
-        ):
-            _set_artifact_context(artifact)
+        ) as span:
+            _set_artifact_context(span, artifact)
             logger.info(
                 "Extracting artifact %s (%s %s %s)",
                 artifact.key,
@@ -234,7 +238,7 @@ def extract(
                     continue
 
                 with sentry_sdk.start_span(
-                    attributes={"sentry.op": "ipsw.extract.source"},
+                    attributes={"sentry.op": "ipsw.extract.source", "ipsw.artifact.source": source.file_name},
                     name=f"Extract source {source.file_name}",
                 ) as source_span:
                     source_span.set_attribute("source.file_name", source.file_name)

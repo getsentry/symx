@@ -214,6 +214,7 @@ class AppleDbIpswImport:
                         attributes={"sentry.op": "ipsw.meta_sync.platform"}, name=f"Process platform {platform}"
                     ) as span:
                         span.set_attribute("platform", str(platform))
+                        span.set_attribute("ipsw.import.appledb.platform", str(platform))
                         self._process_platform(platform)
         except Exception as e:
             sentry_sdk.capture_exception(e)

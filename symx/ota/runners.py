@@ -7,6 +7,7 @@ from pathlib import Path
 
 import sentry_sdk
 import sentry_sdk.metrics
+from sentry_sdk.traces import Span
 
 from symx.download import DownloadError
 from symx.model import (
@@ -37,12 +38,16 @@ from symx.ota.mirror import download_ota_from_apple
 logger = logging.getLogger(__name__)
 
 
-def _set_artifact_context(key: str, ota: OtaArtifact) -> None:
-    """Set sentry tags and structured context for the current artifact."""
-    sentry_sdk.set_tag("artifact.key", key)
-    sentry_sdk.set_tag("artifact.platform", ota.platform)
-    sentry_sdk.set_tag("artifact.version", ota.version)
-    sentry_sdk.set_tag("artifact.build", ota.build)
+def _set_artifact_context(span: Span, key: str, ota: OtaArtifact) -> None:
+    for name, value in {
+        "artifact.key": key,
+        "artifact.platform": ota.platform,
+        "artifact.version": ota.version,
+        "artifact.build": ota.build,
+        "artifact.url": ota.url,
+    }.items():
+        span.set_attribute(name, value)
+        sentry_sdk.set_tag(name, value)
     sentry_sdk.set_context(
         "ota_artifact",
         {
@@ -108,8 +113,8 @@ class OtaMirror:
                     parent_span=None,
                     attributes={"sentry.op": "ota.mirror"},
                     name=f"OTA mirror {ota.platform} {ota.version} {ota.build} ({key[:12]})",
-                ):
-                    _set_artifact_context(key, ota)
+                ) as span:
+                    _set_artifact_context(span, key, ota)
                     try:
                         ota_file = self._downloader.download(ota, Path(download_dir))
                         with sentry_sdk.start_span(
@@ -203,8 +208,8 @@ class OtaExtract:
                 parent_span=None,
                 attributes={"sentry.op": "ota.extract"},
                 name=f"OTA extract {ota.platform} {ota.version} {ota.build} ({key[:12]})",
-            ):
-                _set_artifact_context(key, ota)
+            ) as span:
+                _set_artifact_context(span, key, ota)
 
                 with tempfile.TemporaryDirectory() as ota_work_dir:
                     work_dir_path = Path(ota_work_dir)

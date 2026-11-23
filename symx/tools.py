@@ -52,6 +52,7 @@ def validate_shell_deps() -> None:
 
     logger.info("Using ipsw %s", version)
     sentry_sdk.set_tag("ipsw.version", version)
+    sentry_sdk.set_attribute("ipsw.version", version)
 
     result = subprocess.run(["./symsorter", "--version"], capture_output=True)
     if result.returncode == 0:
@@ -64,6 +65,7 @@ def validate_shell_deps() -> None:
         symsorter_version = symsorter_version_parts[0].split(" ").pop()
         logger.info("Using symsorter %s" % symsorter_version)
         sentry_sdk.set_tag("symsorter.version", symsorter_version)
+        sentry_sdk.set_attribute("symsorter.version", symsorter_version)
     else:
         symsorter_stderr = result.stderr.decode("utf-8")
         logger.error("symsorter failed: %s" % symsorter_stderr)
