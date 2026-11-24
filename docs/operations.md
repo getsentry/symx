@@ -78,8 +78,9 @@ Requirement:
 
 - checksum-pinned `ipsw` 3.1.721 or newer installed and on `PATH`
 
-The schema-1 OTA metadata envelope was introduced in `ipsw` 3.1.713. Symx standardizes metadata retrieval and
-extraction on the newer 3.1.721 production pin.
+The schema-1 OTA metadata envelope was introduced in `ipsw` 3.1.713. See `.github/gha-deps.json` for the current production pin.
+
+Each platform/channel metadata fetch gets up to three attempts for recognized transient network, TLS expiry, or HTTP failures, with backoff and jitter. This includes partial JSON results accompanied by transient errors on stderr. A clean result wins; otherwise Symx keeps the largest validated partial result from that fetch. Retries log warnings. Persistent failures log one error, except for the known intermittent `403 Forbidden`. Schema errors are not retried.
 
 ### Extraction commands
 
