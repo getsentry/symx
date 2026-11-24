@@ -214,13 +214,21 @@ def _download_meta_job(job: tuple[str, bool]) -> OtaMetaData:
                 if len(meta) > len(partial):
                     partial = meta
 
-            if not retryable or attempt == _MAX_FETCH_ATTEMPTS:
-                if result.returncode != 0:
-                    parse_download_meta_output(platform, result, meta, beta)
-                elif transient:
-                    logger.error(
-                        "Incomplete OTA meta for %s after %d attempts: %s", label, attempt, truncate_text(stderr)
-                    )
+            if not retryable:
+                parse_download_meta_output(platform, result, meta, beta)
+                break
+
+            if attempt == _MAX_FETCH_ATTEMPTS:
+                # Keep this in Sentry Logs without creating an error event: a transient
+                # failure for one platform/channel in one run isn't actionable on its own.
+                logger.warning(
+                    "Incomplete OTA meta for %s after %d attempts; retained %d artifacts: %s",
+                    label,
+                    attempt,
+                    len(partial),
+                    truncate_text(stderr),
+                    extra={"platform": platform, "beta": beta, "attempts": attempt, "retained_artifacts": len(partial)},
+                )
                 break
 
             logger.warning("Retrying OTA meta for %s after attempt %d: %s", label, attempt, truncate_text(stderr))

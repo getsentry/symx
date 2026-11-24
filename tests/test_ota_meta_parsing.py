@@ -244,7 +244,15 @@ def test_download_meta_job_retries_partial_success(
     assert set(meta) == {("b" if recover else "a") * 40 + "_beta"}
     assert len(waits) == 2
     assert 1 <= waits[0] <= 2 <= waits[1] <= 3
-    assert sum(r.levelno == logging.ERROR for r in caplog.records) == (0 if recover else 1)
+    assert not any(r.levelno >= logging.ERROR for r in caplog.records)
+
+    exhausted = [r for r in caplog.records if "Incomplete OTA meta" in r.getMessage()]
+    if recover:
+        assert not exhausted
+    else:
+        (record,) = exhausted
+        assert record.levelno == logging.WARNING
+        assert "retained 1 artifacts" in record.getMessage()
 
 
 def test_download_meta_job_retries_known_403_without_error(
