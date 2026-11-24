@@ -2,7 +2,10 @@
 
 import json
 import logging
+import random
+import re
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
@@ -13,7 +16,6 @@ import sentry_sdk
 import sentry_sdk.metrics
 from pydantic import BaseModel, ConfigDict, Field
 
-from symx.telemetry import set_diagnostic
 from symx.diagnostics import decode_subprocess_output, format_command, truncate_text
 from symx.model import ArtifactProcessingState
 from symx.ota.model import (
@@ -79,6 +81,16 @@ class AppleOtaMetaEnvelope(BaseModel):
     otas: list[AppleOtaMetaItem]
 
 
+_MAX_FETCH_ATTEMPTS = 3
+_KNOWN_FORBIDDEN = "api returned status: 403 Forbidden"
+_TRANSIENT_FETCH_ERROR = re.compile(
+    r"x509: certificate has expired or is not yet valid|i/o timeout|timed out|timeout awaiting response headers|"
+    r"context deadline exceeded|connection reset by peer|temporary failure in name resolution|"
+    r"server misbehaving|(?:api returned status:|failed to connect to URL:|HTTP(?:/\d(?:\.\d)?)?)\s+(?:429|5\d\d)\b",
+    re.IGNORECASE,
+)
+
+
 def parse_download_meta_output(
     platform: str,
     result: subprocess.CompletedProcess[bytes],
@@ -87,9 +99,9 @@ def parse_download_meta_output(
 ) -> None:
     if result.returncode != 0:
         ipsw_stderr = decode_subprocess_output(result.stderr)
-        # We regularly get 403 errors on the apple endpoint. These seem to be intermittent
-        # availability issues and do not warrant error notification noise.
-        if "api returned status: 403 Forbidden" not in ipsw_stderr:
+        # Suppress the known Apple 403, but don't let it hide a recognized network
+        # or server error reported in the same stderr.
+        if _KNOWN_FORBIDDEN not in ipsw_stderr or _TRANSIENT_FETCH_ERROR.search(ipsw_stderr):
             logger.error(
                 "Download OTA meta failed for %s%s (exit %s): %s",
                 platform,
@@ -102,6 +114,7 @@ def parse_download_meta_output(
         header = AppleOtaMetaHeader.model_validate(raw_platform_meta)
         if header.schema_version != 1:
             raise ValueError(f"Unsupported ipsw OTA metadata schema version: {header.schema_version}")
+
         platform_meta = AppleOtaMetaEnvelope.model_validate(raw_platform_meta)
         retrieved_at = datetime.now(UTC)
 
@@ -145,9 +158,11 @@ def parse_download_meta_output(
                 prerequisite_version=prerequisite.version if prerequisite is not None else None,
                 last_modified=retrieved_at,
             )
+
             if key in meta_data:
                 key = generate_duplicate_key_from(meta_data, key)
                 artifact.processing_state = ArtifactProcessingState.INDEXED_DUPLICATE
+
             meta_data[key] = artifact
 
 
@@ -173,12 +188,45 @@ def _download_meta_job(job: tuple[str, bool]) -> OtaMetaData:
             cmd.append("--beta")
 
         span.set_attribute("command", format_command(cmd))
-        result = subprocess.run(cmd, capture_output=True)
-        span.set_attribute("returncode", result.returncode)
-        set_diagnostic(span, "stderr", truncate_text(result.stderr))
-        meta: OtaMetaData = {}
-        parse_download_meta_output(platform, result, meta, beta)
-        return meta
+        partial: OtaMetaData = {}
+
+        for attempt in range(1, _MAX_FETCH_ATTEMPTS + 1):
+            result = subprocess.run(cmd, check=False, capture_output=True)
+            stderr = decode_subprocess_output(result.stderr)
+
+            span.set_attribute("attempts", attempt)
+            span.set_attribute("returncode", result.returncode)
+            span.set_attribute("stderr", truncate_text(stderr) or "")
+
+            transient = _TRANSIENT_FETCH_ERROR.search(stderr)
+            retryable = bool(transient) or _KNOWN_FORBIDDEN in stderr
+
+            # ipsw can return usable JSON alongside a failed Pallas request.
+            # Validate the schema normally; don't retry contract errors.
+            meta: OtaMetaData = {}
+
+            if result.returncode == 0 and (not retryable or result.stdout.strip()):
+                parse_download_meta_output(platform, result, meta, beta)
+
+                if not retryable:
+                    return meta
+
+                if len(meta) > len(partial):
+                    partial = meta
+
+            if not retryable or attempt == _MAX_FETCH_ATTEMPTS:
+                if result.returncode != 0:
+                    parse_download_meta_output(platform, result, meta, beta)
+                elif transient:
+                    logger.error(
+                        "Incomplete OTA meta for %s after %d attempts: %s", label, attempt, truncate_text(stderr)
+                    )
+                break
+
+            logger.warning("Retrying OTA meta for %s after attempt %d: %s", label, attempt, truncate_text(stderr))
+            time.sleep(2 ** (attempt - 1) + random.uniform(0, 1))
+
+        return partial
 
 
 def retrieve_current_meta() -> OtaMetaData:

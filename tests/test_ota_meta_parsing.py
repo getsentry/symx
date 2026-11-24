@@ -219,6 +219,50 @@ def test_parse_download_meta_output_multiple_artifacts() -> None:
     assert "b" * 40 in meta
 
 
+@pytest.mark.parametrize("recover", [False, True])
+def test_download_meta_job_retries_partial_success(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, recover: bool
+) -> None:
+    partial = ota_envelope(ota_item(url=f"https://example.org/{'a' * 40}.zip"))
+    clean = ota_envelope(ota_item(url=f"https://example.org/{'b' * 40}.zip"))
+    failure = make_completed_process(returncode=1, stderr=b"connection reset by peer")
+    attempts = iter(
+        [
+            make_completed_process(
+                stdout=json.dumps(partial).encode(), stderr=b"x509: certificate has expired or is not yet valid"
+            ),
+            failure,
+            make_completed_process(stdout=json.dumps(clean).encode()) if recover else failure,
+        ]
+    )
+    waits: list[float] = []
+    monkeypatch.setattr("symx.ota.meta.subprocess.run", lambda *a, **kw: next(attempts))
+    monkeypatch.setattr("symx.ota.meta.time.sleep", waits.append)
+
+    meta = _download_meta_job(("ios", True))
+
+    assert set(meta) == {("b" if recover else "a") * 40 + "_beta"}
+    assert len(waits) == 2
+    assert 1 <= waits[0] <= 2 <= waits[1] <= 3
+    assert sum(r.levelno == logging.ERROR for r in caplog.records) == (0 if recover else 1)
+
+
+def test_download_meta_job_retries_known_403_without_error(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    attempts = []
+
+    def fail(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        attempts.append(args)
+        return make_completed_process(returncode=1, stderr=b"api returned status: 403 Forbidden")
+
+    monkeypatch.setattr("symx.ota.meta.subprocess.run", fail)
+    monkeypatch.setattr("symx.ota.meta.time.sleep", lambda _: None)
+    assert _download_meta_job(("ios", False)) == {}
+    assert len(attempts) == 3
+    assert not any(r.levelno >= logging.ERROR for r in caplog.records)
+
+
 def test_download_meta_job_records_bounded_subprocess_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
     span_data: dict[str, object] = {}
 
@@ -236,9 +280,12 @@ def test_download_meta_job_records_bounded_subprocess_diagnostics(monkeypatch: p
 
     stderr = b"failure-start\n" + (b"x" * MAX_SUBPROCESS_OUTPUT_CHARS) + b"\nfailure-end"
 
-    def fake_run(cmd: list[str], capture_output: bool = False) -> subprocess.CompletedProcess[bytes]:
+    def fake_run(
+        cmd: list[str], capture_output: bool = False, check: bool = False
+    ) -> subprocess.CompletedProcess[bytes]:
         assert cmd == ["ipsw", "download", "ota", "--platform", "tvos", "--json", "--beta"]
         assert capture_output is True
+        assert check is False
         return make_completed_process(returncode=7, stderr=stderr)
 
     monkeypatch.setattr("symx.ota.meta.sentry_sdk.start_span", recording_span)
@@ -267,8 +314,12 @@ def test_retrieve_current_meta_fetches_all_platform_variants_in_parallel_and_pre
     max_active = 0
     active_lock = threading.Lock()
 
-    def fake_run(cmd: list[str], capture_output: bool = False) -> subprocess.CompletedProcess[bytes]:
+    def fake_run(
+        cmd: list[str], capture_output: bool = False, check: bool = False
+    ) -> subprocess.CompletedProcess[bytes]:
         assert capture_output is True
+        assert check is False
+
         platform = cmd[cmd.index("--platform") + 1]
         beta = "--beta" in cmd
 
